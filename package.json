@@ -29,9 +29,8 @@
     "nodemailer": "^6.9.5",
     "uuid": "^9.0.1",
     "archiver": "^6.0.1",
-    "moment": "^2.29.4"
-  },
-  "devDependencies": {
+    "moment": "^2.29.4",
+    "typescript": "^5.2.2",
     "@types/express": "^4.17.17",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.3",
@@ -41,9 +40,10 @@
     "@types/pdfkit": "^0.13.1",
     "@types/qrcode": "^1.5.2",
     "@types/uuid": "^9.0.4",
-    "@types/archiver": "^6.0.2",
+    "@types/archiver": "^6.0.2"
+  },
+  "devDependencies": {
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.2.2",
     "jest": "^29.6.2",
     "@types/jest": "^29.5.4"
   },
