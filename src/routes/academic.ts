@@ -1,0 +1,799 @@
+import express from 'express';
+import { authenticate, canManageAcademic } from '../middleware/auth';
+import ClassModel from '../models/Class';
+import Section from '../models/Section';
+import Subject from '../models/Subject';
+import Exam from '../models/Exam';
+import Result from '../models/Result';
+import Student from '../models/Student';
+import Teacher from '../models/Teacher';
+import Attendance from '../models/Attendance';
+import IDCard from '../models/IDCard';
+
+const router = express.Router();
+
+const populateClassQuery = () =>
+  ClassModel.find()
+    .populate('sections', 'name capacity currentStudents isActive')
+    .populate('classTeacherId', 'name email phone role');
+
+const populateSubjectQuery = () =>
+  Subject.find()
+    .populate('classId', 'name grade academicYear isActive')
+    .populate('teacherId', 'name email phone role');
+
+const populateExamQuery = () =>
+  Exam.find()
+    .populate('classId', 'name grade academicYear')
+    .populate('sectionId', 'name')
+    .populate('subjectId', 'name code')
+    .populate('subjectMarks.subjectId', 'name code')
+    .populate('createdBy', 'name email role');
+
+const getClassesWithTotals = async (institutionId: any) => {
+  const [classes, totals] = await Promise.all([
+    populateClassQuery()
+      .where({ institutionId })
+      .sort({ createdAt: -1 })
+      .lean(),
+    Student.aggregate([
+      { $match: { institutionId } },
+      { $group: { _id: '$classId', totalStudents: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const totalByClass = new Map(totals.map((item: any) => [String(item._id), item.totalStudents]));
+  return classes.map((classItem: any) => ({
+    ...classItem,
+    totalStudents: totalByClass.get(String(classItem._id)) || 0,
+    status: classItem.isActive ? 'active' : 'inactive',
+  }));
+};
+
+const normalizeSections = (sections: any[] = []) =>
+  sections
+    .filter((section) => section?.name?.trim())
+    .map((section) => ({
+      _id: section._id,
+      name: section.name.trim(),
+      capacity: Number(section.capacity) || 30,
+      currentStudents: Number(section.currentStudents) || 0,
+      isActive: section.isActive !== false,
+    }));
+
+const syncSections = async (classId: any, institutionId: any, sections: any[]) => {
+  const incomingSections = normalizeSections(sections);
+  const nextIds = [];
+
+  for (const section of incomingSections) {
+    if (section._id) {
+      const updated = await Section.findOneAndUpdate(
+        { _id: section._id, classId, institutionId },
+        {
+          name: section.name,
+          capacity: section.capacity,
+          currentStudents: section.currentStudents,
+          isActive: section.isActive,
+        },
+        { new: true }
+      );
+      if (updated) nextIds.push(updated._id);
+      continue;
+    }
+
+    const created = await Section.create({
+      name: section.name,
+      classId,
+      capacity: section.capacity,
+      currentStudents: section.currentStudents,
+      isActive: section.isActive,
+      institutionId,
+    });
+    nextIds.push(created._id);
+  }
+
+  if (incomingSections.length) {
+    await Section.updateMany(
+      { classId, institutionId, _id: { $nin: nextIds } },
+      { isActive: false }
+    );
+  }
+
+  return nextIds;
+};
+
+const syncSubjectTeacher = async (subjectId: any, classId: any, teacherId: any, institutionId: any) => {
+  await Teacher.updateMany(
+    { institutionId, subjects: subjectId },
+    { $pull: { subjects: subjectId } }
+  );
+
+  if (!teacherId) return;
+
+  await Teacher.findOneAndUpdate(
+    { userId: teacherId, institutionId },
+    { $addToSet: { subjects: subjectId, assignedClasses: classId } }
+  );
+};
+
+const normalizeSubjectMarks = (items: any[] = []) =>
+  items
+    .filter((item) => item?.subjectId)
+    .map((item) => ({
+      subjectId: item.subjectId,
+      date: item.date,
+      duration: Number(item.duration) || 120,
+      totalMarks: Number(item.totalMarks) || 100,
+      passingMarks: Number(item.passingMarks) || 33,
+    }));
+
+const getGrade = (marks: number | undefined, totalMarks: number) => {
+  if (marks === undefined || marks === null || Number.isNaN(marks)) return undefined;
+  const percentage = totalMarks ? (marks / totalMarks) * 100 : 0;
+  if (percentage >= 80) return 'A+';
+  if (percentage >= 70) return 'A';
+  if (percentage >= 60) return 'A-';
+  if (percentage >= 50) return 'B';
+  if (percentage >= 40) return 'C';
+  if (percentage >= 33) return 'D';
+  return 'F';
+};
+
+const getResultContext = async (req: any) => {
+  const { classId, sectionId, examId, subjectId } = req.query;
+  const query: any = { institutionId: req.user.institutionId, isActive: true };
+  if (classId) query.classId = classId;
+  if (sectionId) query.sectionId = sectionId;
+
+  const [students, results, exam] = await Promise.all([
+    Student.find(query)
+      .populate('userId', 'name email')
+      .populate('sectionId', 'name')
+      .sort({ rollNumber: 1 })
+      .lean(),
+    examId && subjectId
+      ? Result.find({ institutionId: req.user.institutionId, examId, subjectId })
+          .populate('studentId', 'rollNumber')
+          .lean()
+      : Promise.resolve([]),
+    examId
+      ? Exam.findOne({ _id: examId, institutionId: req.user.institutionId })
+          .populate('subjectMarks.subjectId', 'name code')
+          .lean()
+      : Promise.resolve(null),
+  ]);
+
+  const resultByStudent = new Map((results as any[]).map((result) => [String(result.studentId?._id || result.studentId), result]));
+  const subjectSetup = (exam as any)?.subjectMarks?.find((item: any) => String(item.subjectId?._id || item.subjectId) === String(subjectId));
+  const totalMarks = Number(subjectSetup?.totalMarks || (exam as any)?.totalMarks || 100);
+  const passingMarks = Number(subjectSetup?.passingMarks || (exam as any)?.passingMarks || 33);
+  const rows = students.map((student: any) => {
+    const result = resultByStudent.get(String(student._id));
+    return {
+      studentId: student._id,
+      resultId: result?._id,
+      rollNumber: student.rollNumber,
+      studentName: student.userId?.name || 'Unnamed student',
+      section: student.sectionId?.name || '',
+      marksObtained: result?.marksObtained,
+      grade: result?.grade,
+      remarks: result?.remarks || '',
+      isPassed: result?.isPassed,
+      workflowStatus: result?.workflowStatus || 'draft',
+    };
+  });
+
+  const workflowStatuses = rows.map((row) => row.workflowStatus);
+  const workflowStatus = workflowStatuses.includes('published')
+    ? 'published'
+    : workflowStatuses.includes('approved')
+      ? 'approved'
+      : workflowStatuses.includes('review')
+        ? 'review'
+        : 'draft';
+  const missingMarks = rows.filter((row) => row.marksObtained === undefined || row.marksObtained === null || row.marksObtained === '').length;
+
+  return {
+    rows,
+    exam,
+    marksSetup: { totalMarks, passingMarks },
+    workflowStatus,
+    missingMarks,
+  };
+};
+
+const updateResultWorkflow = async (req: any, workflowStatus: 'review' | 'approved' | 'published') => {
+  const { examId, subjectId } = req.body;
+  const filter = { institutionId: req.user.institutionId, examId, subjectId };
+  const update: any = { workflowStatus };
+
+  if (workflowStatus === 'approved' && req.body.approvalStage === 'assistant') {
+    update.workflowStatus = 'review';
+    update.assistantHeadApprovedBy = req.user._id;
+    update.assistantHeadApprovedAt = new Date();
+  }
+
+  if (workflowStatus === 'approved' && req.body.approvalStage === 'head') {
+    update.workflowStatus = 'approved';
+    update.headApprovedBy = req.user._id;
+    update.headApprovedAt = new Date();
+  }
+
+  if (workflowStatus === 'published') {
+    update.publishedBy = req.user._id;
+    update.publishedAt = new Date();
+  }
+
+  return Result.updateMany(filter, update);
+};
+
+router.get('/', authenticate, canManageAcademic(), (req, res) => {
+  const institutionId = req.user.institutionId;
+  Promise.all([
+    ClassModel.find({ institutionId }).sort({ createdAt: -1 }),
+    Subject.find({ institutionId }).sort({ createdAt: -1 }),
+    Exam.find({ institutionId }).sort({ createdAt: -1 }),
+    Result.find({ institutionId }).sort({ createdAt: -1 })
+  ])
+    .then(([classes, subjects, exams, results]) => {
+      res.json({ classes, subjects, exams, results });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load academic data', error }));
+});
+
+router.get('/classes', authenticate, canManageAcademic(), (req, res) => {
+  getClassesWithTotals(req.user.institutionId)
+    .then((classes) => res.json({ classes }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load classes', error }));
+});
+
+router.get('/classes/:id', authenticate, canManageAcademic(), (req, res) => {
+  populateClassQuery()
+    .where({ _id: req.params.id, institutionId: req.user.institutionId })
+    .findOne()
+    .then((classItem) => {
+      if (!classItem) return res.status(404).json({ message: 'Class not found' });
+      res.json({ classItem });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load class', error }));
+});
+
+router.get('/subjects', authenticate, canManageAcademic(), (req, res) => {
+  populateSubjectQuery()
+    .where({ institutionId: req.user.institutionId })
+    .sort({ createdAt: -1 })
+    .then((subjects) => res.json({ subjects }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load subjects', error }));
+});
+
+router.get('/subjects/:id', authenticate, canManageAcademic(), (req, res) => {
+  populateSubjectQuery()
+    .where({ _id: req.params.id, institutionId: req.user.institutionId })
+    .findOne()
+    .then((subject) => {
+      if (!subject) return res.status(404).json({ message: 'Subject not found' });
+      res.json({ subject });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load subject', error }));
+});
+
+router.get('/exams', authenticate, canManageAcademic(), (req, res) => {
+  populateExamQuery()
+    .where({ institutionId: req.user.institutionId })
+    .sort({ createdAt: -1 })
+    .then((exams) => res.json({ exams }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load exams', error }));
+});
+
+router.get('/exams/:id', authenticate, canManageAcademic(), (req, res) => {
+  populateExamQuery()
+    .where({ _id: req.params.id, institutionId: req.user.institutionId })
+    .findOne()
+    .then((exam) => {
+      if (!exam) return res.status(404).json({ message: 'Exam not found' });
+      res.json({ exam });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load exam', error }));
+});
+
+router.get('/results', authenticate, canManageAcademic(), (req, res) => {
+  if (req.query.classId || req.query.examId || req.query.subjectId) {
+    getResultContext(req)
+      .then((data) => res.json(data))
+      .catch((error) => res.status(500).json({ message: 'Failed to load result entry data', error }));
+    return;
+  }
+
+  Result.find({ institutionId: req.user.institutionId })
+    .populate('studentId', 'rollNumber')
+    .populate('examId', 'name type')
+    .populate('subjectId', 'name code')
+    .sort({ createdAt: -1 })
+    .then((results) => res.json({ results }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load results', error }));
+});
+
+router.post('/results', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const exam: any = await Exam.findOne({ _id: req.body.examId, institutionId: req.user.institutionId }).lean();
+    const setup = exam?.subjectMarks?.find((item: any) => String(item.subjectId) === String(req.body.subjectId));
+    const totalMarks = Number(setup?.totalMarks || exam?.totalMarks || 100);
+    const passingMarks = Number(setup?.passingMarks || exam?.passingMarks || 33);
+    const marksObtained = req.body.marksObtained === undefined ? undefined : Number(req.body.marksObtained);
+    const result = await Result.create({
+      studentId: req.body.studentId,
+      examId: req.body.examId,
+      subjectId: req.body.subjectId,
+      marksObtained,
+      grade: req.body.grade || getGrade(marksObtained, totalMarks),
+      remarks: req.body.remarks,
+      isPassed: marksObtained !== undefined ? marksObtained >= passingMarks : undefined,
+      workflowStatus: req.body.workflowStatus || 'draft',
+      markedBy: req.user._id,
+      markedAt: new Date(),
+      institutionId: req.user.institutionId,
+    });
+    res.status(201).json({ result });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create result', error });
+  }
+});
+
+router.put('/results/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const result = await Result.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!result) return res.status(404).json({ message: 'Result not found' });
+    const exam: any = await Exam.findOne({ _id: req.body.examId || result.examId, institutionId: req.user.institutionId }).lean();
+    const setup = exam?.subjectMarks?.find((item: any) => String(item.subjectId) === String(req.body.subjectId || result.subjectId));
+    const totalMarks = Number(setup?.totalMarks || exam?.totalMarks || 100);
+    const passingMarks = Number(setup?.passingMarks || exam?.passingMarks || 33);
+    const marksObtained = req.body.marksObtained === undefined ? result.marksObtained : Number(req.body.marksObtained);
+    result.studentId = req.body.studentId || result.studentId;
+    result.examId = req.body.examId || result.examId;
+    result.subjectId = req.body.subjectId || result.subjectId;
+    result.marksObtained = marksObtained;
+    result.grade = req.body.grade || getGrade(marksObtained, totalMarks);
+    result.remarks = req.body.remarks || result.remarks;
+    result.isPassed = marksObtained !== undefined ? marksObtained >= passingMarks : result.isPassed;
+    result.workflowStatus = req.body.workflowStatus || result.workflowStatus;
+    await result.save();
+    res.json({ result });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update result', error });
+  }
+});
+
+router.delete('/results/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const result = await Result.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!result) return res.status(404).json({ message: 'Result not found' });
+    await result.deleteOne();
+    res.json({ message: 'Result deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete result', error });
+  }
+});
+
+router.post('/results/draft', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const { examId, subjectId, rows = [] } = req.body;
+    const exam: any = await Exam.findOne({ _id: examId, institutionId: req.user.institutionId }).lean();
+    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+
+    const subjectSetup = exam.subjectMarks?.find((item: any) => String(item.subjectId) === String(subjectId));
+    const totalMarks = Number(subjectSetup?.totalMarks || exam.totalMarks || 100);
+    const passingMarks = Number(subjectSetup?.passingMarks || exam.passingMarks || 33);
+
+    for (const row of rows) {
+      const hasMarks = row.marksObtained !== '' && row.marksObtained !== undefined && row.marksObtained !== null;
+      const marksObtained = hasMarks ? Number(row.marksObtained) : undefined;
+      await Result.findOneAndUpdate(
+        {
+          studentId: row.studentId,
+          examId,
+          subjectId,
+          institutionId: req.user.institutionId,
+        },
+        {
+          studentId: row.studentId,
+          examId,
+          subjectId,
+          marksObtained,
+          grade: getGrade(marksObtained, totalMarks),
+          remarks: row.remarks || '',
+          isPassed: hasMarks ? marksObtained! >= passingMarks : undefined,
+          workflowStatus: 'draft',
+          markedBy: req.user._id,
+          markedAt: new Date(),
+          institutionId: req.user.institutionId,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    const data = await getResultContext({ ...req, query: { classId: req.body.classId, sectionId: req.body.sectionId, examId, subjectId } });
+    res.json({ message: 'Draft saved', ...data });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to save result draft', error });
+  }
+});
+
+router.post('/results/submit-review', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    await updateResultWorkflow(req, 'review');
+    res.json({ message: 'Results submitted for review' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to submit results for review', error });
+  }
+});
+
+router.post('/results/assistant-approve', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    await updateResultWorkflow({ ...req, body: { ...req.body, approvalStage: 'assistant' } }, 'approved');
+    res.json({ message: 'Assistant Head approval saved' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to approve results', error });
+  }
+});
+
+router.post('/results/head-approve', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    await updateResultWorkflow({ ...req, body: { ...req.body, approvalStage: 'head' } }, 'approved');
+    res.json({ message: 'Head approval saved' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to approve results', error });
+  }
+});
+
+router.post('/results/publish', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const data = await getResultContext({ ...req, query: req.body });
+    if (data.missingMarks > 0) {
+      return res.status(409).json({ message: 'Cannot publish while required subject marks are missing.', missingMarks: data.missingMarks });
+    }
+
+    const hasUnapproved = data.rows.some((row: any) => row.workflowStatus !== 'approved' && row.workflowStatus !== 'published');
+    if (hasUnapproved) {
+      return res.status(409).json({ message: 'Head approval is required before publishing.' });
+    }
+
+    await updateResultWorkflow(req, 'published');
+    res.json({ message: 'Results published' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to publish results', error });
+  }
+});
+
+router.get('/report-card', authenticate, async (req, res) => {
+  try {
+    const institutionId = req.user.institutionId;
+    const studentQuery: any = { institutionId };
+    if (req.query.studentId) studentQuery._id = req.query.studentId;
+    else studentQuery.userId = req.user._id;
+    if (req.query.classId) studentQuery.classId = req.query.classId;
+    if (req.query.sectionId) studentQuery.sectionId = req.query.sectionId;
+
+    const student = await Student.findOne(studentQuery)
+      .populate('userId', 'name email phone avatar')
+      .populate('classId', 'name grade academicYear')
+      .populate('sectionId', 'name');
+      if (!student) {
+        return res.status(404).json({ message: 'Report card not found for current user' });
+      }
+
+      const examId = req.query.examId;
+      const resultQuery: any = { institutionId, studentId: student._id };
+      if (examId) resultQuery.examId = examId;
+
+      const [results, attendance, idCard] = await Promise.all([
+        Result.find(resultQuery)
+          .populate('examId', 'name type totalMarks passingMarks subjectMarks')
+          .populate('subjectId', 'name code')
+          .sort({ createdAt: -1 }),
+        Attendance.find({ institutionId, studentId: student._id }).lean(),
+        IDCard.findOne({ institutionId, ownerId: student._id, ownerType: 'student' }).sort({ createdAt: -1 }).lean(),
+      ]);
+
+      const totalObtained = results.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
+      const totalMarks = results.reduce((sum: number, result: any) => {
+        const setup = result.examId?.subjectMarks?.find((item: any) => String(item.subjectId) === String(result.subjectId?._id || result.subjectId));
+        return sum + Number(setup?.totalMarks || result.examId?.totalMarks || 100);
+      }, 0);
+      const percentage = totalMarks ? Math.round((totalObtained / totalMarks) * 100) : 0;
+      const gpa = percentage >= 80 ? 5 : percentage >= 70 ? 4 : percentage >= 60 ? 3.5 : percentage >= 50 ? 3 : percentage >= 40 ? 2 : percentage >= 33 ? 1 : 0;
+      const attendanceSummary = {
+        total: attendance.length,
+        present: attendance.filter((item: any) => item.status === 'present').length,
+        absent: attendance.filter((item: any) => item.status === 'absent').length,
+        late: attendance.filter((item: any) => item.status === 'late').length,
+        leave: attendance.filter((item: any) => item.status === 'leave').length,
+      };
+
+      res.json({
+        reportCard: {
+          studentId: student._id,
+          studentName: (student.userId as any)?.name,
+          rollNumber: student.rollNumber,
+          className: (student.classId as any)?.name,
+          sectionName: (student.sectionId as any)?.name,
+          examName: (results[0]?.examId as any)?.name || 'Selected Exam',
+          grade: results[0]?.grade || 'N/A',
+          gpa,
+          percentage,
+          position: results.length ? 1 : null,
+          teacherRemarks: percentage >= 80 ? 'Excellent performance.' : percentage >= 50 ? 'Good progress with room to improve.' : 'Needs focused support.',
+          idCard: {
+            cardNumber: idCard?.cardNumber,
+            photoUrl: idCard?.photoUrl || (student.userId as any)?.avatar,
+          },
+          attendanceSummary,
+          subjects: results.map((result: any) => ({
+            name: result.subjectId?.name || result.examId?.name || 'Unknown',
+            code: result.subjectId?.code || '',
+            marks: result.marksObtained,
+            grade: result.grade,
+            gpa: result.grade === 'A+' ? 5 : result.grade === 'A' ? 4 : result.grade === 'A-' ? 3.5 : result.grade === 'B' ? 3 : result.grade === 'C' ? 2 : result.grade === 'D' ? 1 : 0,
+            passed: result.isPassed,
+          })),
+        }
+      });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load report card', error });
+  }
+});
+
+router.get('/report-card/students', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const query: any = { institutionId: req.user.institutionId, isActive: true };
+    if (req.query.classId) query.classId = req.query.classId;
+    if (req.query.sectionId) query.sectionId = req.query.sectionId;
+    const students = await Student.find(query)
+      .populate('userId', 'name avatar email')
+      .populate('classId', 'name grade')
+      .populate('sectionId', 'name')
+      .sort({ rollNumber: 1 });
+    res.json({ students });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load report card students', error });
+  }
+});
+
+router.post('/classes', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const classItem = await ClassModel.create({
+      name: req.body.name,
+      grade: req.body.grade,
+      shift: req.body.shift || 'day',
+      classTeacherId: req.body.classTeacherId || undefined,
+      academicYear: req.body.academicYear,
+      isActive: req.body.isActive !== false,
+      institutionId: req.user.institutionId,
+    });
+
+    classItem.sections = await syncSections(classItem._id, req.user.institutionId, req.body.sections);
+    await classItem.save();
+
+    const created = await populateClassQuery()
+      .where({ _id: classItem._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.status(201).json({ classItem: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create class', error });
+  }
+});
+
+router.put('/classes/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const classItem = await ClassModel.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!classItem) return res.status(404).json({ message: 'Class not found' });
+
+    classItem.name = req.body.name;
+    classItem.grade = req.body.grade;
+    classItem.shift = req.body.shift || 'day';
+    classItem.classTeacherId = req.body.classTeacherId || undefined;
+    classItem.academicYear = req.body.academicYear;
+    classItem.isActive = req.body.isActive !== false;
+    classItem.sections = await syncSections(classItem._id, req.user.institutionId, req.body.sections);
+    await classItem.save();
+
+    const updated = await populateClassQuery()
+      .where({ _id: classItem._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.json({ classItem: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update class', error });
+  }
+});
+
+router.delete('/classes/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const classItem = await ClassModel.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!classItem) return res.status(404).json({ message: 'Class not found' });
+
+    const studentCount = await Student.countDocuments({ classId: classItem._id, institutionId: req.user.institutionId });
+    if (studentCount > 0) {
+      return res.status(409).json({ message: 'Cannot delete a class with enrolled students. Mark it inactive instead.' });
+    }
+
+    await Section.deleteMany({ classId: classItem._id, institutionId: req.user.institutionId });
+    await classItem.deleteOne();
+    res.json({ message: 'Class deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete class', error });
+  }
+});
+
+router.post('/exams', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const subjectMarks = normalizeSubjectMarks(req.body.subjectMarks);
+    const firstSubject = subjectMarks[0];
+    const exam = await Exam.create({
+      name: req.body.name,
+      type: req.body.type,
+      classId: req.body.classId,
+      sectionId: req.body.sectionId || undefined,
+      subjectId: firstSubject?.subjectId || req.body.subjectId || undefined,
+      startDate: req.body.startDate,
+      endDate: req.body.endDate,
+      date: firstSubject?.date || req.body.date || req.body.startDate,
+      duration: firstSubject?.duration || Number(req.body.duration) || 120,
+      totalMarks: firstSubject?.totalMarks || Number(req.body.totalMarks) || 100,
+      passingMarks: firstSubject?.passingMarks || Number(req.body.passingMarks) || 33,
+      subjectMarks,
+      approvalRequired: req.body.approvalRequired === true,
+      status: req.body.status || 'scheduled',
+      syllabus: req.body.syllabus,
+      instructions: req.body.instructions,
+      isPublished: req.body.status === 'published' || req.body.isPublished === true,
+      createdBy: req.user._id,
+      institutionId: req.user.institutionId,
+    });
+
+    const created = await populateExamQuery()
+      .where({ _id: exam._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.status(201).json({ exam: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create exam', error });
+  }
+});
+
+router.put('/exams/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const exam = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+
+    const subjectMarks = normalizeSubjectMarks(req.body.subjectMarks);
+    const firstSubject = subjectMarks[0];
+    exam.name = req.body.name;
+    exam.type = req.body.type;
+    exam.classId = req.body.classId;
+    exam.sectionId = req.body.sectionId || undefined;
+    exam.subjectId = firstSubject?.subjectId || req.body.subjectId || undefined;
+    exam.startDate = req.body.startDate;
+    exam.endDate = req.body.endDate;
+    exam.date = firstSubject?.date || req.body.date || req.body.startDate;
+    exam.duration = firstSubject?.duration || Number(req.body.duration) || 120;
+    exam.totalMarks = firstSubject?.totalMarks || Number(req.body.totalMarks) || 100;
+    exam.passingMarks = firstSubject?.passingMarks || Number(req.body.passingMarks) || 33;
+    exam.subjectMarks = subjectMarks as any;
+    exam.approvalRequired = req.body.approvalRequired === true;
+    exam.status = req.body.status || 'scheduled';
+    exam.syllabus = req.body.syllabus;
+    exam.instructions = req.body.instructions;
+    exam.isPublished = req.body.status === 'published' || req.body.isPublished === true;
+    await exam.save();
+
+    const updated = await populateExamQuery()
+      .where({ _id: exam._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.json({ exam: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update exam', error });
+  }
+});
+
+router.delete('/exams/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const exam = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+
+    const resultCount = await Result.countDocuments({ examId: exam._id, institutionId: req.user.institutionId });
+    if (resultCount > 0) {
+      return res.status(409).json({ message: 'Cannot delete an exam with submitted results.' });
+    }
+
+    await exam.deleteOne();
+    res.json({ message: 'Exam deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete exam', error });
+  }
+});
+
+router.post('/subjects', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const subject = await Subject.create({
+      name: req.body.name,
+      code: req.body.code,
+      type: req.body.type,
+      classId: req.body.classId,
+      teacherId: req.body.teacherId || undefined,
+      description: req.body.description,
+      creditHours: Number(req.body.creditHours) || 1,
+      isActive: req.body.isActive !== false,
+      institutionId: req.user.institutionId,
+    });
+
+    await ClassModel.findOneAndUpdate(
+      { _id: subject.classId, institutionId: req.user.institutionId },
+      { $addToSet: { subjects: subject._id } }
+    );
+    await syncSubjectTeacher(subject._id, subject.classId, subject.teacherId, req.user.institutionId);
+
+    const created = await populateSubjectQuery()
+      .where({ _id: subject._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.status(201).json({ subject: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create subject', error });
+  }
+});
+
+router.put('/subjects/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const subject = await Subject.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!subject) return res.status(404).json({ message: 'Subject not found' });
+
+    const previousClassId = subject.classId;
+    subject.name = req.body.name;
+    subject.code = req.body.code;
+    subject.type = req.body.type;
+    subject.classId = req.body.classId;
+    subject.teacherId = req.body.teacherId || undefined;
+    subject.description = req.body.description;
+    subject.creditHours = Number(req.body.creditHours) || 1;
+    subject.isActive = req.body.isActive !== false;
+    await subject.save();
+
+    if (String(previousClassId) !== String(subject.classId)) {
+      await ClassModel.findOneAndUpdate(
+        { _id: previousClassId, institutionId: req.user.institutionId },
+        { $pull: { subjects: subject._id } }
+      );
+    }
+    await ClassModel.findOneAndUpdate(
+      { _id: subject.classId, institutionId: req.user.institutionId },
+      { $addToSet: { subjects: subject._id } }
+    );
+    await syncSubjectTeacher(subject._id, subject.classId, subject.teacherId, req.user.institutionId);
+
+    const updated = await populateSubjectQuery()
+      .where({ _id: subject._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.json({ subject: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update subject', error });
+  }
+});
+
+router.delete('/subjects/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const subject = await Subject.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!subject) return res.status(404).json({ message: 'Subject not found' });
+
+    await ClassModel.findOneAndUpdate(
+      { _id: subject.classId, institutionId: req.user.institutionId },
+      { $pull: { subjects: subject._id } }
+    );
+    await Teacher.updateMany(
+      { institutionId: req.user.institutionId, subjects: subject._id },
+      { $pull: { subjects: subject._id } }
+    );
+    await subject.deleteOne();
+    res.json({ message: 'Subject deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete subject', error });
+  }
+});
+
+export default router;

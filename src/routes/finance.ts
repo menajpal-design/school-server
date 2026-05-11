@@ -1,0 +1,337 @@
+import express from 'express';
+import { authenticate, canManageFinance } from '../middleware/auth';
+import Fee from '../models/Fee';
+import Payment from '../models/Payment';
+import Salary from '../models/Salary';
+import Student from '../models/Student';
+import Parent from '../models/Parent';
+import Teacher from '../models/Teacher';
+import Staff from '../models/Staff';
+import IDCard from '../models/IDCard';
+import Attendance from '../models/Attendance';
+import { writeAuditLog } from '../services/auditService';
+
+const router = express.Router();
+
+const receiptNumber = () => `RCPT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+const monthRange = (month?: string, year?: number) => {
+  const monthIndex = month ? new Date(`${month} 1, ${year || new Date().getFullYear()}`).getMonth() : new Date().getMonth();
+  const y = year || new Date().getFullYear();
+  return { start: new Date(y, monthIndex, 1), end: new Date(y, monthIndex + 1, 1) };
+};
+
+const populateFee = () =>
+  Fee.find()
+    .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
+    .populate('classId', 'name grade')
+    .populate('collectedBy', 'name');
+
+const populatePayment = () =>
+  Payment.find()
+    .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
+    .populate('feeId', 'type month year amount')
+    .populate('collectedBy', 'name');
+
+const buildSummary = async (institutionId: any) => {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const [collections, dues, todayCollections, salary, pendingPayments, monthlyTrend, recentPayments] = await Promise.all([
+    Payment.aggregate([{ $match: { institutionId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    Fee.aggregate([{ $match: { institutionId, status: { $in: ['pending', 'overdue'] } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    Payment.aggregate([{ $match: { institutionId, paymentDate: { $gte: startOfDay, $lt: endOfDay } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+    Salary.aggregate([{ $match: { institutionId, paymentDate: { $gte: startOfMonth, $lt: endOfMonth } } }, { $group: { _id: null, total: { $sum: '$netSalary' } } }]),
+    Fee.countDocuments({ institutionId, status: { $in: ['pending', 'overdue'] } }),
+    Payment.aggregate([
+      { $match: { institutionId, paymentDate: { $gte: new Date(now.getFullYear(), now.getMonth() - 11, 1), $lt: endOfMonth } } },
+      { $group: { _id: { year: { $year: '$paymentDate' }, month: { $month: '$paymentDate' } }, total: { $sum: '$amount' } } },
+      { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ]),
+    populatePayment().where({ institutionId }).sort({ paymentDate: -1 }).limit(8).lean(),
+  ]);
+  return {
+    totalCollection: collections[0]?.total || 0,
+    totalDue: dues[0]?.total || 0,
+    todayCollection: todayCollections[0]?.total || 0,
+    monthlySalary: salary[0]?.total || 0,
+    pendingPayments,
+    monthlyTrend: monthlyTrend.map((item) => ({ name: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`, value: item.total })),
+    recentPayments,
+  };
+};
+
+router.get('/', authenticate, canManageFinance(), (req, res) => {
+  const institutionId = req.user.institutionId;
+  Promise.all([populateFee().where({ institutionId }).sort({ createdAt: -1 }), populatePayment().where({ institutionId }).sort({ paymentDate: -1 }), Salary.find({ institutionId }).sort({ createdAt: -1 }), buildSummary(institutionId)])
+    .then(([fees, collections, salaryPayments, summary]) => {
+      res.json({ fees, collections, salaryPayments, summary });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load finance data', error }));
+});
+
+router.get('/payments', authenticate, canManageFinance(), (req, res) => {
+  populatePayment()
+    .where({ institutionId: req.user.institutionId })
+    .sort({ paymentDate: -1 })
+    .then((payments) => res.json({ payments }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load payments', error }));
+});
+
+router.get('/fees', authenticate, canManageFinance(), (req, res) => {
+  populateFee()
+    .where({ institutionId: req.user.institutionId })
+    .sort({ createdAt: -1 })
+    .then((fees) => res.json({ fees }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load fees', error }));
+});
+
+router.post('/fees', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fee = await Fee.create({
+      ...req.body,
+      amount: Math.max(0, Number(req.body.amount || 0) - Number(req.body.scholarship || 0) - Number(req.body.discount || 0)),
+      collectedBy: req.user._id,
+      institutionId: req.user.institutionId,
+    });
+    const created = await populateFee().where({ _id: fee._id, institutionId: req.user.institutionId }).findOne();
+    await writeAuditLog(req, 'create', 'fee', fee._id, created);
+    res.status(201).json({ fee: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create fee', error });
+  }
+});
+
+router.get('/fees/:id', authenticate, canManageFinance(), (req, res) => {
+  populateFee()
+    .where({ _id: req.params.id, institutionId: req.user.institutionId })
+    .findOne()
+    .then((fee) => {
+      if (!fee) return res.status(404).json({ message: 'Fee not found' });
+      res.json({ fee });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load fee', error }));
+});
+
+router.put('/fees/:id', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fee = await Fee.findOneAndUpdate(
+      { _id: req.params.id, institutionId: req.user.institutionId },
+      { ...req.body, amount: Math.max(0, Number(req.body.amount || 0) - Number(req.body.scholarship || 0) - Number(req.body.discount || 0)) },
+      { new: true }
+    );
+    if (!fee) return res.status(404).json({ message: 'Fee not found' });
+    const updated = await populateFee().where({ _id: fee._id, institutionId: req.user.institutionId }).findOne();
+    await writeAuditLog(req, 'update', 'fee', fee._id, updated);
+    res.json({ fee: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update fee', error });
+  }
+});
+
+router.delete('/fees/:id', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fee = await Fee.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!fee) return res.status(404).json({ message: 'Fee not found' });
+    await fee.deleteOne();
+    await writeAuditLog(req, 'delete', 'fee', fee._id, undefined, fee);
+    res.json({ message: 'Fee deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete fee', error });
+  }
+});
+
+router.get('/collections', authenticate, canManageFinance(), (req, res) => {
+  const term = String(req.query.search || '').trim();
+  const studentQuery: any = { institutionId: req.user.institutionId };
+  if (term) studentQuery.$or = [{ rollNumber: new RegExp(term, 'i') }, { guardianName: new RegExp(term, 'i') }];
+  Promise.all([
+    populatePayment().where({ institutionId: req.user.institutionId }).sort({ paymentDate: -1 }).limit(20).lean(),
+    Student.find(studentQuery).populate('userId', 'name avatar email').populate('classId', 'name grade').populate('sectionId', 'name').limit(10).lean(),
+    term ? IDCard.findOne({ institutionId: req.user.institutionId, cardNumber: term }).lean() : Promise.resolve(null),
+  ])
+    .then(async ([collections, students, card]) => {
+      let matches: any[] = students;
+      if (card) {
+        const cardStudent = await Student.findOne({ _id: card.ownerId, institutionId: req.user.institutionId }).populate('userId', 'name avatar email').populate('classId', 'name grade').populate('sectionId', 'name').lean();
+        if (cardStudent) matches = [cardStudent, ...matches.filter((item: any) => String(item._id) !== String(cardStudent._id))];
+      }
+      const dueByStudent = await Fee.aggregate([
+        { $match: { institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } } },
+        { $group: { _id: '$studentId', dueAmount: { $sum: '$amount' } } },
+      ]);
+      const dueMap = new Map(dueByStudent.map((item: any) => [String(item._id), item.dueAmount]));
+      res.json({ collections, students: matches.map((item: any) => ({ ...item, dueAmount: dueMap.get(String(item._id)) || 0 })) });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load collections', error }));
+});
+
+router.post('/payments', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fee = req.body.feeId
+      ? await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
+      : await Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
+    if (!fee) return res.status(404).json({ message: 'No due fee found for payment' });
+    const payment = await Payment.create({
+      feeId: fee._id,
+      studentId: req.body.studentId || fee.studentId,
+      amount: Number(req.body.amount),
+      paymentMethod: req.body.paymentMethod,
+      transactionId: req.body.transactionId,
+      paymentDate: new Date(),
+      collectedBy: req.user._id,
+      notes: req.body.notes,
+      receiptNumber: receiptNumber(),
+      institutionId: req.user.institutionId,
+    });
+    fee.status = Number(req.body.amount) >= fee.amount ? 'paid' : 'pending';
+    fee.paidDate = fee.status === 'paid' ? new Date() : undefined;
+    fee.paymentMethod = req.body.paymentMethod;
+    await fee.save();
+    const created = await populatePayment().where({ _id: payment._id, institutionId: req.user.institutionId }).findOne();
+    await writeAuditLog(req, 'create', 'payment', payment._id, created);
+    res.status(201).json({ payment: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to collect payment', error });
+  }
+});
+
+router.post('/collections', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fee = req.body.feeId
+      ? await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
+      : await Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
+    if (!fee) return res.status(404).json({ message: 'No due fee found for collection' });
+    const payment = await Payment.create({
+      feeId: fee._id,
+      studentId: req.body.studentId || fee.studentId,
+      amount: Number(req.body.amount),
+      paymentMethod: req.body.paymentMethod,
+      transactionId: req.body.transactionId,
+      paymentDate: new Date(),
+      collectedBy: req.user._id,
+      notes: req.body.notes,
+      receiptNumber: receiptNumber(),
+      institutionId: req.user.institutionId,
+    });
+    fee.status = Number(req.body.amount) >= fee.amount ? 'paid' : 'pending';
+    fee.paidDate = fee.status === 'paid' ? new Date() : undefined;
+    fee.paymentMethod = req.body.paymentMethod;
+    await fee.save();
+    const created = await populatePayment().where({ _id: payment._id, institutionId: req.user.institutionId }).findOne();
+    await writeAuditLog(req, 'create', 'collection', payment._id, created);
+    res.status(201).json({ payment: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to collect payment', error });
+  }
+});
+
+router.get('/salary', authenticate, canManageFinance(), (req, res) => {
+  Promise.all([
+    Salary.find({ institutionId: req.user.institutionId }).sort({ createdAt: -1 }).lean(),
+    Teacher.find({ institutionId: req.user.institutionId }).populate('userId', 'name email').lean(),
+    Staff.find({ institutionId: req.user.institutionId }).populate('userId', 'name email').lean(),
+  ])
+    .then(([salaries, teachers, staff]) => res.json({ salaries, employees: [...teachers.map((item: any) => ({ ...item, employeeType: 'teacher' })), ...staff.map((item: any) => ({ ...item, employeeType: 'staff' }))] }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load salaries', error }));
+});
+
+router.post('/salary/process', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const grossSalary = Number(req.body.basicSalary) + Number(req.body.bonus || 0);
+    const netSalary = grossSalary - Number(req.body.deduction || 0);
+    const salary = await Salary.findOneAndUpdate(
+      { institutionId: req.user.institutionId, employeeId: req.body.employeeId, employeeType: req.body.employeeType, month: req.body.month, year: Number(req.body.year) },
+      {
+        employeeId: req.body.employeeId,
+        employeeType: req.body.employeeType,
+        basicSalary: Number(req.body.basicSalary),
+        allowances: { other: Number(req.body.bonus || 0) },
+        deductions: { other: Number(req.body.deduction || 0) },
+        grossSalary,
+        netSalary,
+        month: req.body.month,
+        year: Number(req.body.year),
+        paymentDate: new Date(),
+        status: 'paid',
+        paymentMethod: 'bank_transfer',
+        processedBy: req.user._id,
+        institutionId: req.user.institutionId,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await writeAuditLog(req, 'process', 'salary', salary._id, salary);
+    res.status(201).json({ salary });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to process salary', error });
+  }
+});
+
+router.post('/salary', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const grossSalary = Number(req.body.basicSalary) + Number(req.body.bonus || req.body.allowances?.other || 0);
+    const netSalary = grossSalary - Number(req.body.deduction || req.body.deductions?.other || 0);
+    const salary = await Salary.create({
+      employeeId: req.body.employeeId,
+      employeeType: req.body.employeeType,
+      basicSalary: Number(req.body.basicSalary),
+      allowances: req.body.allowances || { other: Number(req.body.bonus || 0) },
+      deductions: req.body.deductions || { other: Number(req.body.deduction || 0) },
+      grossSalary,
+      netSalary,
+      month: req.body.month,
+      year: Number(req.body.year),
+      paymentDate: req.body.paymentDate || new Date(),
+      status: req.body.status || 'paid',
+      paymentMethod: req.body.paymentMethod || 'bank_transfer',
+      transactionId: req.body.transactionId,
+      processedBy: req.user._id,
+      institutionId: req.user.institutionId,
+    });
+    await writeAuditLog(req, 'create', 'salary', salary._id, salary);
+    res.status(201).json({ salary });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create salary payment', error });
+  }
+});
+
+router.get('/reports', authenticate, canManageFinance(), (req, res) => {
+  const institutionId = req.user.institutionId;
+  const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const endSource = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+  const endDate = new Date(endSource.getFullYear(), endSource.getMonth(), endSource.getDate() + 1);
+  Promise.all([
+    Payment.find({ institutionId, paymentDate: { $gte: startDate, $lt: endDate } }).populate({ path: 'studentId', populate: { path: 'userId', select: 'name' } }).sort({ paymentDate: -1 }).lean(),
+    Fee.find({ institutionId, status: { $in: ['pending', 'overdue'] } }).populate({ path: 'studentId', populate: { path: 'userId', select: 'name' } }).lean(),
+    Salary.find({ institutionId, paymentDate: { $gte: startDate, $lt: endDate } }).sort({ paymentDate: -1 }).lean(),
+    Payment.aggregate([{ $match: { institutionId, paymentDate: { $gte: startDate, $lt: endDate } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$paymentDate' } }, total: { $sum: '$amount' } } }, { $sort: { _id: 1 } }]),
+    Fee.aggregate([{ $match: { institutionId } }, { $group: { _id: '$type', total: { $sum: '$amount' } } }]),
+  ])
+    .then(([collections, dues, salaries, trend, byType]) => res.json({ reports: { collections, dues, salaries, trend: trend.map((item: any) => ({ name: item._id, value: item.total })), byType: byType.map((item: any) => ({ name: item._id, value: item.total })) } }))
+    .catch((error) => res.status(500).json({ message: 'Failed to load finance reports', error }));
+});
+
+router.get('/my-fees', authenticate, (req, res) => {
+  const institutionId = req.user.institutionId;
+  Student.findOne({ institutionId, userId: req.user._id })
+    .then(async (student) => {
+      if (student) {
+        const [myFees, payments] = await Promise.all([Fee.find({ institutionId, studentId: student._id }).sort({ createdAt: -1 }), Payment.find({ institutionId, studentId: student._id }).sort({ paymentDate: -1 })]);
+        return res.json({ myFees, payments, children: [{ _id: student._id, name: req.user.name }] });
+      }
+
+      if (req.user.role === 'parent') {
+        const parent = await Parent.findOne({ institutionId, userId: req.user._id });
+        const childIds = parent?.children || [];
+        const [myFees, payments, children] = await Promise.all([Fee.find({ institutionId, studentId: { $in: childIds } }).sort({ createdAt: -1 }), Payment.find({ institutionId, studentId: { $in: childIds } }).sort({ paymentDate: -1 }), Student.find({ institutionId, _id: { $in: childIds } }).populate('userId', 'name')]);
+        return res.json({ myFees, payments, children });
+      }
+
+      return res.json({ myFees: [] });
+    })
+    .catch((error) => res.status(500).json({ message: 'Failed to load my fees', error }));
+});
+
+export default router;
