@@ -42,6 +42,8 @@ export interface Config {
   // SMS
   smsEnabled: boolean;
   smsProvider: string;
+  smsApiKey: string;
+  smsApiUrl: string;
   smsTwilioAccountSID: string;
   smsTwilioAuthToken: string;
   smsTwilioPhoneNumber: string;
@@ -93,7 +95,9 @@ export const getConfig = (): Config => {
 
     // SMS
     smsEnabled: process.env.SMS_ENABLED === 'true',
-    smsProvider: process.env.SMS_PROVIDER || 'twilio',
+    smsProvider: process.env.SMS_PROVIDER || 'anoncify',
+    smsApiKey: process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '',
+    smsApiUrl: process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms',
     smsTwilioAccountSID: process.env.SMS_ACCOUNT_SID || '',
     smsTwilioAuthToken: process.env.SMS_AUTH_TOKEN || '',
     smsTwilioPhoneNumber: process.env.SMS_PHONE_NUMBER || '',
@@ -136,6 +140,15 @@ export const validateConfig = (config: Config): void => {
   }
 
   // If SMS is enabled, validate SMS config
+  if (config.smsEnabled && config.smsProvider === 'anoncify') {
+    if (!config.smsApiKey) {
+      errors.push('SMS_API_KEY (or ANONCIFY_SMS_API_KEY) is required when SMS_ENABLED is true');
+    }
+    if (!config.smsApiUrl) {
+      errors.push('SMS_API_URL is required when SMS_ENABLED is true');
+    }
+  }
+
   if (config.smsEnabled && config.smsProvider === 'twilio') {
     if (!config.smsTwilioAccountSID || !config.smsTwilioAuthToken) {
       errors.push('SMS_ACCOUNT_SID and SMS_AUTH_TOKEN are required when SMS_ENABLED is true');
