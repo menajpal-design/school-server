@@ -29,7 +29,7 @@ const connectDB = async () => {
     return conn;
   } catch (error) {
     console.error('❌ MongoDB Connection Error:', error);
-    process.exit(1);
+    console.error('⚠️  Server will continue running without MongoDB connection');
   }
 };
 

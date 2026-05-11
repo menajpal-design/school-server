@@ -6,8 +6,10 @@ dotenv.config();
 
 const PORT = process.env.PORT || 5000;
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB (non-blocking)
+connectDB().catch(err => {
+  console.warn('⚠️  MongoDB connection failed, but server will still run:', err.message);
+});
 
 app.listen(PORT, () => {
   console.log(`🚀 DRMS Server running on port ${PORT}`);
