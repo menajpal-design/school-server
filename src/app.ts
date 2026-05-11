@@ -21,6 +21,7 @@ import notificationRoutes from './routes/notifications';
 import reportRoutes from './routes/reports';
 import backupRoutes from './routes/backup';
 import institutionRoutes from './routes/institution';
+import messageRoutes from './routes/messages';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -82,6 +83,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/institution', institutionRoutes);
+app.use('/api/messages', messageRoutes);
 
 // Static files
 app.use('/uploads', express.static('uploads'));
