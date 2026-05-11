@@ -10,7 +10,8 @@
     "test": "jest",
     "seed": "npm run build && node dist/scripts/seed.js",
     "seed:quick": "npm run build && node dist/scripts/quickSeed.js",
-    "seed:complete": "npm run build && node dist/scripts/seedComplete.js"
+    "seed:complete": "npm run build && node dist/scripts/seedComplete.js",
+    "monthly-sms": "npm run build && node dist/scripts/sendMonthlyGuardianSms.js"
   },
   "dependencies": {
     "express": "^4.18.2",
