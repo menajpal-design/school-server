@@ -27,15 +27,32 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 const app = express();
 
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3001',
+  // Local development
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
+  'http://localhost:8081',
+  'http://127.0.0.1:8081',
+  
+  // Environment variables
+  process.env.FRONTEND_URL || 'http://localhost:3001',
   process.env.MOBILE_URL || 'http://localhost:8081',
+  
+  // Heroku production domains
   'https://school-client-447e7d0e2388.herokuapp.com',
-  'https://school-client.herokuapp.com'
-];
+  'https://school-client.herokuapp.com',
+  'https://www.school-client-447e7d0e2388.herokuapp.com',
+  'https://www.school-client.herokuapp.com',
+  
+  // Server domain (allow server to server communication if needed)
+  'https://school-server-b264c1a1fac6.herokuapp.com',
+  'https://school-server.herokuapp.com',
+  
+  // Wildcard patterns for testing (comment out in production)
+  // All Heroku subdomains
+  ...(process.env.NODE_ENV === 'development' ? ['*'] : [])
+].filter(Boolean);
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
