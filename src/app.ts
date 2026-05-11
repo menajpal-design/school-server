@@ -32,7 +32,9 @@ const allowedOrigins = [
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
-  process.env.MOBILE_URL || 'http://localhost:8081'
+  process.env.MOBILE_URL || 'http://localhost:8081',
+  'https://school-client-447e7d0e2388.herokuapp.com',
+  'https://school-client.herokuapp.com'
 ];
 
 const corsOptions: cors.CorsOptions = {
