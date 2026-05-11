@@ -51,6 +51,7 @@ export interface Config {
   // URLs
   frontendUrl: string;
   mobileUrl: string;
+  allowedOrigins: string;
 }
 
 /**
@@ -105,6 +106,7 @@ export const getConfig = (): Config => {
     // URLs
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
     mobileUrl: process.env.MOBILE_URL || 'http://localhost:8081',
+    allowedOrigins: process.env.ALLOWED_ORIGINS || '',
   };
 
   // Validate critical configuration

@@ -26,33 +26,54 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
 
-const allowedOrigins = [
-  // Local development
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
-  
-  // Environment variables
-  process.env.FRONTEND_URL || 'http://localhost:3001',
-  process.env.MOBILE_URL || 'http://localhost:8081',
-  
-  // Heroku production domains
-  'https://school-client-447e7d0e2388.herokuapp.com',
-  'https://school-client.herokuapp.com',
-  'https://www.school-client-447e7d0e2388.herokuapp.com',
-  'https://www.school-client.herokuapp.com',
-  
-  // Server domain (allow server to server communication if needed)
-  'https://school-server-b264c1a1fac6.herokuapp.com',
-  'https://school-server.herokuapp.com',
-  
-  // Wildcard patterns for testing (comment out in production)
-  // All Heroku subdomains
-  ...(process.env.NODE_ENV === 'development' ? ['*'] : [])
-].filter(Boolean);
+// Parse comma-separated allowed origins from environment variable
+const parseAllowedOrigins = (): string[] => {
+  const baseOrigins = [
+    // Local development
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://localhost:8081',
+    'http://127.0.0.1:8081',
+  ];
+
+  // Add environment variable origins
+  if (process.env.FRONTEND_URL) {
+    baseOrigins.push(process.env.FRONTEND_URL);
+  }
+  if (process.env.MOBILE_URL) {
+    baseOrigins.push(process.env.MOBILE_URL);
+  }
+
+  // Add comma-separated origins from ALLOWED_ORIGINS env var
+  if (process.env.ALLOWED_ORIGINS) {
+    const customOrigins = process.env.ALLOWED_ORIGINS.split(',')
+      .map(origin => origin.trim())
+      .filter(origin => origin.length > 0);
+    baseOrigins.push(...customOrigins);
+  }
+
+  // Default Heroku domains
+  const herokuOrigins = [
+    'https://school-client-447e7d0e2388.herokuapp.com',
+    'https://school-client.herokuapp.com',
+    'https://www.school-client-447e7d0e2388.herokuapp.com',
+    'https://www.school-client.herokuapp.com',
+    'https://school-server-b264c1a1fac6.herokuapp.com',
+    'https://school-server.herokuapp.com',
+  ];
+  baseOrigins.push(...herokuOrigins);
+
+  // Wildcard for development
+  if (process.env.NODE_ENV === 'development') {
+    baseOrigins.push('*');
+  }
+
+  return baseOrigins.filter(Boolean);
+};
+
+const allowedOrigins = parseAllowedOrigins();
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
