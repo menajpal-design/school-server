@@ -2,6 +2,8 @@
 
 ## Heroku SendGrid Addon (Recommended for Production)
 
+Email sending is currently disabled by default. Messages will still save to the in-app inbox, and external email can be re-enabled later by setting `ENABLE_EMAIL_NOTIFICATIONS=true`.
+
 ### 1. Add SendGrid to Heroku
 
 ```bash

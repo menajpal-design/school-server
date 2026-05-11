@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import Message from '../models/Message';
-import { sendEmail, sendNotificationEmail } from '../services/emailService';
+import { sendNotificationEmail } from '../services/emailService';
 import { authenticate } from '../middleware/auth';
 
 const router = Router();
+const emailNotificationsEnabled = process.env.ENABLE_EMAIL_NOTIFICATIONS === 'true';
 
 // Get inbox messages
 router.get('/inbox', authenticate, async (req: any, res: any) => {
@@ -72,6 +73,8 @@ router.post('/send', authenticate, async (req: any, res: any) => {
     }
 
     // Create database record
+    const useEmailChannel = Boolean(sendAsEmail && emailNotificationsEnabled);
+
     const message = new Message({
       fromUserId: req.user.id,
       fromUserName: req.user.name,
@@ -81,7 +84,7 @@ router.post('/send', authenticate, async (req: any, res: any) => {
       toUserEmail,
       subject,
       body,
-      messageType: sendAsEmail ? 'email' : 'internal',
+      messageType: useEmailChannel ? 'email' : 'internal',
       folder: 'sent',
     });
 
@@ -97,14 +100,14 @@ router.post('/send', authenticate, async (req: any, res: any) => {
       toUserEmail,
       subject,
       body,
-      messageType: sendAsEmail ? 'email' : 'internal',
+      messageType: useEmailChannel ? 'email' : 'internal',
       folder: 'inbox',
     });
 
     await inboxMessage.save();
 
-    // Send external email if requested
-    if (sendAsEmail && toUserEmail) {
+    // Send external email only when explicitly enabled
+    if (useEmailChannel && toUserEmail) {
       const emailSuccess = await sendNotificationEmail(
         toUserEmail,
         toUserName,
@@ -121,6 +124,7 @@ router.post('/send', authenticate, async (req: any, res: any) => {
       success: true,
       message: 'Message sent successfully',
       data: message,
+      emailSent: useEmailChannel,
     });
   } catch (error) {
     console.error('Send message error:', error);
