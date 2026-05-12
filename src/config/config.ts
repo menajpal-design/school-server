@@ -123,52 +123,58 @@ export const getConfig = (): Config => {
  * Validate configuration
  */
 export const validateConfig = (config: Config): void => {
-  const errors: string[] = [];
+  const criticalErrors: string[] = [];
+  const warnings: string[] = [];
 
   // JWT Secret validation
   if (config.jwtSecret.length < 32) {
-    errors.push('JWT_SECRET must be at least 32 characters long');
+    criticalErrors.push('JWT_SECRET must be at least 32 characters long');
   }
 
   // MongoDB URI validation
   if (!config.mongoUri) {
-    errors.push('MONGO_URI is required');
+    criticalErrors.push('MONGO_URI is required');
   }
 
   // If emails are enabled, validate email config
   if (config.emailEnabled) {
     if (!config.smtpHost || !config.smtpPort) {
-      errors.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
+      warnings.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
     }
     if (!config.emailUser || !config.emailPass) {
-      errors.push('EMAIL_USER and EMAIL_PASS are required when EMAIL_ENABLED is true');
+      warnings.push('EMAIL_USER and EMAIL_PASS are required when EMAIL_ENABLED is true');
     }
   }
 
   // If SMS is enabled, validate SMS config
   if (config.smsEnabled && config.smsProvider === 'anoncify') {
     if (!config.smsApiKey) {
-      errors.push('SMS_API_KEY (or ANONCIFY_SMS_API_KEY) is required when SMS_ENABLED is true');
+      warnings.push('SMS_API_KEY (or ANONCIFY_SMS_API_KEY) is required when SMS_ENABLED is true');
     }
     if (!config.smsApiUrl) {
-      errors.push('SMS_API_URL is required when SMS_ENABLED is true');
+      warnings.push('SMS_API_URL is required when SMS_ENABLED is true');
     }
   }
 
   if (config.smsEnabled && config.smsProvider === 'twilio') {
     if (!config.smsTwilioAccountSID || !config.smsTwilioAuthToken) {
-      errors.push('SMS_ACCOUNT_SID and SMS_AUTH_TOKEN are required when SMS_ENABLED is true');
+      warnings.push('SMS_ACCOUNT_SID and SMS_AUTH_TOKEN are required when SMS_ENABLED is true');
     }
     if (!config.smsTwilioPhoneNumber) {
-      errors.push('SMS_PHONE_NUMBER is required when SMS_ENABLED is true');
+      warnings.push('SMS_PHONE_NUMBER is required when SMS_ENABLED is true');
     }
   }
 
-  if (errors.length > 0) {
-    console.error('❌ Configuration Errors:');
-    errors.forEach((error) => console.error(`   - ${error}`));
+  if (warnings.length > 0) {
+    console.warn('⚠️ Configuration Warnings:');
+    warnings.forEach((warning) => console.warn(`   - ${warning}`));
+  }
 
-    // Only exit if in production
+  if (criticalErrors.length > 0) {
+    console.error('❌ Configuration Errors:');
+    criticalErrors.forEach((error) => console.error(`   - ${error}`));
+
+    // Only exit if in production and critical configuration is invalid
     if (config.nodeEnv === 'production') {
       process.exit(1);
     }
