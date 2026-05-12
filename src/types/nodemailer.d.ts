@@ -1,8 +1,9 @@
 declare module 'nodemailer' {
   interface Attachment {
     filename?: string;
-    content?: Buffer;
+    content?: Buffer | string;
     path?: string;
+    contentType?: string;
   }
 
   interface SendMailOptions {
