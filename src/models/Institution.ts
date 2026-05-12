@@ -13,6 +13,28 @@ export interface IInstitution extends Document {
   seal?: string;
   headSignature?: string;
   headId: mongoose.Types.ObjectId;
+  billing?: {
+    planCode?: string;
+    planName?: string;
+    studentLimit?: number;
+    monthlyPrice?: number;
+    yearlyPrice?: number;
+    monthlySmsLimit?: number;
+    yearlyDiscountPercent?: number;
+    billingCycle?: 'monthly' | 'yearly';
+    useEasySchoolStorage?: boolean;
+    storageMonthlyPrice?: number;
+    storageAmount?: number;
+    dueAmount?: number;
+    billingStatus?: 'pending' | 'active' | 'expired' | 'cancelled';
+    isPaymentReceived?: boolean;
+    receivedAmount?: number;
+    receivedAt?: Date;
+    receivedBy?: mongoose.Types.ObjectId;
+    paymentGateway?: string;
+    paymentTrxId?: string;
+    activatedAt?: Date;
+  };
   settings: {
     mongodbUri?: string;
     imgbbApiKey?: string;
@@ -51,6 +73,28 @@ const InstitutionSchema: Schema = new Schema({
   seal: { type: String },
   headSignature: { type: String },
   headId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  billing: {
+    planCode: { type: String, default: 'students_100' },
+    planName: { type: String, default: '100 Students' },
+    studentLimit: { type: Number, default: 100 },
+    monthlyPrice: { type: Number, default: 300 },
+    yearlyPrice: { type: Number, default: 3000 },
+    monthlySmsLimit: { type: Number, default: 100 },
+    yearlyDiscountPercent: { type: Number, default: 17 },
+    billingCycle: { type: String, enum: ['monthly', 'yearly'], default: 'monthly' },
+    useEasySchoolStorage: { type: Boolean, default: true },
+    storageMonthlyPrice: { type: Number, default: 100 },
+    storageAmount: { type: Number, default: 100 },
+    dueAmount: { type: Number, default: 400 },
+    billingStatus: { type: String, enum: ['pending', 'active', 'expired', 'cancelled'], default: 'pending' },
+    isPaymentReceived: { type: Boolean, default: false },
+    receivedAmount: { type: Number, default: 0 },
+    receivedAt: { type: Date },
+    receivedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    paymentGateway: { type: String },
+    paymentTrxId: { type: String },
+    activatedAt: { type: Date },
+  },
   settings: {
     mongodbUri: { type: String },
     imgbbApiKey: { type: String },
@@ -71,7 +115,7 @@ const InstitutionSchema: Schema = new Schema({
       collections: [{ type: String }]
     }
   },
-  isActive: { type: Boolean, default: true }
+  isActive: { type: Boolean, default: false }
 }, {
   timestamps: true
 });

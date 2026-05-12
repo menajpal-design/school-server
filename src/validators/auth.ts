@@ -10,6 +10,7 @@ export const registerSchema = Joi.object({
   phone: Joi.string().allow('', null),
   institutionId: Joi.string().hex().length(24).allow('', null),
   institutionName: Joi.string().min(2).allow('', null),
+  planCode: Joi.string().valid('students_100', 'students_200', 'students_300', 'students_500', 'students_1000').allow('', null),
 }).or('name', 'firstName');
 
 export const loginSchema = Joi.object({
