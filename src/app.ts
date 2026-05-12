@@ -149,6 +149,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'DRMS Server is running' });
 });
 
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'DRMS Server is running' });
+});
+
 // Home route
 app.get('/', (req, res) => {
   res.json({ 
