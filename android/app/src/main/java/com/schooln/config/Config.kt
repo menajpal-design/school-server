@@ -9,6 +9,7 @@ import android.content.Context
 object Config {
     // Server Configuration
     const val DEFAULT_SERVER_URL = "https://school-server-b264c1a1fac6.herokuapp.com"
+    const val WEB_APP_URL = "https://www.easyschool.live"
     private const val SERVER_URL_KEY = "server_url_override"
     
     // API Endpoints
