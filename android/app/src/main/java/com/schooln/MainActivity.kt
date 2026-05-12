@@ -3,20 +3,31 @@ package com.schooln
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.*
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.navigation.NavHost
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.schooln.config.Config
 import com.schooln.ui.navigation.NavItem
 import com.schooln.ui.navigation.ResponsiveNavigation
 import com.schooln.ui.navigation.TopNavigationBar
+import com.schooln.network.api.ConfigApi
+import com.schooln.network.api.EndpointsResponse
+import com.schooln.network.createApiService
 import com.schooln.ui.screens.*
 import com.schooln.ui.theme.SchoolManagementTheme
 
@@ -43,12 +54,17 @@ class MainActivity : ComponentActivity() {
 fun SchoolApp(
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val navController = rememberNavController()
     var currentRoute by remember { mutableStateOf(NavItem.Dashboard.route) }
     var isDrawerOpen by remember { mutableStateOf(false) }
     
     val windowSizeClass = calculateWindowSizeClass(this as ComponentActivity)
     val isCompactScreen = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Compact
+
+    LaunchedEffect(Unit) {
+        bootstrapServerUrl(context)
+    }
     
     ResponsiveNavigation(
         windowWidthSizeClass = windowSizeClass.widthSizeClass,
@@ -113,6 +129,26 @@ fun SchoolApp(
 }
 
 /**
+ * Fetch the latest server URL from the public config endpoint and persist it.
+ * This lets the app follow the deployed server automatically instead of relying on localhost.
+ */
+private suspend fun bootstrapServerUrl(context: android.content.Context) {
+    runCatching {
+        val configApi = createApiService<ConfigApi>(context)
+        val response = configApi.getEndpoints()
+
+        if (response.isSuccessful) {
+            val endpoints = response.body()?.data
+            val serverUrl = endpoints?.serverUrl?.trim().orEmpty()
+
+            if (serverUrl.isNotBlank()) {
+                Config.setServerUrl(context, serverUrl)
+            }
+        }
+    }
+}
+
+/**
  * Get screen title based on current route
  */
 private fun getScreenTitle(route: String): String {
@@ -159,7 +195,6 @@ fun DocumentsScreen() {
 
 @Composable
 fun SettingsScreen() {
-    // TODO: Implement Settings screen
     PlaceholderScreen("সেটিংস")
 }
 

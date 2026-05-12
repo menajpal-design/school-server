@@ -43,16 +43,16 @@ data class ApiResponse<T>(
  */
 interface AuthApi {
     
-    @POST("/auth/login")
+    @POST("auth/login")
     suspend fun login(@Body request: LoginRequest): Response<LoginResponse>
     
-    @POST("/auth/logout")
+    @POST("auth/logout")
     suspend fun logout(): Response<ApiResponse<Unit>>
     
-    @GET("/auth/verify")
+    @GET("auth/verify")
     suspend fun verifyToken(): Response<ApiResponse<UserData>>
     
-    @POST("/auth/register")
+    @POST("auth/register")
     suspend fun register(@Body request: RegisterRequest): Response<LoginResponse>
 }
 
@@ -69,13 +69,13 @@ data class RegisterRequest(
  */
 interface UserApi {
     
-    @GET("/users/profile")
+    @GET("users/profile")
     suspend fun getProfile(): Response<ApiResponse<UserData>>
     
-    @PUT("/users/profile")
+    @PUT("users/profile")
     suspend fun updateProfile(@Body user: UserData): Response<ApiResponse<UserData>>
     
-    @GET("/users")
+    @GET("users")
     suspend fun getUsers(
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20
@@ -87,7 +87,7 @@ interface UserApi {
  */
 interface AttendanceApi {
     
-    @GET("/attendance")
+    @GET("attendance")
     suspend fun getAttendance(
         @Query("studentId") studentId: String? = null,
         @Query("month") month: Int? = null,
@@ -108,22 +108,22 @@ data class AttendanceRecord(
  */
 interface MessageApi {
     
-    @GET("/messages/inbox")
+    @GET("messages/inbox")
     suspend fun getInbox(
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20
     ): Response<ApiResponse<List<Message>>>
     
-    @GET("/messages/sent")
+    @GET("messages/sent")
     suspend fun getSent(
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20
     ): Response<ApiResponse<List<Message>>>
     
-    @POST("/messages/send")
+    @POST("messages/send")
     suspend fun sendMessage(@Body message: SendMessageRequest): Response<ApiResponse<Message>>
     
-    @GET("/messages/stats/unread")
+    @GET("messages/stats/unread")
     suspend fun getUnreadCount(): Response<ApiResponse<UnreadCount>>
 }
 
@@ -156,13 +156,13 @@ data class UnreadCount(
  */
 interface NotificationApi {
     
-    @GET("/notifications")
+    @GET("notifications")
     suspend fun getNotifications(
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20
     ): Response<ApiResponse<List<Notification>>>
     
-    @PATCH("/notifications/{id}/read")
+    @PATCH("notifications/{id}/read")
     suspend fun markAsRead(@Path("id") id: String): Response<ApiResponse<Unit>>
 }
 
@@ -179,10 +179,10 @@ data class Notification(
  */
 interface ConfigApi {
     
-    @GET("/config/endpoints")
+    @GET("config/endpoints")
     suspend fun getEndpoints(): Response<ApiResponse<EndpointsResponse>>
     
-    @GET("/config/status")
+    @GET("config/status")
     suspend fun getStatus(): Response<ApiResponse<StatusResponse>>
 }
 

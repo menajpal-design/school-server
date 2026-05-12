@@ -88,7 +88,7 @@ object RetrofitClient {
     fun getInstance(context: Context): Retrofit {
         if (retrofit == null) {
             retrofit = Retrofit.Builder()
-                .baseUrl(Config.API_BASE_URL)
+                .baseUrl(Config.getRetrofitBaseUrl(context))
                 .client(HttpClientBuilder.build(context))
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()
