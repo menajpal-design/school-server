@@ -108,7 +108,7 @@ router.post('/', authenticate, async (req, res) => {
 
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;
     if (req.body.phone) {
-      await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}` });
+      await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}`, institutionId: req.user.institutionId });
     }
     res.status(201).json({ teacher, user, idCard, credentials: { username, password: temporaryPassword } });
   } catch (error) {

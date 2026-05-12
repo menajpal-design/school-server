@@ -163,7 +163,7 @@ export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptio
       continue;
     }
 
-    const smsSent = await sendNotificationSMS(student.guardianPhone, message);
+    const smsSent = await sendNotificationSMS(student.guardianPhone, message, options.institutionId);
     if (smsSent) {
       sent += 1;
     } else {

@@ -2,6 +2,8 @@ import express from 'express';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
+import { activateBilling } from '../services/billingService';
+import { verifyGatewayPayment } from '../services/paymentGateway';
 
 const router = express.Router();
 
@@ -127,10 +129,23 @@ router.post('/billing/payment', authenticate, async (req, res) => {
     billing.receivedBy = req.user._id;
     billing.billingStatus = 'pending';
 
-    institution.billing = billing as any;
+    const verification = await verifyGatewayPayment({
+      trxId: billing.paymentTrxId,
+      amount: Number(billing.receivedAmount || billing.dueAmount || 0),
+      senderNumber: billing.paymentSenderNumber,
+      gateway: billing.paymentGateway,
+    });
+
+    billing.paymentVerifyStatus = verification.status;
+    if (verification.verified) {
+      institution.billing = activateBilling({ ...billing, paymentVerifiedAt: new Date() }) as any;
+      institution.isActive = true;
+    } else {
+      institution.billing = billing as any;
+    }
     await institution.save();
 
-    res.json({ institution, message: 'Payment submitted. Admin will verify and activate the school.' });
+    res.json({ institution, verification, message: verification.verified ? 'Payment verified and school activated.' : 'Payment submitted. Admin will verify and activate the school.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save payment', error });
   }
