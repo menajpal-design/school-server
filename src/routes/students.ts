@@ -8,6 +8,8 @@ import Section from '../models/Section';
 import IDCard from '../models/IDCard';
 import Parent from '../models/Parent';
 import Fee from '../models/Fee';
+import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -94,15 +96,20 @@ const createIdCard = async (ownerId: any, ownerType: 'student' | 'teacher' | 'st
 
 router.post('/', authenticate, async (req, res) => {
   try {
+    const allowed = ['head', 'assistant_head', 'class_teacher', 'subject_teacher'];
+    if (!allowed.includes(req.user.role)) return res.status(403).json({ message: 'Only teachers or school leadership can add students' });
     const email = String(req.body.email || `${String(req.body.rollNumber || Date.now()).toLowerCase()}@student.local`);
     const existing = await User.findOne({ email });
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
 
-    const hashedPassword = await bcrypt.hash(String(req.body.password || 'Student@123'), 10);
+    const username = await generateUsername(req.body.name, 'student');
+    const temporaryPassword = generatePassword();
+    const parentPassword = generatePassword();
     const user = await User.create({
       name: req.body.name,
+      username,
       email,
-      password: hashedPassword,
+      password: await hashPassword(temporaryPassword),
       role: 'student',
       phone: req.body.phone,
       avatar: req.body.photo,
@@ -115,7 +122,8 @@ router.post('/', authenticate, async (req, res) => {
       parent = await User.create({
         name: req.body.guardianName,
         email: parentEmail,
-        password: await bcrypt.hash(String(req.body.parentPassword || 'Parent@123'), 10),
+        username: await generateUsername(req.body.guardianName, 'parent'),
+        password: await hashPassword(parentPassword),
         role: 'parent',
         phone: req.body.guardianPhone,
         institutionId: req.user.institutionId,
@@ -172,8 +180,12 @@ router.post('/', authenticate, async (req, res) => {
     }
     let idCard = null;
     if (req.body.autoIdCard !== false) idCard = await createIdCard(student._id, 'student', req, req.body.photo);
+    await sendSMS({
+      to: req.body.phone || req.body.guardianPhone,
+      message: `Student account for ${req.body.name}: username ${username}, password ${temporaryPassword}`,
+    });
 
-    res.status(201).json({ student, user, parent, idCard });
+    res.status(201).json({ student, user, parent, idCard, credentials: { username, password: temporaryPassword, parentPassword: parent ? parentPassword : undefined } });
   } catch (error) {
     res.status(500).json({ message: 'Failed to admit student', error });
   }

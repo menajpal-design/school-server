@@ -20,8 +20,11 @@ import androidx.compose.ui.unit.dp
 import com.google.gson.Gson
 import com.schooln.config.Config
 import com.schooln.network.api.AuthApi
+import com.schooln.network.api.AdmissionApi
+import com.schooln.network.api.AdmissionApplyRequest
 import com.schooln.network.api.LoginRequest
 import com.schooln.network.api.RegisterRequest
+import com.schooln.network.api.SchoolData
 import com.schooln.network.createApiService
 import kotlinx.coroutines.launch
 
@@ -33,14 +36,22 @@ fun AuthScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isRegister by remember { mutableStateOf(false) }
+    var isAdmission by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var institutionName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var role by remember { mutableStateOf("student") }
+    var role by remember { mutableStateOf("head") }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var schools by remember { mutableStateOf<List<SchoolData>>(emptyList()) }
+    var schoolSearch by remember { mutableStateOf("") }
+    var selectedSchool by remember { mutableStateOf<SchoolData?>(null) }
+    var requestedClass by remember { mutableStateOf("") }
+    var guardianName by remember { mutableStateOf("") }
+    var previousSchool by remember { mutableStateOf("") }
+    var previousResult by remember { mutableStateOf("") }
 
     Surface(modifier = modifier.fillMaxSize()) {
         Column(
@@ -52,7 +63,7 @@ fun AuthScreen(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = if (isRegister) "Create account" else "Login",
+                text = if (isAdmission) "Admission Application" else if (isRegister) "Register school head" else "Login",
                 style = MaterialTheme.typography.headlineMedium
             )
             Text(
@@ -63,11 +74,90 @@ fun AuthScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            if (isAdmission) {
+                OutlinedTextField(
+                    value = schoolSearch,
+                    onValueChange = { schoolSearch = it },
+                    label = { Text("Search school") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            runCatching {
+                                schools = createApiService<AdmissionApi>(context).schools(schoolSearch).body()?.schools ?: emptyList()
+                            }.onFailure { error = it.message }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Search") }
+                Spacer(modifier = Modifier.height(8.dp))
+                schools.take(5).forEach { school ->
+                    FilterChip(
+                        selected = selectedSchool?._id == school._id,
+                        onClick = { selectedSchool = school },
+                        label = { Text("${school.name} ${school.eiin ?: ""}") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Student name") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = guardianName, onValueChange = { guardianName = it }, label = { Text("Guardian name") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Guardian phone") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Guardian email") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = requestedClass, onValueChange = { requestedClass = it }, label = { Text("Class for admission") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = previousSchool, onValueChange = { previousSchool = it }, label = { Text("Previous school") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = previousResult, onValueChange = { previousResult = it }, label = { Text("Previous result") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(value = institutionName, onValueChange = { institutionName = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    enabled = !isLoading,
+                    onClick = {
+                        scope.launch {
+                            isLoading = true
+                            error = null
+                            runCatching {
+                                val school = selectedSchool ?: throw IllegalStateException("Select a school")
+                                val response = createApiService<AdmissionApi>(context).apply(
+                                    AdmissionApplyRequest(
+                                        institutionId = school._id,
+                                        studentName = name.trim(),
+                                        guardianName = guardianName.trim(),
+                                        guardianPhone = phone.trim(),
+                                        guardianEmail = email.trim(),
+                                        address = institutionName.trim(),
+                                        previousSchool = previousSchool.trim(),
+                                        previousResult = previousResult.trim(),
+                                        requestedClass = requestedClass.trim()
+                                    )
+                                )
+                                if (!response.isSuccessful) throw IllegalStateException(response.errorBody()?.string() ?: "Submission failed")
+                                error = "Application submitted. SMS will be sent after approval."
+                            }.onFailure { error = it.message }
+                            isLoading = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Submit Admission") }
+                TextButton(onClick = { isAdmission = false }) { Text("Back to login") }
+                error?.let { Text(text = it, color = if (it.contains("submitted", true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) }
+                return@Column
+            }
+
             if (isRegister) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Full name") },
+                label = { Text("School head full name") },
                     leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -76,7 +166,7 @@ fun AuthScreen(
                 OutlinedTextField(
                     value = institutionName,
                     onValueChange = { institutionName = it },
-                    label = { Text("Institution name") },
+                    label = { Text("School name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -184,7 +274,14 @@ fun AuthScreen(
                 isRegister = !isRegister
                 error = null
             }) {
-                Text(if (isRegister) "Already have an account? Login" else "Need an account? Register")
+                Text(if (isRegister) "Already have an account? Login" else "School head registration")
+            }
+            TextButton(onClick = {
+                isAdmission = true
+                isRegister = false
+                error = null
+            }) {
+                Text("Apply for admission")
             }
         }
     }
@@ -193,10 +290,6 @@ fun AuthScreen(
 @Composable
 private fun RolePicker(role: String, onRoleChange: (String) -> Unit) {
     val roles = listOf(
-        "student" to "Student",
-        "parent" to "Parent",
-        "subject_teacher" to "Teacher",
-        "staff" to "Staff",
         "head" to "Institution Head"
     )
     Column(modifier = Modifier.fillMaxWidth()) {

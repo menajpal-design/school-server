@@ -62,12 +62,52 @@ interface AuthApi {
     suspend fun register(@Body request: RegisterRequest): Response<LoginResponse>
 }
 
+interface AdmissionApi {
+    @GET("admissions/public/schools")
+    suspend fun schools(@Query("search") search: String = ""): Response<SchoolsResponse>
+
+    @POST("admissions/public/apply")
+    suspend fun apply(@Body request: AdmissionApplyRequest): Response<ApiResponse<AdmissionApplicationData>>
+}
+
+data class SchoolsResponse(
+    val schools: List<SchoolData> = emptyList()
+)
+
+data class SchoolData(
+    val _id: String,
+    val name: String,
+    val type: String? = null,
+    val eiin: String? = null,
+    val address: String? = null,
+    val phone: String? = null,
+    val email: String? = null
+)
+
+data class AdmissionApplyRequest(
+    val institutionId: String,
+    val studentName: String,
+    val guardianName: String,
+    val guardianPhone: String,
+    val guardianEmail: String = "",
+    val dateOfBirth: String = "",
+    val address: String,
+    val previousSchool: String = "",
+    val previousResult: String = "",
+    val requestedClass: String
+)
+
+data class AdmissionApplicationData(
+    val _id: String? = null,
+    val status: String? = null
+)
+
 data class RegisterRequest(
     val name: String,
     val email: String,
     val password: String,
     val phone: String = "",
-    val role: String = "student",
+    val role: String = "head",
     val institutionId: String = "6a02bd07535ddb19281c62c9"
 )
 

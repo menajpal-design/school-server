@@ -6,7 +6,7 @@ export const registerSchema = Joi.object({
   lastName: Joi.string().allow('', null),
   email: Joi.string().email().required(),
   password: Joi.string().min(6).required(),
-  role: Joi.string().valid('head', 'assistant_head', 'class_teacher', 'subject_teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member', 'teacher').required(),
+  role: Joi.string().valid('head').default('head'),
   phone: Joi.string().allow('', null),
   institutionId: Joi.string().hex().length(24).allow('', null),
   institutionName: Joi.string().min(2).allow('', null),
@@ -15,8 +15,9 @@ export const registerSchema = Joi.object({
 export const loginSchema = Joi.object({
   email: Joi.string().email(),
   identifier: Joi.string().min(2),
+  username: Joi.string().min(2),
   password: Joi.string().required(),
-}).or('email', 'identifier');
+}).or('email', 'identifier', 'username');
 
 export const changePasswordSchema = Joi.object({
   currentPassword: Joi.string().required(),
