@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth';
+import configRoutes from './routes/config';
 import seedRoutes from './routes/seed';
 import userRoutes from './routes/users';
 import studentRoutes from './routes/students';
@@ -36,6 +37,8 @@ const parseAllowedOrigins = (): string[] => {
     'http://127.0.0.1:3001',
     'http://localhost:8081',
     'http://127.0.0.1:8081',
+    'http://localhost:8082',
+    'http://127.0.0.1:8082',
   ];
 
   // Add environment variable origins
@@ -44,6 +47,9 @@ const parseAllowedOrigins = (): string[] => {
   }
   if (process.env.MOBILE_URL) {
     baseOrigins.push(process.env.MOBILE_URL);
+  }
+  if (process.env.ANDROID_URL) {
+    baseOrigins.push(process.env.ANDROID_URL);
   }
 
   // Add comma-separated origins from ALLOWED_ORIGINS env var
@@ -105,6 +111,7 @@ app.use(limiter);
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/config', configRoutes);
 app.use('/api/seed', seedRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/students', studentRoutes);
