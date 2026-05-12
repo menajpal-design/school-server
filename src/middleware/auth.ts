@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
 import Institution from '../models/Institution';
+import { expireInstitutionIfNeeded } from '../services/billingService';
 
 interface AuthRequest extends Request {
   user: any;
@@ -34,7 +35,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       }
     }
 
-    const institution = user.institutionId as any;
+    let institution = user.institutionId as any;
+    institution = await expireInstitutionIfNeeded(institution);
     const platformAdmin = platformAdminRoles.includes(user.role);
     const schoolActive = institution?.isActive !== false;
     const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];

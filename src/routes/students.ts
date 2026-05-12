@@ -231,6 +231,7 @@ router.post('/', authenticate, async (req, res) => {
     await sendSMS({
       to: req.body.guardianPhone,
       message: `Admission completed for ${req.body.name}. Student login: username ${username}, password ${temporaryPassword}. Parent login: username ${parent?.username || parentEmail}, password ${parent ? parentPassword : 'existing password'}.`,
+      institutionId: req.user.institutionId,
     });
 
     res.status(201).json({ student, user, parent, idCard, credentials: { username, password: temporaryPassword, parentPassword: parent ? parentPassword : undefined } });

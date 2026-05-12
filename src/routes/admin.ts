@@ -6,6 +6,8 @@ import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import { authenticate, authorize } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
+import { activateBilling } from '../services/billingService';
+import { verifyGatewayPayment } from '../services/paymentGateway';
 
 const router = express.Router();
 
@@ -20,7 +22,7 @@ const buildBilling = (input: any = {}, current: any = {}) => {
   const isPaymentReceived = input.isPaymentReceived ?? current.isPaymentReceived ?? receivedAmount > 0;
   const billingStatus = input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : current.billingStatus || 'pending');
 
-  return {
+  const next = {
     ...current,
     planCode: plan.code,
     planName: plan.name,
@@ -42,8 +44,8 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     paymentGateway: input.paymentGateway ?? current.paymentGateway,
     paymentTrxId: input.paymentTrxId ?? current.paymentTrxId,
     paymentSenderNumber: input.paymentSenderNumber ?? current.paymentSenderNumber,
-    activatedAt: billingStatus === 'active' ? input.activatedAt || current.activatedAt || new Date() : current.activatedAt,
   };
+  return billingStatus === 'active' ? activateBilling(next, new Date()) : next;
 };
 
 const countsForInstitutions = async (institutionIds: any[]) => {
@@ -98,12 +100,42 @@ router.patch('/schools/:id', async (req, res) => {
     if (req.body.isActive !== undefined) school.isActive = req.body.isActive === true;
     if (req.body.statusAction === 'suspend') school.isActive = false;
     if (req.body.statusAction === 'activate') school.isActive = true;
-    if (['active', 'expired'].includes((school as any).billing?.billingStatus) || req.body.statusAction === 'activate') school.isActive = true;
+    if ((school as any).billing?.billingStatus === 'active' || req.body.statusAction === 'activate') {
+      school.billing = activateBilling((school as any).billing?.toObject?.() || (school as any).billing || {}) as any;
+      school.isActive = true;
+    }
 
     await school.save();
     res.json({ school, message: 'School updated' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to update school', error });
+  }
+});
+
+router.post('/schools/:id/verify-payment', async (req, res) => {
+  try {
+    const school = await Institution.findById(req.params.id);
+    if (!school) return res.status(404).json({ message: 'School not found' });
+    const billing: any = (school as any).billing || {};
+    const verification = await verifyGatewayPayment({
+      trxId: billing.paymentTrxId,
+      amount: Number(billing.receivedAmount || billing.dueAmount || 0),
+      senderNumber: billing.paymentSenderNumber,
+      gateway: billing.paymentGateway,
+    });
+
+    billing.paymentVerifyStatus = verification.status;
+    if (verification.verified) {
+      school.billing = activateBilling(billing) as any;
+      school.isActive = true;
+      (school.billing as any).paymentVerifiedAt = new Date();
+    } else {
+      school.billing = billing;
+    }
+    await school.save();
+    res.json({ school, verification, message: verification.message });
+  } catch (error) {
+    res.status(500).json({ message: 'Payment verification failed', error });
   }
 });
 

@@ -1,12 +1,9 @@
-/**
- * SMS Service Utility
- * Uses the configured provider when SMS_ENABLED=true.
- * Default provider: Anoncify SMS gateway.
- */
+import { canUseSms, incrementSmsUsage } from '../services/billingService';
 
 interface SMSOptions {
   to: string | string[];
   message: string;
+  institutionId?: any;
 }
 
 const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
@@ -14,15 +11,33 @@ const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
 const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '';
 
 const isFailureResponse = (text: string): boolean => /error|fail|invalid/i.test(text);
+const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
+
+const ensureSmsQuota = async (options: SMSOptions) => {
+  const recipients = recipientsFor(options.to);
+  if (!options.institutionId) return true;
+  const quota = await canUseSms(options.institutionId, recipients.length);
+  if (!quota.allowed) {
+    console.error(`SMS blocked: ${quota.message}`);
+    return false;
+  }
+  return true;
+};
+
+const markSmsUsed = async (options: SMSOptions) => {
+  if (options.institutionId) {
+    await incrementSmsUsage(options.institutionId, recipientsFor(options.to).length);
+  }
+};
 
 const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
   if (!SMS_API_KEY) {
-    console.error('❌ SMS_API_KEY is required for Anoncify SMS delivery');
+    console.error('SMS_API_KEY is required for Anoncify SMS delivery');
     return false;
   }
+  if (!(await ensureSmsQuota(options))) return false;
 
-  const recipients = Array.isArray(options.to) ? options.to : [options.to];
-
+  const recipients = recipientsFor(options.to);
   try {
     for (const phoneNumber of recipients) {
       const url = new URL(SMS_API_URL);
@@ -33,15 +48,16 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
       const response = await fetch(url.toString(), { method: 'GET' });
       const responseText = await response.text();
       if (!response.ok || isFailureResponse(responseText)) {
-        console.error(`❌ SMS send failed for ${phoneNumber}: ${response.status} ${responseText}`);
+        console.error(`SMS send failed for ${phoneNumber}: ${response.status} ${responseText}`);
         return false;
       }
     }
 
-    console.log(`✅ SMS sent to ${recipients.join(', ')}`);
+    await markSmsUsed(options);
+    console.log(`SMS sent to ${recipients.join(', ')}`);
     return true;
   } catch (error) {
-    console.error('❌ Error sending SMS via Anoncify:', error);
+    console.error('Error sending SMS via Anoncify:', error);
     return false;
   }
 };
@@ -50,7 +66,9 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
   const smsEnabled = process.env.SMS_ENABLED === 'true';
 
   if (!smsEnabled) {
-    console.log(`📱 SMS service is disabled. Would send SMS to ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`);
+    if (!(await ensureSmsQuota(options))) return false;
+    await markSmsUsed(options);
+    console.log(`SMS service is disabled. Would send SMS to ${recipientsFor(options.to).join(', ')}`);
     return true;
   }
 
@@ -58,71 +76,24 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
     return sendViaAnoncify(options);
   }
 
-  console.error(`❌ Unsupported SMS provider: ${SMS_PROVIDER}`);
+  console.error(`Unsupported SMS provider: ${SMS_PROVIDER}`);
   return false;
 };
 
-export const sendBulkSMS = async (recipients: string[], message: string): Promise<boolean> => {
-  const smsEnabled = process.env.SMS_ENABLED === 'true';
+export const sendBulkSMS = async (recipients: string[], message: string, institutionId?: any): Promise<boolean> => (
+  sendSMS({ to: recipients, message, institutionId })
+);
 
-  if (!smsEnabled) {
-    console.log(`📱 SMS service is disabled. Would send bulk SMS to ${recipients.length} recipients.`);
-    return true;
-  }
-
-  try {
-    const batchSize = 10;
-    for (let i = 0; i < recipients.length; i += batchSize) {
-      const batch = recipients.slice(i, i + batchSize);
-      await Promise.all(
-        batch.map((phone) =>
-          sendSMS({
-            to: phone,
-            message,
-          })
-        )
-      );
-    }
-    console.log(`✅ Bulk SMS sent to ${recipients.length} recipients`);
-    return true;
-  } catch (error) {
-    console.error('❌ Error sending bulk SMS:', error);
-    return false;
-  }
-};
-
-export const sendAttendanceReminderSMS = async (phoneNumber: string, studentName: string): Promise<boolean> => {
-  const smsEnabled = process.env.SMS_ENABLED === 'true';
-
-  if (!smsEnabled) {
-    console.log(`📱 SMS service is disabled. Would send attendance reminder to ${phoneNumber}`);
-    return true;
-  }
-
+export const sendAttendanceReminderSMS = async (phoneNumber: string, studentName: string, institutionId?: any): Promise<boolean> => {
   const message = `Dear Parent, ${studentName} was marked absent today. Please contact the school if this is an error.`;
-  return sendSMS({ to: phoneNumber, message });
+  return sendSMS({ to: phoneNumber, message, institutionId });
 };
 
-export const sendFeeDueSMS = async (phoneNumber: string, studentName: string, dueAmount: number): Promise<boolean> => {
-  const smsEnabled = process.env.SMS_ENABLED === 'true';
-
-  if (!smsEnabled) {
-    console.log(`📱 SMS service is disabled. Would send fee reminder to ${phoneNumber}`);
-    return true;
-  }
-
+export const sendFeeDueSMS = async (phoneNumber: string, studentName: string, dueAmount: number, institutionId?: any): Promise<boolean> => {
   const message = `Dear Parent, fee of ${dueAmount} is due for ${studentName}. Please pay within 7 days.`;
-  return sendSMS({ to: phoneNumber, message });
+  return sendSMS({ to: phoneNumber, message, institutionId });
 };
 
-export const sendNotificationSMS = async (phoneNumber: string, message: string): Promise<boolean> => {
-  const smsEnabled = process.env.SMS_ENABLED === 'true';
-
-  if (!smsEnabled) {
-    console.log(`📱 SMS service is disabled. Would send notification to ${phoneNumber}`);
-    return true;
-  }
-
-  const truncatedMessage = message.substring(0, 160);
-  return sendSMS({ to: phoneNumber, message: truncatedMessage });
-};
+export const sendNotificationSMS = async (phoneNumber: string, message: string, institutionId?: any): Promise<boolean> => (
+  sendSMS({ to: phoneNumber, message: message.substring(0, 160), institutionId })
+);

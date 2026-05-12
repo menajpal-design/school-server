@@ -35,6 +35,13 @@ export interface IInstitution extends Document {
     paymentTrxId?: string;
     paymentSenderNumber?: string;
     activatedAt?: Date;
+    subscriptionStartedAt?: Date;
+    subscriptionExpiresAt?: Date;
+    paymentVerifyStatus?: 'pending' | 'verified' | 'failed';
+    paymentVerifiedAt?: Date;
+    smsUsed?: number;
+    smsPeriodStart?: Date;
+    smsPeriodEnd?: Date;
   };
   settings: {
     mongodbUri?: string;
@@ -96,6 +103,13 @@ const InstitutionSchema: Schema = new Schema({
     paymentTrxId: { type: String },
     paymentSenderNumber: { type: String },
     activatedAt: { type: Date },
+    subscriptionStartedAt: { type: Date },
+    subscriptionExpiresAt: { type: Date },
+    paymentVerifyStatus: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' },
+    paymentVerifiedAt: { type: Date },
+    smsUsed: { type: Number, default: 0 },
+    smsPeriodStart: { type: Date },
+    smsPeriodEnd: { type: Date },
   },
   settings: {
     mongodbUri: { type: String },

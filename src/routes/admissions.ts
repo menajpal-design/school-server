@@ -125,7 +125,7 @@ router.post('/:id/accept', authenticate, async (req: any, res) => {
   application.studentId = student._id as any;
   await application.save();
 
-  await sendSMS({ to: application.guardianPhone, message: `Admission accepted. Student username ${username}, password ${password}. Parent username ${parentUsername}, password ${parentPassword}` });
+  await sendSMS({ to: application.guardianPhone, message: `Admission accepted. Student username ${username}, password ${password}. Parent username ${parentUsername}, password ${parentPassword}`, institutionId: req.user.institutionId });
   res.json({ application, student, credentials: { username, password, parentUsername, parentPassword } });
 });
 
