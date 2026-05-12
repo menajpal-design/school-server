@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import { authenticate, canManageAcademic, canScanIDCard } from '../middleware/auth';
 import Attendance from '../models/Attendance';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
@@ -168,7 +168,7 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
   }
 });
 
-router.post('/scan-id-card', authenticate, canManageAcademic(), async (req, res) => {
+router.post('/scan-id-card', authenticate, canScanIDCard(), async (req, res) => {
   try {
     const code = req.body.code || req.body.cardNumber || req.body.qrCodeData;
     if (!code) return res.status(400).json({ message: 'Card code required' });

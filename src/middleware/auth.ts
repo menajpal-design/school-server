@@ -112,6 +112,21 @@ export const canManageIDCard = () => {
   };
 };
 
+export const canScanIDCard = () => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+    if (['student', 'parent'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Students and parents cannot scan ID cards.' });
+    }
+    if (isPrivilegedRole(req.user.role)) return next();
+    const allowed = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff'];
+    const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
+    const scanPermissions = ['scan:idcard', 'manage:idcard', 'manage:academic', 'manage:finance'];
+    if (allowed.includes(req.user.role) || scanPermissions.some((permission) => permissions.includes(permission))) return next();
+    return res.status(403).json({ message: 'Access denied. Cannot scan ID cards.' });
+  };
+};
+
 export const canDownloadIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
