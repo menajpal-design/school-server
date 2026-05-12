@@ -27,16 +27,34 @@ const app = express();
 
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3001',
+  process.env.MOBILE_URL || 'http://localhost:8081',
+  process.env.ANDROID_URL || 'http://localhost:8082',
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
-  process.env.MOBILE_URL || 'http://localhost:8081'
+  'http://localhost:8081',
+  'http://127.0.0.1:8081',
+  'http://localhost:8082',
+  'http://127.0.0.1:8082',
+  'https://school-client-447e7d0e2388.herokuapp.com',
+  'https://www.school-client-447e7d0e2388.herokuapp.com',
+  'https://school-client.herokuapp.com',
+  'https://www.school-client.herokuapp.com',
+  ...(process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 ];
+
+const isAllowedOrigin = (origin: string): boolean => (
+  allowedOrigins.includes(origin) ||
+  /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin)
+);
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || isAllowedOrigin(origin)) {
       callback(null, true);
       return;
     }
