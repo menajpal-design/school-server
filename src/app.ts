@@ -80,7 +80,8 @@ const allowedOrigins = parseAllowedOrigins();
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    const isHerokuApp = !!origin && /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin);
+    if (!origin || allowedOrigins.includes(origin) || isHerokuApp) {
       callback(null, true);
       return;
     }
