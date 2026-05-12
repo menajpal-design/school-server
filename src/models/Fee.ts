@@ -4,6 +4,10 @@ export interface IFee extends Document {
   studentId: mongoose.Types.ObjectId;
   classId?: mongoose.Types.ObjectId;
   amount: number;
+  originalAmount?: number;
+  waiverType?: 'none' | 'free' | 'half' | 'partial';
+  waiverAmount?: number;
+  waiverReason?: string;
   type: 'monthly' | 'annual' | 'exam' | 'tuition' | 'transport' | 'other';
   scholarship?: number;
   discount?: number;
@@ -24,6 +28,10 @@ const FeeSchema: Schema = new Schema({
   studentId: { type: Schema.Types.ObjectId, ref: 'Student' },
   classId: { type: Schema.Types.ObjectId, ref: 'Class' },
   amount: { type: Number, required: true },
+  originalAmount: { type: Number },
+  waiverType: { type: String, enum: ['none', 'free', 'half', 'partial'], default: 'none' },
+  waiverAmount: { type: Number, default: 0 },
+  waiverReason: { type: String, trim: true },
   type: { type: String, enum: ['monthly', 'annual', 'exam', 'tuition', 'transport', 'other'], required: true },
   scholarship: { type: Number, default: 0 },
   discount: { type: Number, default: 0 },

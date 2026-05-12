@@ -198,7 +198,7 @@ export const getProfile = async (req: Request, res: Response) => {
 
 export const updateProfile = async (req: Request, res: Response) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, avatar } = req.body;
     const user = await User.findById((req as any).user._id);
 
     if (!user) {
@@ -207,6 +207,7 @@ export const updateProfile = async (req: Request, res: Response) => {
 
     user.name = name || user.name;
     user.phone = phone || user.phone;
+    user.avatar = avatar || user.avatar;
 
     await user.save();
 
@@ -217,7 +218,8 @@ export const updateProfile = async (req: Request, res: Response) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        phone: user.phone
+        phone: user.phone,
+        avatar: user.avatar
       }
     });
   } catch (error) {

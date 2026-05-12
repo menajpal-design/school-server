@@ -92,6 +92,24 @@ const buildAttendanceOverview = async (institutionId: any) => {
   };
 };
 
+const attendanceStudentQuery = async (req: any) => {
+  const query: any = { institutionId: req.user.institutionId, isActive: true };
+  if (req.user.role === 'student') {
+    query.userId = req.user._id;
+    return query;
+  }
+  if (req.user.role === 'parent') {
+    const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+    query._id = { $in: parent?.children || [] };
+    return query;
+  }
+  if (req.user.role === 'class_teacher') {
+    const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+    query.classId = { $in: teacher?.assignedClasses || [] };
+  }
+  return query;
+};
+
 router.get('/', authenticate, canManageAcademic(), (req, res) => {
   const { start, end } = dayRange(req.query.date as string | undefined);
   const query: any = { institutionId: req.user.institutionId };
@@ -282,7 +300,7 @@ router.get('/me', authenticate, (req, res) => {
 
 router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
   try {
-    const query: any = { institutionId: req.user.institutionId, isActive: true };
+    const query: any = await attendanceStudentQuery(req);
     if (req.query.classId) query.classId = req.query.classId;
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
     const students = await Student.find(query)
