@@ -3,7 +3,7 @@
     <group android:id="@+id/main_menu">
         <item
             android:id="@+id/nav_dashboard"
-            android:icon="@android:drawable/ic_menu_dashboard"
+            android:icon="@android:drawable/ic_menu_view"
             android:title="Dashboard" />
     </group>
 
@@ -120,7 +120,7 @@
                 android:title="Committee" />
             <item
                 android:id="@+id/nav_users"
-                android:title="Users & Roles" />
+                android:title="Users &amp; Roles" />
             <item
                 android:id="@+id/nav_parent_portal"
                 android:title="Parent Portal" />

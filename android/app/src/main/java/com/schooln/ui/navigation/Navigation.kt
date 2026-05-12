@@ -2,6 +2,7 @@ package com.schooln.ui.navigation
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,7 +24,7 @@ sealed class NavItem(
 ) {
     object Dashboard : NavItem("dashboard", "ড্যাশবোর্ড", Icons.Filled.Dashboard)
     object Attendance : NavItem("attendance", "উপস্থিতি", Icons.Filled.CheckCircle)
-    object Academic : NavItem("academic", "শিক্ষাগত", Icons.Filled.SchoolOutlined)
+    object Academic : NavItem("academic", "শিক্ষাগত", Icons.Filled.School)
     object Messages : NavItem("messages", "বার্তা", Icons.Filled.Mail)
     object Notices : NavItem("notices", "বিজ্ঞপ্তি", Icons.Filled.Notifications)
     object Finance : NavItem("finance", "অর্থনীতি", Icons.Filled.MonetizationOn)
@@ -182,6 +183,7 @@ fun NavigationDrawer(
  * Top Navigation Bar (Header)
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun TopNavigationBar(
     title: String,
     onMenuClick: () -> Unit = {},
@@ -191,12 +193,12 @@ fun TopNavigationBar(
 ) {
     TopAppBar(
         title = { Text(title) },
-        navigationIcon = if (showMenuIcon) {
-            { IconButton(onClick = onMenuClick) {
-                Icon(Icons.Filled.Menu, contentDescription = "Menu")
-            } }
-        } else {
-            null
+        navigationIcon = {
+            if (showMenuIcon) {
+                IconButton(onClick = onMenuClick) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                }
+            }
         },
         actions = {
             IconButton(onClick = onSearchClick) {
@@ -222,35 +224,32 @@ fun TopNavigationBar(
  */
 @Composable
 fun ResponsiveNavigation(
-    windowWidthSizeClass: WindowWidthSizeClass,
+    isCompactScreen: Boolean,
     currentRoute: String,
     onNavigate: (String) -> Unit,
     userName: String = "ব্যবহারকারী",
     userRole: String = "শিক্ষার্থী",
     content: @Composable (Modifier) -> Unit
 ) {
-    when (windowWidthSizeClass) {
-        WindowWidthSizeClass.Compact -> {
-            // Phone: Bottom Navigation
-            Column(modifier = Modifier.fillMaxSize()) {
-                content(Modifier.weight(1f))
-                BottomNavigationBar(
-                    currentRoute = currentRoute,
-                    onNavigate = onNavigate
-                )
-            }
+    if (isCompactScreen) {
+        // Phone: Bottom Navigation
+        Column(modifier = Modifier.fillMaxSize()) {
+            content(Modifier.weight(1f))
+            BottomNavigationBar(
+                currentRoute = currentRoute,
+                onNavigate = onNavigate
+            )
         }
-        WindowWidthSizeClass.Medium, WindowWidthSizeClass.Expanded -> {
-            // Tablet: Side Drawer
-            Row(modifier = Modifier.fillMaxSize()) {
-                NavigationDrawer(
-                    currentRoute = currentRoute,
-                    onNavigate = onNavigate,
-                    userName = userName,
-                    userRole = userRole
-                )
-                content(Modifier.weight(1f))
-            }
+    } else {
+        // Tablet: Side Drawer
+        Row(modifier = Modifier.fillMaxSize()) {
+            NavigationDrawer(
+                currentRoute = currentRoute,
+                onNavigate = onNavigate,
+                userName = userName,
+                userRole = userRole
+            )
+            content(Modifier.weight(1f))
         }
     }
 }

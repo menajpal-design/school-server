@@ -3,24 +3,26 @@ package com.schooln
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.*
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.navigation.NavHost
-import androidx.navigation.NavHostController
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.compose.ui.unit.dp
 import com.schooln.config.Config
 import com.schooln.ui.navigation.NavItem
 import com.schooln.ui.navigation.ResponsiveNavigation
@@ -32,12 +34,10 @@ import com.schooln.ui.screens.*
 import com.schooln.ui.theme.SchoolManagementTheme
 
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             SchoolManagementTheme {
-                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -49,7 +49,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 fun SchoolApp(
     modifier: Modifier = Modifier
@@ -57,23 +56,20 @@ fun SchoolApp(
     val context = LocalContext.current
     val navController = rememberNavController()
     var currentRoute by remember { mutableStateOf(NavItem.Dashboard.route) }
-    var isDrawerOpen by remember { mutableStateOf(false) }
-    
-    val windowSizeClass = calculateWindowSizeClass(this as ComponentActivity)
-    val isCompactScreen = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Compact
+    val isCompactScreen = LocalConfiguration.current.screenWidthDp < 600
 
     LaunchedEffect(Unit) {
         bootstrapServerUrl(context)
     }
     
     ResponsiveNavigation(
-        windowWidthSizeClass = windowSizeClass.widthSizeClass,
+        isCompactScreen = isCompactScreen,
         currentRoute = currentRoute,
         onNavigate = { route ->
             currentRoute = route
             navController.navigate(route) {
                 popUpTo(NavItem.Dashboard.route) { saveState = true }
-                lazyRestoreState = true
+                launchSingleTop = true
                 restoreState = true
             }
         },
@@ -85,7 +81,7 @@ fun SchoolApp(
                 // Top bar only on compact screens
                 TopNavigationBar(
                     title = getScreenTitle(currentRoute),
-                    onMenuClick = { isDrawerOpen = !isDrawerOpen },
+                    onMenuClick = { /* handled by responsive nav container */ },
                     showMenuIcon = false
                 )
             }
