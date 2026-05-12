@@ -22,6 +22,7 @@ import reportRoutes from './routes/reports';
 import backupRoutes from './routes/backup';
 import institutionRoutes from './routes/institution';
 import admissionRoutes from './routes/admissions';
+import adminRoutes from './routes/admin';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -107,6 +108,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/institution', institutionRoutes);
 app.use('/api/admissions', admissionRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Static files
 app.use('/uploads', express.static('uploads'));

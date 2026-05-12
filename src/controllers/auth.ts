@@ -56,6 +56,7 @@ export const register = async (req: Request, res: Response) => {
 
     if (!institutionId) {
       const selected = calculatePlanDue(req.body.planCode, 'monthly', true);
+      const paymentAmount = Number(req.body.receivedAmount || 0);
       const institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
         type: 'school',
@@ -77,8 +78,11 @@ export const register = async (req: Request, res: Response) => {
           storageAmount: selected.storageAmount,
           dueAmount: selected.total,
           billingStatus: 'pending',
-          isPaymentReceived: false,
-          receivedAmount: 0,
+          isPaymentReceived: paymentAmount > 0 || Boolean(req.body.paymentTrxId),
+          receivedAmount: paymentAmount,
+          paymentGateway: req.body.paymentGateway || 'bkash',
+          paymentTrxId: req.body.paymentTrxId,
+          paymentSenderNumber: req.body.paymentSenderNumber,
         },
         settings: {
           backupSettings: {

@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
+import Institution from '../models/Institution';
 
 interface AuthRequest extends Request {
   user: any;
@@ -23,6 +24,14 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
+    }
+
+    const selectedInstitutionId = req.header('x-institution-id');
+    if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
+      const institution = await Institution.findById(selectedInstitutionId).select('_id');
+      if (institution) {
+        user.institutionId = institution._id as any;
+      }
     }
 
     req.user = user;
