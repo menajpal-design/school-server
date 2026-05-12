@@ -15,6 +15,9 @@ on:
         required: false
         default: 'Latest Build'
 
+    # Allow the workflow to create releases and upload artifacts
+    permissions:
+      contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,9 +61,11 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: app-release.apk
-        path: android/app/build/outputs/apk/release/app-release.apk
+        # allow any APK produced in the release output dir (handles -unsigned or different names)
+        path: android/app/build/outputs/apk/release/*.apk
     
     - name: Create Release
+      id: create_release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: actions/create-release@v1.1.4
       env:
@@ -84,7 +89,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: android/app/build/outputs/apk/release/app-release.apk
+        # point to any APK produced by the release build
+        asset_path: android/app/build/outputs/apk/release/*.apk
         asset_name: SchoolApp-v${{ github.run_number }}.apk
         asset_content_type: application/vnd.android.package-archive
 
