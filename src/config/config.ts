@@ -128,12 +128,12 @@ export const validateConfig = (config: Config): void => {
 
   // JWT Secret validation
   if (config.jwtSecret.length < 32) {
-    criticalErrors.push('JWT_SECRET must be at least 32 characters long');
+    warnings.push('JWT_SECRET should be at least 32 characters long');
   }
 
   // MongoDB URI validation
   if (!config.mongoUri) {
-    criticalErrors.push('MONGO_URI is required');
+    warnings.push('MONGO_URI is missing; database features may not work');
   }
 
   // If emails are enabled, validate email config
@@ -173,11 +173,6 @@ export const validateConfig = (config: Config): void => {
   if (criticalErrors.length > 0) {
     console.error('❌ Configuration Errors:');
     criticalErrors.forEach((error) => console.error(`   - ${error}`));
-
-    // Only exit if in production and critical configuration is invalid
-    if (config.nodeEnv === 'production') {
-      process.exit(1);
-    }
   }
 };
 

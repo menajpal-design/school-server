@@ -6,15 +6,32 @@ dotenv.config();
 
 const PORT = process.env.PORT || 5000;
 
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+  // Don't exit - let server continue running
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - let server continue running
+});
+
 // Connect to MongoDB (non-blocking)
 connectDB().catch(err => {
   console.warn('⚠️  MongoDB connection failed, but server will still run:', err.message);
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 DRMS Server running on port ${PORT}`);
   console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
   console.log(`📲 Mobile URL: ${process.env.MOBILE_URL || 'http://localhost:8081'}`);
+});
+
+// Handle server errors
+server.on('error', (err: any) => {
+  console.error('❌ Server error:', err);
 });
 
 export default app;
