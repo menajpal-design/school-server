@@ -1,6 +1,6 @@
 import express from 'express';
 import { generateStudentIdCard, generateTeacherIdCard, generateStaffIdCard, bulkGenerateIdCards, downloadIdCard, emailIdCard, verifyByQRCode, renewIdCard, idCardStats, getAllIdCards, getIdCardById, getMyIdCard, searchIdCardOwners, generateIdCardRecord } from '../controllers/idCard';
-import { authenticate, canDownloadIDCard, canGenerateIDCard, canManageIDCard } from '../middleware/auth';
+import { authenticate, canDownloadIDCard, canGenerateIDCard, canManageIDCard, canScanIDCard } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -20,7 +20,7 @@ router.get('/:id/download', authenticate, canDownloadIDCard(), downloadIdCard);
 router.post('/:id/email', authenticate, canManageIDCard(), emailIdCard);
 
 // Verify QR code
-router.post('/verify', authenticate, verifyByQRCode);
+router.post('/verify', authenticate, canScanIDCard(), verifyByQRCode);
 
 // Renew
 router.post('/:id/renew', authenticate, canManageIDCard(), renewIdCard);
