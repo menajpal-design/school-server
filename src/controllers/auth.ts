@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import Institution from '../models/Institution';
 import { generateUsername } from '../utils/credentials';
+import { calculatePlanDue } from '../config/plans';
 
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
 
@@ -54,6 +55,7 @@ export const register = async (req: Request, res: Response) => {
     const userId = new mongoose.Types.ObjectId();
 
     if (!institutionId) {
+      const selected = calculatePlanDue(req.body.planCode, 'monthly', true);
       const institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
         type: 'school',
@@ -61,6 +63,23 @@ export const register = async (req: Request, res: Response) => {
         phone: phone || 'Not provided',
         email,
         headId: userId,
+        billing: {
+          planCode: selected.plan.code,
+          planName: selected.plan.name,
+          studentLimit: selected.plan.studentLimit,
+          monthlyPrice: selected.plan.monthlyPrice,
+          yearlyPrice: selected.plan.yearlyPrice,
+          monthlySmsLimit: selected.plan.monthlySmsLimit,
+          yearlyDiscountPercent: selected.plan.yearlyDiscountPercent,
+          billingCycle: 'monthly',
+          useEasySchoolStorage: true,
+          storageMonthlyPrice: 100,
+          storageAmount: selected.storageAmount,
+          dueAmount: selected.total,
+          billingStatus: 'pending',
+          isPaymentReceived: false,
+          receivedAmount: 0,
+        },
         settings: {
           backupSettings: {
             frequency: 'weekly',
