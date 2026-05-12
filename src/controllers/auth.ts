@@ -4,8 +4,8 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User';
 import Institution from '../models/Institution';
+import { generateUsername } from '../utils/credentials';
 
-const normalizeRole = (role: string) => role === 'teacher' ? 'subject_teacher' : role;
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
 
 const buildAuthPayload = (message: string, token: string, user: any) => ({
@@ -23,7 +23,7 @@ export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, phone } = req.body;
     const name = (req.body.name || `${req.body.firstName || ''} ${req.body.lastName || ''}`).trim();
-    const role = normalizeRole(req.body.role);
+    const role = 'head';
     let institutionId = req.body.institutionId;
 
     // Check if user already exists
@@ -60,6 +60,7 @@ export const register = async (req: Request, res: Response) => {
     const user = new User({
       _id: userId,
       name,
+      username: await generateUsername(name, 'head'),
       email,
       password: hashedPassword,
       role,
@@ -78,6 +79,7 @@ export const register = async (req: Request, res: Response) => {
     const responseUser = {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         role: user.role,
         phone: user.phone,
@@ -95,7 +97,7 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const identifier = (req.body.email || req.body.identifier || '').trim();
+    const identifier = (req.body.username || req.body.email || req.body.identifier || '').trim();
     const { password } = req.body;
 
     // Validate input
@@ -111,6 +113,7 @@ export const login = async (req: Request, res: Response) => {
     const user = await User.findOne({
       $or: [
         { email: emailQuery },
+        { username: emailQuery.toLowerCase() },
         { phone: identifier },
       ],
     }).populate('institutionId');
@@ -136,6 +139,7 @@ export const login = async (req: Request, res: Response) => {
     const responseUser = {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         role: user.role,
         phone: user.phone,

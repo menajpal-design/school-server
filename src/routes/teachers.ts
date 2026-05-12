@@ -6,6 +6,8 @@ import User from '../models/User';
 import ClassModel from '../models/Class';
 import Subject from '../models/Subject';
 import IDCard from '../models/IDCard';
+import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -72,14 +74,18 @@ const createIdCard = async (teacherId: any, req: any, photoUrl?: string) => {
 
 router.post('/', authenticate, async (req, res) => {
   try {
+    if (req.user.role !== 'head') return res.status(403).json({ message: 'Only school head can assign teachers' });
     const email = String(req.body.email || `${String(req.body.employeeId || Date.now()).toLowerCase()}@teacher.local`);
     const existing = await User.findOne({ email });
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
+    const username = await generateUsername(req.body.name, 'teacher');
+    const temporaryPassword = generatePassword();
 
     const user = await User.create({
       name: req.body.name,
+      username,
       email,
-      password: await bcrypt.hash(String(req.body.password || 'Teacher@123'), 10),
+      password: await hashPassword(temporaryPassword),
       role: 'subject_teacher',
       phone: req.body.phone,
       avatar: req.body.photo,
@@ -101,7 +107,10 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;
-    res.status(201).json({ teacher, user, idCard });
+    if (req.body.phone) {
+      await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}` });
+    }
+    res.status(201).json({ teacher, user, idCard, credentials: { username, password: temporaryPassword } });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create teacher', error });
   }
