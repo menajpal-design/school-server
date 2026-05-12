@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:id="@+id/main_menu">
+        <item
+            android:id="@+id/nav_dashboard"
+            android:icon="@android:drawable/ic_menu_dashboard"
+            android:title="Dashboard" />
+    </group>
+
+    <item android:title="Academic">
+        <menu>
+            <item
+                android:id="@+id/nav_academic"
+                android:icon="@android:drawable/ic_menu_agenda"
+                android:title="Overview" />
+            <item
+                android:id="@+id/nav_classes"
+                android:title="Classes" />
+            <item
+                android:id="@+id/nav_subjects"
+                android:title="Subjects" />
+            <item
+                android:id="@+id/nav_exams"
+                android:title="Exams" />
+            <item
+                android:id="@+id/nav_results"
+                android:title="Results" />
+            <item
+                android:id="@+id/nav_report_card"
+                android:title="Report Card" />
+        </menu>
+    </item>
+
+    <item android:title="Attendance">
+        <menu>
+            <item
+                android:id="@+id/nav_attendance"
+                android:icon="@android:drawable/ic_menu_agenda"
+                android:title="Overview" />
+            <item
+                android:id="@+id/nav_mark_attendance"
+                android:title="Mark Attendance" />
+            <item
+                android:id="@+id/nav_attendance_reports"
+                android:title="Reports" />
+            <item
+                android:id="@+id/nav_my_attendance"
+                android:title="My Attendance" />
+        </menu>
+    </item>
+
+    <item android:title="Finance">
+        <menu>
+            <item
+                android:id="@+id/nav_finance"
+                android:icon="@android:drawable/ic_menu_manage"
+                android:title="Overview" />
+            <item
+                android:id="@+id/nav_fees"
+                android:title="Manage Fees" />
+            <item
+                android:id="@+id/nav_collections"
+                android:title="Collections" />
+            <item
+                android:id="@+id/nav_salary"
+                android:title="Salary" />
+            <item
+                android:id="@+id/nav_finance_reports"
+                android:title="Reports" />
+            <item
+                android:id="@+id/nav_my_fees"
+                android:title="My Fees" />
+        </menu>
+    </item>
+
+    <item android:title="ID Cards">
+        <menu>
+            <item
+                android:id="@+id/nav_id_cards"
+                android:icon="@android:drawable/ic_menu_camera"
+                android:title="Overview" />
+            <item
+                android:id="@+id/nav_generate_cards"
+                android:title="Generate" />
+            <item
+                android:id="@+id/nav_templates"
+                android:title="Templates" />
+            <item
+                android:id="@+id/nav_id_reports"
+                android:title="Reports" />
+            <item
+                android:id="@+id/nav_renewal"
+                android:title="Renewal" />
+        </menu>
+    </item>
+
+    <item android:title="Documents">
+        <menu>
+            <item
+                android:id="@+id/nav_documents"
+                android:icon="@android:drawable/ic_menu_edit"
+                android:title="Overview" />
+            <item
+                android:id="@+id/nav_upload_doc"
+                android:title="Upload" />
+            <item
+                android:id="@+id/nav_manage_docs"
+                android:title="Manage" />
+        </menu>
+    </item>
+
+    <item android:title="More">
+        <menu>
+            <item
+                android:id="@+id/nav_notices"
+                android:icon="@android:drawable/ic_menu_info_details"
+                android:title="Notices" />
+            <item
+                android:id="@+id/nav_committee"
+                android:title="Committee" />
+            <item
+                android:id="@+id/nav_users"
+                android:title="Users & Roles" />
+            <item
+                android:id="@+id/nav_parent_portal"
+                android:title="Parent Portal" />
+        </menu>
+    </item>
+
+    <group android:id="@+id/profile_menu">
+        <item
+            android:id="@+id/nav_profile"
+            android:icon="@android:drawable/ic_menu_myplaces"
+            android:title="Profile" />
+        <item
+            android:id="@+id/nav_settings"
+            android:icon="@android:drawable/ic_menu_preferences"
+            android:title="Settings" />
+        <item
+            android:id="@+id/nav_logout"
+            android:icon="@android:drawable/ic_menu_close_clear_cancel"
+            android:title="Logout" />
+    </group>
+</menu>

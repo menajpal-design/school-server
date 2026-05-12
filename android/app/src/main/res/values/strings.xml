@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Easy Study</string>
+    <string name="login_title">DRMS Mobile Login</string>
+    <string name="email_hint">Email</string>
+    <string name="password_hint">Password</string>
+    <string name="login_button">Login</string>
+    <string name="dashboard_button">Dashboard</string>
+    <string name="notices_button">Notices</string>
+    <string name="attendance_button">Attendance</string>
+    <string name="finance_button">Finance</string>
+    <string name="academic_button">Academic</string>
+    <string name="students_button">Students</string>
+    <string name="teachers_button">Teachers</string>
+    <string name="staff_button">Staff</string>
+    <string name="id_cards_button">ID Cards</string>
+    <string name="users_button">Users</string>
+    <string name="committee_button">Committee</string>
+    <string name="documents_button">Documents</string>
+    <string name="parent_portal_button">Parent Portal</string>
+    <string name="profile_button">My Profile</string>
+    <string name="logout_button">Logout</string>
+    <string name="back_button">Back</string>
+    <string name="loading">Loading...</string>
+    <string name="menu_title">DRMS Mobile Menu</string>
+</resources>

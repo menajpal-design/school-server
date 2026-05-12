@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".EasyStudyApp"
+        android:allowBackup="true"
+        android:usesCleartextTraffic="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.EasyStudy">
+        
+        <!-- LAUNCHER ACTIVITY - Shows Login Screen First -->
+        <activity
+            android:name="com.hridoy.easystudy.screens.LoginActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        
+        <!-- MAIN ACTIVITY - Shows Menu After Login -->
+        <activity
+            android:name="com.hridoy.easystudy.MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name="com.hridoy.easystudy.screens.AcademicDetailActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Feature Activities -->
+        <activity android:name=".screens.DashboardActivity" />
+        <activity android:name=".screens.AcademicActivity" />
+        <activity android:name=".screens.AcademicDetailActivity" />
+        <activity android:name=".screens.AttendanceActivity" />
+        <activity android:name=".screens.AttendanceDetailActivity" />
+        <activity android:name=".screens.FinanceActivity" />
+        <activity android:name=".screens.FinanceDetailActivity" />
+        <activity android:name=".screens.IdCardsActivity" />
+        <activity android:name=".screens.IdCardsDetailActivity" />
+        <activity android:name=".screens.DocumentsActivity" />
+        <activity android:name=".screens.DocumentsDetailActivity" />
+        <activity android:name=".screens.NoticesActivity" />
+        <activity android:name=".screens.CommitteeActivity" />
+        <activity android:name=".screens.ParentPortalActivity" />
+        <activity android:name=".screens.UsersActivity" />
+        <activity android:name=".screens.ProfileActivity" />
+        <activity android:name=".screens.SettingsActivity" />
+        <activity android:name=".screens.ChangePasswordActivity" />
+        
+    </application>
+
+</manifest>
