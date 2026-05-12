@@ -52,20 +52,20 @@ jobs:
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
     
     - name: Upload Debug APK
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: app-debug.apk
         path: android/app/build/outputs/apk/debug/app-debug.apk
     
     - name: Upload Release APK
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: app-release.apk
         path: android/app/build/outputs/apk/release/app-release.apk
     
     - name: Create Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/create-release@v1
+      uses: actions/create-release@v1.1.4
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -82,7 +82,7 @@ jobs:
     
     - name: Upload Release APK to Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/upload-release-asset@v1
+      uses: actions/upload-release-asset@v1.0.2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
