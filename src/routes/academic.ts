@@ -9,6 +9,7 @@ import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Attendance from '../models/Attendance';
 import IDCard from '../models/IDCard';
+import Institution from '../models/Institution';
 
 const router = express.Router();
 
@@ -226,6 +227,133 @@ const updateResultWorkflow = async (req: any, workflowStatus: 'review' | 'approv
 
   return Result.updateMany(filter, update);
 };
+
+const resolvePublicInstitution = async (req: any) => {
+  if (req.query.institutionId) return Institution.findOne({ _id: req.query.institutionId, isActive: true });
+  const domain = String(req.query.domain || req.hostname || '').replace(/^www\./, '').toLowerCase();
+  if (!domain) return null;
+  return Institution.findOne({
+    isActive: true,
+    $or: [
+      { website: new RegExp(domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+      { domains: domain },
+      { domains: `www.${domain}` },
+    ],
+  });
+};
+
+router.get('/public/results/schools', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const query: any = { isActive: true };
+    if (search) {
+      query.$or = [
+        { name: new RegExp(search, 'i') },
+        { eiin: new RegExp(search, 'i') },
+        { address: new RegExp(search, 'i') },
+      ];
+    }
+    const schools = await Institution.find(query)
+      .select('name type eiin address website domains')
+      .sort({ name: 1 })
+      .limit(100)
+      .lean();
+    res.json({ schools });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load public schools', error });
+  }
+});
+
+router.get('/public/results/options', async (req, res) => {
+  try {
+    const institution = await resolvePublicInstitution(req);
+    if (!institution) return res.status(404).json({ message: 'School not found' });
+    const [classes, exams] = await Promise.all([
+      ClassModel.find({ institutionId: institution._id, isActive: true }).select('name grade academicYear').sort({ grade: 1 }).lean(),
+      Exam.find({ institutionId: institution._id, isPublished: true }).select('name type classId startDate endDate').sort({ startDate: -1 }).lean(),
+    ]);
+    res.json({ institution, classes, exams });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load result options', error });
+  }
+});
+
+router.get('/public/results', async (req, res) => {
+  try {
+    const institution = await resolvePublicInstitution(req);
+    if (!institution) return res.status(404).json({ message: 'School not found' });
+
+    const studentQuery: any = {
+      institutionId: institution._id,
+      isActive: true,
+      rollNumber: String(req.query.rollNumber || '').trim(),
+    };
+    if (req.query.classId) studentQuery.classId = req.query.classId;
+    if (!studentQuery.rollNumber) return res.status(400).json({ message: 'Roll number is required' });
+
+    const student = await Student.findOne(studentQuery)
+      .populate('userId', 'name')
+      .populate('classId', 'name grade academicYear')
+      .populate('sectionId', 'name')
+      .lean();
+    if (!student) return res.status(404).json({ message: 'No student found for this school, class and roll' });
+
+    const resultQuery: any = {
+      institutionId: institution._id,
+      studentId: student._id,
+      workflowStatus: 'published',
+    };
+    if (req.query.examId) resultQuery.examId = req.query.examId;
+
+    const results = await Result.find(resultQuery)
+      .populate('examId', 'name type totalMarks passingMarks subjectMarks')
+      .populate('subjectId', 'name code')
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .lean();
+    if (!results.length) return res.status(404).json({ message: 'Published result not found' });
+
+    const totalObtained = results.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
+    const totalMarks = results.reduce((sum: number, result: any) => {
+      const setup = result.examId?.subjectMarks?.find((item: any) => String(item.subjectId) === String(result.subjectId?._id || result.subjectId));
+      return sum + Number(setup?.totalMarks || result.examId?.totalMarks || 100);
+    }, 0);
+    const percentage = totalMarks ? Math.round((totalObtained / totalMarks) * 100) : 0;
+
+    res.json({
+      institution: {
+        id: institution._id,
+        name: institution.name,
+        eiin: institution.eiin,
+        address: institution.address,
+      },
+      student: {
+        id: student._id,
+        name: (student.userId as any)?.name,
+        rollNumber: student.rollNumber,
+        className: (student.classId as any)?.name,
+        sectionName: (student.sectionId as any)?.name,
+      },
+      summary: {
+        totalObtained,
+        totalMarks,
+        percentage,
+        passed: results.every((result: any) => result.isPassed !== false),
+      },
+      results: results.map((result: any) => ({
+        examName: result.examId?.name,
+        examType: result.examId?.type,
+        subjectName: result.subjectId?.name,
+        subjectCode: result.subjectId?.code,
+        marksObtained: result.marksObtained,
+        grade: result.grade,
+        isPassed: result.isPassed,
+        remarks: result.remarks,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load public result', error });
+  }
+});
 
 router.get('/', authenticate, canManageAcademic(), (req, res) => {
   const institutionId = req.user.institutionId;

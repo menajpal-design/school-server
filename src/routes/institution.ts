@@ -16,11 +16,32 @@ router.get('/profile', authenticate, async (req, res) => {
 
 router.put('/profile', authenticate, async (req, res) => {
   try {
-    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'logo', 'seal', 'headSignature'];
+    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'domains', 'logo', 'seal', 'headSignature'];
     const update = allowed.reduce((acc: any, key) => {
       if (req.body[key] !== undefined) acc[key] = req.body[key];
       return acc;
     }, {});
+    if (Array.isArray(update.domains)) {
+      update.domains = update.domains.map((domain: string) => String(domain).trim().toLowerCase()).filter(Boolean);
+    }
+    if (req.body.settings) {
+      const current = await Institution.findById(req.user.institutionId).select('settings');
+      const currentSettings = (current as any)?.settings;
+      update.settings = {
+        ...(typeof currentSettings?.toObject === 'function' ? currentSettings.toObject() : currentSettings || {}),
+        ...req.body.settings,
+      };
+      if (Array.isArray(req.body.settings.academicYears)) {
+        update.settings.academicYears = req.body.settings.academicYears
+          .map((item: any) => ({
+            year: String(item.year || '').trim(),
+            mongodbUri: item.mongodbUri,
+            imgbbApiKey: item.imgbbApiKey,
+            isActive: item.isActive === true,
+          }))
+          .filter((item: any) => item.year);
+      }
+    }
 
     const institution = await Institution.findOneAndUpdate(
       { _id: req.user.institutionId },

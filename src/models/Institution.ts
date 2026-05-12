@@ -8,6 +8,7 @@ export interface IInstitution extends Document {
   phone: string;
   email: string;
   website?: string;
+  domains?: string[];
   logo?: string;
   seal?: string;
   headSignature?: string;
@@ -15,6 +16,17 @@ export interface IInstitution extends Document {
   settings: {
     mongodbUri?: string;
     imgbbApiKey?: string;
+    smsEnabled?: boolean;
+    smsProvider?: string;
+    smsApiUrl?: string;
+    smsApiKey?: string;
+    activeAcademicYear?: string;
+    academicYears?: {
+      year: string;
+      mongodbUri?: string;
+      imgbbApiKey?: string;
+      isActive?: boolean;
+    }[];
     backupSettings: {
       frequency: 'daily' | 'weekly' | 'monthly';
       location: string;
@@ -34,6 +46,7 @@ const InstitutionSchema: Schema = new Schema({
   phone: { type: String, required: true, trim: true },
   email: { type: String, required: true, lowercase: true, trim: true },
   website: { type: String, trim: true },
+  domains: [{ type: String, lowercase: true, trim: true }],
   logo: { type: String },
   seal: { type: String },
   headSignature: { type: String },
@@ -41,6 +54,17 @@ const InstitutionSchema: Schema = new Schema({
   settings: {
     mongodbUri: { type: String },
     imgbbApiKey: { type: String },
+    smsEnabled: { type: Boolean, default: true },
+    smsProvider: { type: String, default: 'anoncify' },
+    smsApiUrl: { type: String },
+    smsApiKey: { type: String },
+    activeAcademicYear: { type: String },
+    academicYears: [{
+      year: { type: String, trim: true },
+      mongodbUri: { type: String },
+      imgbbApiKey: { type: String },
+      isActive: { type: Boolean, default: false },
+    }],
     backupSettings: {
       frequency: { type: String, enum: ['daily', 'weekly', 'monthly'], default: 'weekly' },
       location: { type: String, default: 'local' },
