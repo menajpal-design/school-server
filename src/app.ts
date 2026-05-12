@@ -45,6 +45,10 @@ const parseAllowedOrigins = (): string[] => {
     // Current production client
     'https://school-client-447e7d0e2388.herokuapp.com',
     'https://www.school-client-447e7d0e2388.herokuapp.com',
+    'http://easyschool.live',
+    'http://www.easyschool.live',
+    'https://easyschool.live',
+    'https://www.easyschool.live',
   ];
 
   // Add configured app URLs
@@ -66,6 +70,10 @@ const parseAllowedOrigins = (): string[] => {
     'https://www.school-client.herokuapp.com',
     'https://school-server-b264c1a1fac6.herokuapp.com',
     'https://school-server.herokuapp.com',
+    'http://easyschool.live',
+    'http://www.easyschool.live',
+    'https://easyschool.live',
+    'https://www.easyschool.live',
   ];
   baseOrigins.push(...herokuOrigins);
 
@@ -82,7 +90,8 @@ const allowedOrigins = parseAllowedOrigins();
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     const isHerokuApp = !!origin && /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin);
-    if (!origin || allowedOrigins.includes(origin) || isHerokuApp) {
+    const isEasySchool = !!origin && /^https?:\/\/(www\.)?easyschool\.live$/i.test(origin);
+    if (!origin || allowedOrigins.includes(origin) || isHerokuApp || isEasySchool) {
       callback(null, true);
       return;
     }
