@@ -43,6 +43,27 @@ jobs:
     
     - name: Build Debug APK
       run: cd android && ./gradlew assembleDebug
+
+    - name: Setup signing keystore (if provided)
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        set -e
+        if [ -n "$KEYSTORE_BASE64" ]; then
+          echo "Decoding keystore and writing key.properties"
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/my-release-key.jks
+          cat > android/key.properties <<EOF
+storePassword=$KEYSTORE_PASSWORD
+keyPassword=$KEY_PASSWORD
+keyAlias=$KEY_ALIAS
+storeFile=app/my-release-key.jks
+EOF
+        else
+          echo "No KEYSTORE_BASE64 provided; skipping keystore setup"
+        fi
     
     - name: Build Release APK
       run: cd android && ./gradlew assembleRelease
