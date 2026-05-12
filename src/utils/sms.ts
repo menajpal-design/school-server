@@ -1,7 +1,7 @@
 /**
  * SMS Service Utility
- * Currently disabled (SMS_ENABLED=false in .env)
- * To enable: Set SMS_ENABLED=true and configure SMS provider (Twilio, AWS SNS, etc.)
+ * Uses the configured provider when SMS_ENABLED=true.
+ * Default provider: Anoncify SMS gateway.
  */
 
 interface SMSOptions {
@@ -9,34 +9,57 @@ interface SMSOptions {
   message: string;
 }
 
+const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
+const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
+const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '';
+
+const isFailureResponse = (text: string): boolean => /error|fail|invalid/i.test(text);
+
+const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
+  if (!SMS_API_KEY) {
+    console.error('❌ SMS_API_KEY is required for Anoncify SMS delivery');
+    return false;
+  }
+
+  const recipients = Array.isArray(options.to) ? options.to : [options.to];
+
+  try {
+    for (const phoneNumber of recipients) {
+      const url = new URL(SMS_API_URL);
+      url.searchParams.set('key', SMS_API_KEY);
+      url.searchParams.set('number', phoneNumber);
+      url.searchParams.set('msg', options.message);
+
+      const response = await fetch(url.toString(), { method: 'GET' });
+      const responseText = await response.text();
+      if (!response.ok || isFailureResponse(responseText)) {
+        console.error(`❌ SMS send failed for ${phoneNumber}: ${response.status} ${responseText}`);
+        return false;
+      }
+    }
+
+    console.log(`✅ SMS sent to ${recipients.join(', ')}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error sending SMS via Anoncify:', error);
+    return false;
+  }
+};
+
 export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
   const smsEnabled = process.env.SMS_ENABLED === 'true';
 
   if (!smsEnabled) {
-    // SMS service is disabled. Configure SMS_ENABLED=true to enable.
-    return true; // Return true to prevent errors
-  }
-
-  try {
-    // TODO: Implement SMS sending with Twilio or other provider
-    // const client = twilio(process.env.SMS_ACCOUNT_SID, process.env.SMS_AUTH_TOKEN);
-    // const recipients = Array.isArray(options.to) ? options.to : [options.to];
-    // await Promise.all(
-    //   recipients.map((number) =>
-    //     client.messages.create({
-    //       body: options.message,
-    //       from: process.env.SMS_PHONE_NUMBER,
-    //       to: number,
-    //     })
-    //   )
-    // );
-
-    console.log(`✅ SMS sent to ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`);
+    console.log(`📱 SMS service is disabled. Would send SMS to ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`);
     return true;
-  } catch (error) {
-    console.error('❌ Error sending SMS:', error);
-    return false;
   }
+
+  if (SMS_PROVIDER === 'anoncify') {
+    return sendViaAnoncify(options);
+  }
+
+  console.error(`❌ Unsupported SMS provider: ${SMS_PROVIDER}`);
+  return false;
 };
 
 export const sendBulkSMS = async (recipients: string[], message: string): Promise<boolean> => {
@@ -48,7 +71,6 @@ export const sendBulkSMS = async (recipients: string[], message: string): Promis
   }
 
   try {
-    // Send SMS in batches
     const batchSize = 10;
     for (let i = 0; i < recipients.length; i += batchSize) {
       const batch = recipients.slice(i, i + batchSize);
@@ -77,7 +99,7 @@ export const sendAttendanceReminderSMS = async (phoneNumber: string, studentName
     return true;
   }
 
-  const message = `Dear Parent, This is a reminder that ${studentName} has been marked absent today. Please contact the school if this is an error.`;
+  const message = `Dear Parent, ${studentName} was marked absent today. Please contact the school if this is an error.`;
   return sendSMS({ to: phoneNumber, message });
 };
 
@@ -89,7 +111,7 @@ export const sendFeeDueSMS = async (phoneNumber: string, studentName: string, du
     return true;
   }
 
-  const message = `Dear Parent, Fee of ${dueAmount} is due for ${studentName}. Please pay within 7 days. Contact school for payment options.`;
+  const message = `Dear Parent, fee of ${dueAmount} is due for ${studentName}. Please pay within 7 days.`;
   return sendSMS({ to: phoneNumber, message });
 };
 
@@ -101,7 +123,6 @@ export const sendNotificationSMS = async (phoneNumber: string, message: string):
     return true;
   }
 
-  // Limit message to SMS character limit (160)
   const truncatedMessage = message.substring(0, 160);
   return sendSMS({ to: phoneNumber, message: truncatedMessage });
 };
