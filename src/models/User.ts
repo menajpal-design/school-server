@@ -5,7 +5,7 @@ export interface IUser extends Document {
   username?: string;
   email: string;
   password: string;
-  role: 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'finance_officer' | 'staff' | 'student' | 'parent' | 'committee_member';
+  role: 'admin' | 'super_admin' | 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'teacher' | 'finance_officer' | 'staff' | 'student' | 'parent' | 'committee_member';
   phone?: string;
   avatar?: string;
   isActive: boolean;
@@ -23,7 +23,7 @@ const UserSchema: Schema = new Schema({
   password: { type: String, required: true },
   role: {
     type: String,
-    enum: ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+    enum: ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
     required: true
   },
   phone: { type: String, trim: true },

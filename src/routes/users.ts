@@ -4,28 +4,35 @@ import { authenticate, authorize } from '../middleware/auth';
 import User from '../models/User';
 
 const router = express.Router();
+const platformAdminRoles = ['admin', 'super_admin'];
+const validRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+const schoolManagedRoles = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+
+const isPlatformAdmin = (role?: string) => platformAdminRoles.includes(role || '');
+
+const scopedUserQuery = (req: any) => isPlatformAdmin(req.user?.role) ? {} : { institutionId: req.user.institutionId };
 
 router.use(authenticate);
-router.use(authorize('head'));
+router.use(authorize('head', 'admin', 'super_admin'));
 
 router.get('/', (req, res) => {
-  User.find({ institutionId: req.user.institutionId })
-    .select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt')
+  User.find(scopedUserQuery(req))
+    .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
     .catch((error) => res.status(500).json({ message: 'Failed to load users', error }));
 });
 
 router.get('/all', (req, res) => {
-  User.find({ institutionId: req.user.institutionId })
-    .select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt')
+  User.find(scopedUserQuery(req))
+    .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
     .catch((error) => res.status(500).json({ message: 'Failed to load users', error }));
 });
 
 router.get('/permissions', (req, res) => {
-  User.find({ institutionId: req.user.institutionId })
+  User.find(scopedUserQuery(req))
     .select('role permissions')
     .then((users) => {
       const roles = [...new Set(users.map((user) => user.role))];
@@ -41,7 +48,7 @@ router.get('/permissions', (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, institutionId: req.user.institutionId },
+      { _id: req.params.id, ...scopedUserQuery(req) },
       { isActive: req.body.isActive },
       { new: true }
     ).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt');
@@ -54,9 +61,16 @@ router.patch('/:id/status', async (req, res) => {
 
 router.patch('/:id/role', async (req, res) => {
   try {
+    const nextRole = String(req.body.role || '');
+    if (!validRoles.includes(nextRole)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+    if (!isPlatformAdmin(req.user.role) && !schoolManagedRoles.includes(nextRole)) {
+      return res.status(403).json({ message: 'Head can assign only institution roles below Head' });
+    }
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, institutionId: req.user.institutionId },
-      { role: req.body.role },
+      { _id: req.params.id, ...scopedUserQuery(req), ...(isPlatformAdmin(req.user.role) ? {} : { role: { $nin: platformAdminRoles.concat('head') } }) },
+      { role: nextRole },
       { new: true }
     ).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt');
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -69,7 +83,7 @@ router.patch('/:id/role', async (req, res) => {
 router.post('/:id/reset-password', async (req, res) => {
   try {
     const password = String(req.body.password || 'User@123');
-    const user = await User.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    const user = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req) });
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.password = await bcrypt.hash(password, 10);
     await user.save();
@@ -81,11 +95,11 @@ router.post('/:id/reset-password', async (req, res) => {
 
 router.put('/permissions', async (req, res) => {
   try {
-    if (req.user.role !== 'head') return res.status(403).json({ message: 'Only Head can update permissions' });
+    if (!['head', 'admin', 'super_admin'].includes(req.user.role)) return res.status(403).json({ message: 'Only Head or Admin can update permissions' });
     const matrix = req.body.matrix || {};
     await Promise.all(Object.entries(matrix).map(([role, permissions]) =>
       User.updateMany(
-        { institutionId: req.user.institutionId, role },
+        { ...scopedUserQuery(req), role },
         { permissions: Array.isArray(permissions) ? permissions : [] }
       )
     ));
