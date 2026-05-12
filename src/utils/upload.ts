@@ -6,7 +6,15 @@
 import fs from 'fs';
 import path from 'path';
 
-const IMGBB_API_KEY = process.env.IMGBB_API_KEY;
+const parseKeyList = (value?: string | null): string[] => {
+  if (!value) return [];
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const IMGBB_API_KEYS = parseKeyList(process.env.IMGBB_API_KEYS || process.env.IMGBB_API_KEY);
 const MAX_FILE_SIZE = (parseInt(process.env.UPLOAD_MAX_SIZE_MB || '5') || 5) * 1024 * 1024; // Convert MB to bytes
 const ALLOWED_TYPES = (process.env.UPLOAD_ALLOWED_TYPES || 'image/jpeg,image/png,application/pdf').split(',');
 
@@ -50,10 +58,10 @@ export const validateFile = (
  */
 export const uploadToImgBB = async (filePath: string): Promise<UploadResponse> => {
   try {
-    if (!IMGBB_API_KEY) {
+    if (IMGBB_API_KEYS.length === 0) {
       return {
         success: false,
-        error: 'IMGBB_API_KEY is not configured',
+        error: 'IMGBB_API_KEY or IMGBB_API_KEYS is not configured',
       };
     }
 
@@ -62,31 +70,37 @@ export const uploadToImgBB = async (filePath: string): Promise<UploadResponse> =
     const base64String = fileBuffer.toString('base64');
     const filename = path.basename(filePath);
 
-    const body = new URLSearchParams({
-      key: IMGBB_API_KEY,
-      image: base64String,
-    });
+    for (const apiKey of IMGBB_API_KEYS) {
+      try {
+        const body = new URLSearchParams({
+          key: apiKey,
+          image: base64String,
+        });
 
-    const response = await fetch('https://api.imgbb.com/1/upload', {
-      method: 'POST',
-      body,
-      signal: AbortSignal.timeout(30000),
-    });
-    const data = await response.json() as any;
+        const response = await fetch('https://api.imgbb.com/1/upload', {
+          method: 'POST',
+          body,
+          signal: AbortSignal.timeout(30000),
+        });
+        const data = await response.json() as any;
 
-    if (data.success) {
-      return {
-        success: true,
-        url: data.data.url,
-        filename: data.data.display_url.split('/').pop(),
-        size: fileBuffer.length,
-      };
-    } else {
-      return {
-        success: false,
-        error: data.error?.message || 'Upload failed',
-      };
+        if (data.success) {
+          return {
+            success: true,
+            url: data.data.url,
+            filename: data.data.display_url.split('/').pop(),
+            size: fileBuffer.length,
+          };
+        }
+      } catch (error) {
+        continue;
+      }
     }
+
+    return {
+      success: false,
+      error: 'All ImgBB API keys failed',
+    };
   } catch (error) {
     return {
       success: false,
