@@ -33,6 +33,7 @@ export interface IInstitution extends Document {
     receivedBy?: mongoose.Types.ObjectId;
     paymentGateway?: string;
     paymentTrxId?: string;
+    paymentSenderNumber?: string;
     activatedAt?: Date;
   };
   settings: {
@@ -93,6 +94,7 @@ const InstitutionSchema: Schema = new Schema({
     receivedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     paymentGateway: { type: String },
     paymentTrxId: { type: String },
+    paymentSenderNumber: { type: String },
     activatedAt: { type: Date },
   },
   settings: {

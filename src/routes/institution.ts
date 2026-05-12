@@ -33,6 +33,7 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     receivedAmount,
     paymentGateway: input.paymentGateway ?? current.paymentGateway,
     paymentTrxId: input.paymentTrxId ?? current.paymentTrxId,
+    paymentSenderNumber: input.paymentSenderNumber ?? current.paymentSenderNumber,
     receivedAt: isPaymentReceived ? input.receivedAt || current.receivedAt || new Date() : current.receivedAt,
   };
 };

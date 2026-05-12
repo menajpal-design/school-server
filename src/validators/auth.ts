@@ -11,6 +11,10 @@ export const registerSchema = Joi.object({
   institutionId: Joi.string().hex().length(24).allow('', null),
   institutionName: Joi.string().min(2).allow('', null),
   planCode: Joi.string().valid('students_100', 'students_200', 'students_300', 'students_500', 'students_1000').allow('', null),
+  paymentGateway: Joi.string().allow('', null),
+  paymentTrxId: Joi.string().allow('', null),
+  paymentSenderNumber: Joi.string().allow('', null),
+  receivedAmount: Joi.number().allow('', null),
 }).or('name', 'firstName');
 
 export const loginSchema = Joi.object({
