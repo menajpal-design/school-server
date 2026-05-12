@@ -8,13 +8,55 @@ import Section from '../models/Section';
 import IDCard from '../models/IDCard';
 import Parent from '../models/Parent';
 import Fee from '../models/Fee';
+import Teacher from '../models/Teacher';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
 import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
-router.get('/', authenticate, (req, res) => {
-  Student.find({ institutionId: req.user.institutionId })
+const studentQueryForUser = async (req: any) => {
+  const query: any = { institutionId: req.user.institutionId };
+
+  if (req.user.role === 'student') {
+    query.userId = req.user._id;
+    return query;
+  }
+
+  if (req.user.role === 'parent') {
+    const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+    query._id = { $in: parent?.children || [] };
+    return query;
+  }
+
+  if (req.user.role === 'class_teacher') {
+    const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+    query.classId = { $in: teacher?.assignedClasses || [] };
+  }
+
+  return query;
+};
+
+const calculateFee = (body: any) => {
+  const originalAmount = Number(body.feeAmount || body.feeSetup?.amount || 0);
+  const waiverType = body.feeWaiverType || body.feeSetup?.waiverType || 'none';
+  const explicitWaiver = Number(body.feeWaiverAmount || body.feeSetup?.waiverAmount || 0);
+  const waiverAmount = waiverType === 'free'
+    ? originalAmount
+    : waiverType === 'half'
+      ? originalAmount / 2
+      : waiverType === 'partial'
+        ? explicitWaiver
+        : Number(body.scholarship || body.discount || 0);
+  return {
+    originalAmount,
+    waiverType,
+    waiverAmount: Math.min(originalAmount, Math.max(0, waiverAmount)),
+    amount: Math.max(0, originalAmount - Math.min(originalAmount, Math.max(0, waiverAmount))),
+  };
+};
+
+router.get('/', authenticate, async (req, res) => {
+  Student.find(await studentQueryForUser(req))
     .populate('userId', 'name email phone avatar')
     .populate('classId', 'name grade')
     .populate('sectionId', 'name')
@@ -24,8 +66,8 @@ router.get('/', authenticate, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load students', error }));
 });
 
-router.get('/:id', authenticate, (req, res) => {
-  Student.findOne({ _id: req.params.id, institutionId: req.user.institutionId })
+router.get('/:id', authenticate, async (req, res) => {
+  Student.findOne({ _id: req.params.id, ...(await studentQueryForUser(req)) })
     .populate('userId', 'name email phone avatar')
     .populate('classId', 'name grade')
     .populate('sectionId', 'name')
@@ -98,6 +140,7 @@ router.post('/', authenticate, async (req, res) => {
   try {
     const allowed = ['head', 'assistant_head', 'class_teacher', 'subject_teacher'];
     if (!allowed.includes(req.user.role)) return res.status(403).json({ message: 'Only teachers or school leadership can add students' });
+    if (!String(req.body.guardianPhone || '').trim()) return res.status(400).json({ message: 'Parent/guardian phone is required' });
     const email = String(req.body.email || `${String(req.body.rollNumber || Date.now()).toLowerCase()}@student.local`);
     const existing = await User.findOne({ email });
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
@@ -166,10 +209,15 @@ router.post('/', authenticate, async (req, res) => {
       );
     }
     if (req.body.feeSetup || req.body.feeAmount) {
+      const fee = calculateFee(req.body);
       await Fee.create({
         studentId: student._id,
         classId,
-        amount: Number(req.body.feeAmount || req.body.feeSetup?.amount || 0),
+        amount: fee.amount,
+        originalAmount: fee.originalAmount,
+        waiverType: fee.waiverType,
+        waiverAmount: fee.waiverAmount,
+        waiverReason: req.body.feeWaiverReason || req.body.feeSetup?.waiverReason,
         type: req.body.feeType || req.body.feeSetup?.type || 'monthly',
         month: req.body.feeMonth || req.body.feeSetup?.month || new Date().toLocaleString('en-US', { month: 'long' }),
         year: Number(req.body.feeYear || req.body.feeSetup?.year || new Date().getFullYear()),
@@ -181,8 +229,8 @@ router.post('/', authenticate, async (req, res) => {
     let idCard = null;
     if (req.body.autoIdCard !== false) idCard = await createIdCard(student._id, 'student', req, req.body.photo);
     await sendSMS({
-      to: req.body.phone || req.body.guardianPhone,
-      message: `Student account for ${req.body.name}: username ${username}, password ${temporaryPassword}`,
+      to: req.body.guardianPhone,
+      message: `Admission completed for ${req.body.name}. Student login: username ${username}, password ${temporaryPassword}. Parent login: username ${parent?.username || parentEmail}, password ${parent ? parentPassword : 'existing password'}.`,
     });
 
     res.status(201).json({ student, user, parent, idCard, credentials: { username, password: temporaryPassword, parentPassword: parent ? parentPassword : undefined } });
@@ -193,7 +241,7 @@ router.post('/', authenticate, async (req, res) => {
 
 router.put('/:id', authenticate, async (req, res) => {
   try {
-    const student = await Student.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    const student = await Student.findOne({ _id: req.params.id, ...(await studentQueryForUser(req)) });
     if (!student) return res.status(404).json({ message: 'Student not found' });
     const { classId, sectionId } = req.body.className || req.body.sectionName ? await ensureClassAndSection(req) : { classId: req.body.classId || student.classId, sectionId: req.body.sectionId || student.sectionId };
     await User.findByIdAndUpdate(student.userId, {

@@ -15,6 +15,27 @@ const router = express.Router();
 
 const receiptNumber = () => `RCPT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+const calculateFeeAmount = (body: any) => {
+  const originalAmount = Number(body.originalAmount ?? body.baseAmount ?? body.amount ?? 0);
+  const waiverType = body.waiverType || 'none';
+  const requestedWaiver = Number(body.waiverAmount || body.scholarship || body.discount || 0);
+  const waiverAmount = waiverType === 'free'
+    ? originalAmount
+    : waiverType === 'half'
+      ? originalAmount / 2
+      : waiverType === 'partial'
+        ? requestedWaiver
+        : requestedWaiver;
+
+  const cappedWaiver = Math.min(originalAmount, Math.max(0, waiverAmount));
+  return {
+    originalAmount,
+    waiverType,
+    waiverAmount: cappedWaiver,
+    amount: Math.max(0, originalAmount - cappedWaiver),
+  };
+};
+
 const monthRange = (month?: string, year?: number) => {
   const monthIndex = month ? new Date(`${month} 1, ${year || new Date().getFullYear()}`).getMonth() : new Date().getMonth();
   const y = year || new Date().getFullYear();
@@ -90,9 +111,10 @@ router.get('/fees', authenticate, canManageFinance(), (req, res) => {
 
 router.post('/fees', authenticate, canManageFinance(), async (req, res) => {
   try {
+    const calculated = calculateFeeAmount(req.body);
     const fee = await Fee.create({
       ...req.body,
-      amount: Math.max(0, Number(req.body.amount || 0) - Number(req.body.scholarship || 0) - Number(req.body.discount || 0)),
+      ...calculated,
       collectedBy: req.user._id,
       institutionId: req.user.institutionId,
     });
@@ -117,9 +139,10 @@ router.get('/fees/:id', authenticate, canManageFinance(), (req, res) => {
 
 router.put('/fees/:id', authenticate, canManageFinance(), async (req, res) => {
   try {
+    const calculated = calculateFeeAmount(req.body);
     const fee = await Fee.findOneAndUpdate(
       { _id: req.params.id, institutionId: req.user.institutionId },
-      { ...req.body, amount: Math.max(0, Number(req.body.amount || 0) - Number(req.body.scholarship || 0) - Number(req.body.discount || 0)) },
+      { ...req.body, ...calculated },
       { new: true }
     );
     if (!fee) return res.status(404).json({ message: 'Fee not found' });
