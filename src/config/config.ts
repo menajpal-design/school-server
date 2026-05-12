@@ -141,8 +141,8 @@ export const validateConfig = (config: Config): void => {
     if (!config.smtpHost || !config.smtpPort) {
       warnings.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
     }
-    if (!config.emailUser || !config.emailPass) {
-      warnings.push('EMAIL_USER and EMAIL_PASS are required when EMAIL_ENABLED is true');
+    if (!(config.smtpUser || config.emailUser) || !(config.smtpPass || config.emailPass)) {
+      warnings.push('SMTP_USER/SMTP_PASS are required when EMAIL_ENABLED is true');
     }
   }
 

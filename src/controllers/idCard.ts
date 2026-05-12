@@ -5,7 +5,7 @@ import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
-import nodemailer from 'nodemailer';
+import { sendEmail } from '../utils/email';
 import { Types } from 'mongoose';
 import moment from 'moment';
 
@@ -284,9 +284,14 @@ export const emailIdCard = async (req: Request, res: Response) => {
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', async () => {
       const pdfBuffer = Buffer.concat(chunks);
-      // send email via nodemailer (simple transport using env)
-      const transporter = nodemailer.createTransport({ sendmail: true });
-      await transporter.sendMail({ from: process.env.EMAIL_FROM || 'noreply@drms.local', to, subject: `ID Card ${card.cardNumber}`, text: 'Attached ID card', attachments: [{ filename: `${card.cardNumber}.pdf`, content: pdfBuffer }] });
+      const sent = await sendEmail({
+        to,
+        subject: `ID Card ${card.cardNumber}`,
+        text: 'Attached ID card',
+        html: '<p>Attached ID card.</p>',
+        attachments: [{ filename: `${card.cardNumber}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }],
+      });
+      if (!sent) return res.status(502).json({ message: 'Email delivery failed' });
       res.json({ message: 'Email sent' });
     });
     doc.rect(0, 0, 255.12, 158.74).fill('#fff');
