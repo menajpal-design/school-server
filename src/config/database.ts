@@ -5,7 +5,8 @@ const connectDB = async () => {
     const mongoUri = process.env.MONGO_URI as string;
     
     if (!mongoUri) {
-      throw new Error('MONGO_URI environment variable is not set');
+      console.warn('MONGO_URI not set; database features disabled');
+      return null;
     }
 
     const options: mongoose.ConnectOptions = {
@@ -29,7 +30,8 @@ const connectDB = async () => {
     return conn;
   } catch (error) {
     console.error('❌ MongoDB Connection Error:', error);
-    process.exit(1);
+    console.error('Server will continue running without MongoDB connection');
+    return null;
   }
 };
 

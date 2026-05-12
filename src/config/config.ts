@@ -149,10 +149,6 @@ export const validateConfig = (config: Config): void => {
     console.error('❌ Configuration Errors:');
     errors.forEach((error) => console.error(`   - ${error}`));
 
-    // Only exit if in production
-    if (config.nodeEnv === 'production') {
-      process.exit(1);
-    }
   }
 };
 

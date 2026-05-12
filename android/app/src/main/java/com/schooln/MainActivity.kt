@@ -56,10 +56,23 @@ fun SchoolApp(
     val context = LocalContext.current
     val navController = rememberNavController()
     var currentRoute by remember { mutableStateOf(NavItem.Dashboard.route) }
+    var isAuthenticated by remember {
+        mutableStateOf(
+            context.getSharedPreferences(Config.PREFERENCE_NAME, android.content.Context.MODE_PRIVATE)
+                .getString(Config.TOKEN_KEY, "")
+                .orEmpty()
+                .isNotBlank()
+        )
+    }
     val isCompactScreen = LocalConfiguration.current.screenWidthDp < 600
 
     LaunchedEffect(Unit) {
         bootstrapServerUrl(context)
+    }
+
+    if (!isAuthenticated) {
+        AuthScreen(onAuthSuccess = { isAuthenticated = true })
+        return
     }
     
     ResponsiveNavigation(

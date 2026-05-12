@@ -2,6 +2,7 @@ package com.schooln.network.api
 
 import retrofit2.Response
 import retrofit2.http.*
+import com.google.gson.JsonElement
 
 /**
  * Data Classes for API Communication
@@ -14,8 +15,11 @@ data class LoginRequest(
 )
 
 data class LoginResponse(
-    val success: Boolean,
-    val data: LoginData?
+    val success: Boolean? = null,
+    val message: String? = null,
+    val token: String? = null,
+    val user: UserData? = null,
+    val data: LoginData? = null
 )
 
 data class LoginData(
@@ -26,10 +30,12 @@ data class LoginData(
 data class UserData(
     val id: String,
     val email: String,
-    val firstName: String,
-    val lastName: String,
+    val name: String? = null,
+    val firstName: String? = null,
+    val lastName: String? = null,
     val role: String,
-    val institution: String
+    val phone: String? = null,
+    val institution: JsonElement? = null
 )
 
 data class ApiResponse<T>(
@@ -57,10 +63,11 @@ interface AuthApi {
 }
 
 data class RegisterRequest(
+    val name: String,
+    val institutionName: String,
     val email: String,
     val password: String,
-    val firstName: String,
-    val lastName: String,
+    val phone: String = "",
     val role: String = "student"
 )
 
