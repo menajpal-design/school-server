@@ -42,6 +42,10 @@ const allowedOrigins = [
   'https://www.school-client-447e7d0e2388.herokuapp.com',
   'https://school-client.herokuapp.com',
   'https://www.school-client.herokuapp.com',
+  'http://easyschool.live',
+  'http://www.easyschool.live',
+  'https://easyschool.live',
+  'https://www.easyschool.live',
   ...(process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
@@ -50,6 +54,7 @@ const allowedOrigins = [
 
 const isAllowedOrigin = (origin: string): boolean => (
   allowedOrigins.includes(origin) ||
+  /^https?:\/\/(www\.)?easyschool\.live$/i.test(origin) ||
   /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin)
 );
 
