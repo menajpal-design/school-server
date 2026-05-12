@@ -20,7 +20,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).populate('institutionId');
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
@@ -32,6 +32,18 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       if (institution) {
         user.institutionId = institution._id as any;
       }
+    }
+
+    const institution = user.institutionId as any;
+    const platformAdmin = platformAdminRoles.includes(user.role);
+    const schoolActive = institution?.isActive !== false;
+    const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
+    if (!platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
+      const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
+      return res.status(403).json({ message });
+    }
+    if (institution?._id) {
+      user.institutionId = institution._id as any;
     }
 
     req.user = user;

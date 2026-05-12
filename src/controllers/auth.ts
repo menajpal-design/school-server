@@ -33,6 +33,8 @@ const serializeInstitution = (institution: any) => {
     address: institution.address,
     phone: institution.phone,
     email: institution.email,
+    isActive: institution.isActive,
+    billing: institution.billing,
   };
 };
 

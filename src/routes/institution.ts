@@ -1,7 +1,7 @@
 import express from 'express';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
-import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, getPlanByCode, SCHOOL_PLANS } from '../config/plans';
+import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
 
 const router = express.Router();
 
@@ -64,7 +64,7 @@ router.get('/profile', authenticate, async (req, res) => {
 
 router.put('/profile', authenticate, async (req, res) => {
   try {
-    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'domains', 'logo', 'seal', 'headSignature', 'isActive'];
+    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'domains', 'logo', 'seal', 'headSignature'];
     const update = allowed.reduce((acc: any, key) => {
       if (req.body[key] !== undefined) acc[key] = req.body[key];
       return acc;
@@ -94,10 +94,7 @@ router.put('/profile', authenticate, async (req, res) => {
       const current = await Institution.findById(req.user.institutionId).select('billing');
       const currentBilling = (current as any)?.billing;
       update.billing = buildBilling(req.body.billing, typeof currentBilling?.toObject === 'function' ? currentBilling.toObject() : currentBilling || {});
-      if (update.billing.billingStatus === 'active') {
-        update.billing.activatedAt = update.billing.activatedAt || new Date();
-        update.isActive = true;
-      }
+      update.billing.billingStatus = (currentBilling as any)?.billingStatus || 'pending';
     }
 
     const institution = await Institution.findOneAndUpdate(
@@ -122,17 +119,18 @@ router.post('/billing/payment', authenticate, async (req, res) => {
       {
         ...req.body,
         isPaymentReceived: true,
+        billingStatus: 'pending',
         receivedAt: new Date(),
       },
       (institution as any).billing?.toObject?.() || (institution as any).billing || {}
     );
     billing.receivedBy = req.user._id;
+    billing.billingStatus = 'pending';
 
     institution.billing = billing as any;
-    institution.isActive = billing.billingStatus === 'active';
     await institution.save();
 
-    res.json({ institution, message: institution.isActive ? 'Payment received and school activated' : 'Payment received' });
+    res.json({ institution, message: 'Payment submitted. Admin will verify and activate the school.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save payment', error });
   }
