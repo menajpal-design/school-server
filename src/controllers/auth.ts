@@ -1,12 +1,30 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import User from '../models/User';
 import Institution from '../models/Institution';
 
+const normalizeRole = (role: string) => role === 'teacher' ? 'subject_teacher' : role;
+const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
+
+const buildAuthPayload = (message: string, token: string, user: any) => ({
+  success: true,
+  message,
+  token,
+  user,
+  data: {
+    token,
+    user,
+  },
+});
+
 export const register = async (req: Request, res: Response) => {
   try {
-    const { name, email, password, role, phone, institutionId } = req.body;
+    const { email, password, phone } = req.body;
+    const name = (req.body.name || `${req.body.firstName || ''} ${req.body.lastName || ''}`).trim();
+    const role = normalizeRole(req.body.role);
+    let institutionId = req.body.institutionId;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -17,9 +35,30 @@ export const register = async (req: Request, res: Response) => {
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const userId = new mongoose.Types.ObjectId();
+
+    if (!institutionId) {
+      const institution = await Institution.create({
+        name: req.body.institutionName || `${name}'s Institution`,
+        type: 'school',
+        address: 'Not provided',
+        phone: phone || 'Not provided',
+        email,
+        headId: userId,
+        settings: {
+          backupSettings: {
+            frequency: 'weekly',
+            location: 'local',
+            collections: [],
+          },
+        },
+      });
+      institutionId = institution._id;
+    }
 
     // Create user
     const user = new User({
+      _id: userId,
       name,
       email,
       password: hashedPassword,
@@ -29,22 +68,26 @@ export const register = async (req: Request, res: Response) => {
     });
 
     await user.save();
+    const populatedUser = await User.findById(user._id).populate('institutionId');
 
     // Generate token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
+    const token = jwt.sign({ id: user._id }, jwtSecret(), {
       expiresIn: '7d'
     });
 
-    res.status(201).json({
-      message: 'User registered successfully',
-      token,
-      user: {
+    const responseUser = {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role
-      }
-    });
+        role: user.role,
+        phone: user.phone,
+        isActive: user.isActive,
+        permissions: user.permissions || [],
+        institutionId,
+        institution: populatedUser?.institutionId || institutionId
+    };
+
+    res.status(201).json(buildAuthPayload('User registered successfully', token, responseUser));
   } catch (error) {
     res.status(500).json({ message: 'Server error', error });
   }
@@ -52,18 +95,25 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const identifier = (req.body.email || req.body.identifier || '').trim();
+    const { password } = req.body;
 
     // Validate input
-    if (!email || !password) {
+    if (!identifier || !password) {
       return res.status(400).json({ 
-        message: 'Email and password are required',
-        details: { email: !email ? 'missing' : 'ok', password: !password ? 'missing' : 'ok' }
+        message: 'Email/mobile and password are required',
+        details: { identifier: !identifier ? 'missing' : 'ok', password: !password ? 'missing' : 'ok' }
       });
     }
 
     // Find user
-    const user = await User.findOne({ email }).populate('institutionId');
+    const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
+    const user = await User.findOne({
+      $or: [
+        { email: emailQuery },
+        { phone: identifier },
+      ],
+    }).populate('institutionId');
     if (!user) {
       return res.status(400).json({ message: 'Invalid email or password' });
     }
@@ -79,21 +129,23 @@ export const login = async (req: Request, res: Response) => {
     await user.save();
 
     // Generate token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
+    const token = jwt.sign({ id: user._id }, jwtSecret(), {
       expiresIn: '7d'
     });
 
-    res.json({
-      message: 'Login successful',
-      token,
-      user: {
+    const responseUser = {
         id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
+        phone: user.phone,
+        isActive: user.isActive,
+        permissions: user.permissions || [],
+        institutionId: (user.institutionId as any)?._id || user.institutionId,
         institution: user.institutionId
-      }
-    });
+    };
+
+    res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) {
     res.status(500).json({ message: 'Server error', error });
   }
