@@ -48,7 +48,7 @@ router.post('/monthly-guardian-sms', authenticate, canManageAcademic(), async (r
     }
 
     const summary = await sendMonthlyGuardianSummarySMS({
-      institutionId: req.user.institutionId,
+      institutionId: String(req.user.institutionId),
       month,
       year,
       classId: req.body.classId,

@@ -33,16 +33,8 @@ const getTransporter = () => {
 
   // Option 3: Development fallback (console transport)
   console.warn('⚠️ No SMTP configured. Using test/console transport.');
-  return nodemailer.createTestAccount().then((testAccount: any) => {
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    });
+  return nodemailer.createTransport({
+    jsonTransport: true,
   });
 };
 
@@ -66,7 +58,7 @@ export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log('📧 Email sent:', info.messageId);
+    console.log('📧 Email sent:', (info as any).messageId || 'sent');
     return true;
   } catch (error) {
     console.error('❌ Email send error:', error);

@@ -16,6 +16,10 @@ router.get('/endpoints', (req: Request, res: Response) => {
     data: {
       serverUrl: cfg.staticServerUrl,
       apiBaseUrl: `${cfg.staticServerUrl}/api`,
+      clientUrl: cfg.frontendUrl,
+      mobileUrl: cfg.mobileUrl,
+      androidUrl: cfg.androidUrl,
+      allowedOrigins: cfg.allowedOrigins,
       environment: cfg.nodeEnv,
       timestamp: new Date().toISOString(),
     },
@@ -35,6 +39,8 @@ router.get('/status', (req: Request, res: Response) => {
       status: 'online',
       environment: cfg.nodeEnv,
       serverUrl: cfg.staticServerUrl,
+      clientUrl: cfg.frontendUrl,
+      androidUrl: cfg.androidUrl,
       features: {
         emailEnabled: cfg.emailEnabled,
         smsEnabled: cfg.smsEnabled,

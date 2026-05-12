@@ -23,9 +23,11 @@ import reportRoutes from './routes/reports';
 import backupRoutes from './routes/backup';
 import institutionRoutes from './routes/institution';
 import messageRoutes from './routes/messages';
+import { config } from './config/config';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
+const cfg = config();
 
 // Parse comma-separated allowed origins from environment variable
 const parseAllowedOrigins = (): string[] => {
@@ -39,18 +41,13 @@ const parseAllowedOrigins = (): string[] => {
     'http://127.0.0.1:8081',
     'http://localhost:8082',
     'http://127.0.0.1:8082',
+    // Current production client
+    'https://school-client-447e7d0e2388.herokuapp.com',
+    'https://www.school-client-447e7d0e2388.herokuapp.com',
   ];
 
-  // Add environment variable origins
-  if (process.env.FRONTEND_URL) {
-    baseOrigins.push(process.env.FRONTEND_URL);
-  }
-  if (process.env.MOBILE_URL) {
-    baseOrigins.push(process.env.MOBILE_URL);
-  }
-  if (process.env.ANDROID_URL) {
-    baseOrigins.push(process.env.ANDROID_URL);
-  }
+  // Add configured app URLs
+  baseOrigins.push(cfg.frontendUrl, cfg.mobileUrl, cfg.androidUrl, cfg.staticServerUrl);
 
   // Add comma-separated origins from ALLOWED_ORIGINS env var
   if (process.env.ALLOWED_ORIGINS) {
@@ -76,7 +73,7 @@ const parseAllowedOrigins = (): string[] => {
     baseOrigins.push('*');
   }
 
-  return baseOrigins.filter(Boolean);
+  return [...new Set(baseOrigins.filter(Boolean))];
 };
 
 const allowedOrigins = parseAllowedOrigins();
