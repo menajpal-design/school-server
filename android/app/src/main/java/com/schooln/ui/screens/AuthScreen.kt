@@ -137,7 +137,6 @@ fun AuthScreen(
                                 authApi.register(
                                     RegisterRequest(
                                         name = name.trim(),
-                                        institutionName = institutionName.trim(),
                                         email = email.trim(),
                                         password = password,
                                         phone = phone.trim(),

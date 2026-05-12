@@ -64,11 +64,11 @@ interface AuthApi {
 
 data class RegisterRequest(
     val name: String,
-    val institutionName: String,
     val email: String,
     val password: String,
     val phone: String = "",
-    val role: String = "student"
+    val role: String = "student",
+    val institutionId: String = "6a02bd07535ddb19281c62c9"
 )
 
 /**
