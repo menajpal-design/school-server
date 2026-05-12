@@ -10,7 +10,7 @@ import com.google.gson.JsonElement
 
 // Auth Related
 data class LoginRequest(
-    val email: String,
+    val identifier: String,
     val password: String
 )
 

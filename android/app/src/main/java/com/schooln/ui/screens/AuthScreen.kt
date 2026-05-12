@@ -176,7 +176,7 @@ fun AuthScreen(
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
-                label = { Text("Email") },
+                label = { Text(if (isRegister) "Email" else "Username, email or phone") },
                 leadingIcon = { Icon(Icons.Filled.Mail, contentDescription = null) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 singleLine = true,
@@ -234,7 +234,7 @@ fun AuthScreen(
                                     )
                                 )
                             } else {
-                                authApi.login(LoginRequest(email = email.trim(), password = password))
+                                authApi.login(LoginRequest(identifier = email.trim(), password = password))
                             }
 
                             if (!response.isSuccessful) {

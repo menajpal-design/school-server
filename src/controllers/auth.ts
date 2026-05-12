@@ -19,6 +19,22 @@ const buildAuthPayload = (message: string, token: string, user: any) => ({
   },
 });
 
+const serializeInstitution = (institution: any) => {
+  if (!institution || typeof institution !== 'object') {
+    return institution;
+  }
+
+  return {
+    id: institution._id,
+    name: institution.name,
+    type: institution.type,
+    eiin: institution.eiin,
+    address: institution.address,
+    phone: institution.phone,
+    email: institution.email,
+  };
+};
+
 export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, phone } = req.body;
@@ -86,7 +102,7 @@ export const register = async (req: Request, res: Response) => {
         isActive: user.isActive,
         permissions: user.permissions || [],
         institutionId,
-        institution: populatedUser?.institutionId || institutionId
+        institution: serializeInstitution(populatedUser?.institutionId) || institutionId
     };
 
     res.status(201).json(buildAuthPayload('User registered successfully', token, responseUser));
@@ -146,7 +162,7 @@ export const login = async (req: Request, res: Response) => {
         isActive: user.isActive,
         permissions: user.permissions || [],
         institutionId: (user.institutionId as any)?._id || user.institutionId,
-        institution: user.institutionId
+        institution: serializeInstitution(user.institutionId)
     };
 
     res.json(buildAuthPayload('Login successful', token, responseUser));
@@ -171,7 +187,7 @@ export const getProfile = async (req: Request, res: Response) => {
         phone: user.phone,
         avatar: user.avatar,
         institutionId: (user.institutionId as any)?._id || user.institutionId,
-        institution: user.institutionId,
+        institution: serializeInstitution(user.institutionId),
         permissions: user.permissions
       }
     });
