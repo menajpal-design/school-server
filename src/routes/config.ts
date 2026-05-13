@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config/config';
+import { isDatabaseConnected } from '../config/database';
 
 const router = Router();
 
@@ -41,6 +42,7 @@ router.get('/status', (req: Request, res: Response) => {
       serverUrl: cfg.staticServerUrl,
       clientUrl: cfg.frontendUrl,
       androidUrl: cfg.androidUrl,
+      databaseConnected: isDatabaseConnected(),
       features: {
         emailEnabled: cfg.emailEnabled,
         smsEnabled: cfg.smsEnabled,
