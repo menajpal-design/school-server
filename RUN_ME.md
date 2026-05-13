@@ -1,4 +1,4 @@
-# 🎓 DRMS - School Management System
+# 🎓 easy school - School Management System
 ## Complete Installation & Running Guide
 
 **Status:** ✅ **FULLY FUNCTIONAL AND READY TO RUN**

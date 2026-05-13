@@ -101,7 +101,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 app.listen(PORT, () => {
-  console.log(`DRMS Server running on port ${PORT}`);
+  console.log(`easy school Server running on port ${PORT}`);
 });
 
 export default app;

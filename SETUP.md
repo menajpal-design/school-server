@@ -1,4 +1,4 @@
-# DRMS Setup & Run Guide
+# easy school Setup & Run Guide
 
 ## Prerequisites
 - **Node.js** v20.19.4+ (check: `node --version`)

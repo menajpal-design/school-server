@@ -387,7 +387,7 @@ const seedDatabase = async () => {
 
     // 14. Create Notices
     await Notice.create({
-      title: 'Welcome to DRMS',
+      title: 'Welcome to easy school',
       category: 'general',
       content: 'Welcome to the Demo School Management System. This is a test notice.',
       priority: 'high',
@@ -412,7 +412,7 @@ const seedDatabase = async () => {
     // 15. Create Notifications
     await Notification.create({
       title: 'System Ready',
-      body: 'DRMS system is ready for use',
+      body: 'easy school system is ready for use',
       type: 'system',
       isRead: false,
       recipientId: null,

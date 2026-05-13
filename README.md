@@ -1,10 +1,10 @@
-# DRMS Backend Server
+# easy school Backend Server
 
 Distributed Records Management System - Express.js + MongoDB Backend
 
 ## Overview
 
-The DRMS backend provides a comprehensive REST API for school management including:
+The easy school backend provides a comprehensive REST API for school management including:
 - User authentication and role-based permissions
 - Student, teacher, and staff management
 - Attendance tracking

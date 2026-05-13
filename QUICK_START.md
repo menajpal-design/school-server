@@ -1,4 +1,4 @@
-# DRMS - Quick Start Guide
+# easy school - Quick Start Guide
 
 This is a complete School Management System with Web Client, Mobile App, and Backend Server.
 
