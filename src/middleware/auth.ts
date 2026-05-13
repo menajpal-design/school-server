@@ -10,6 +10,7 @@ interface AuthRequest extends Request {
 
 const platformAdminRoles = ['admin', 'super_admin'];
 
+const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(role || '');
 const isPrivilegedRole = (role?: string) => role === 'head' || platformAdminRoles.includes(role || '');
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -37,7 +38,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     let institution = user.institutionId as any;
     institution = await expireInstitutionIfNeeded(institution);
-    const platformAdmin = platformAdminRoles.includes(user.role);
+    const platformAdmin = isPlatformAdminRole(user.role);
     const schoolActive = institution?.isActive !== false;
     const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
     if (!platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
@@ -60,8 +61,7 @@ export const authorize = (...roles: string[]) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
-    // Head has full access
-    if (isPrivilegedRole(req.user.role)) return next();
+    if (isPlatformAdminRole(req.user.role)) return next();
 
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ message: 'Access denied. Insufficient permissions.' });
