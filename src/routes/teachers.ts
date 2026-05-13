@@ -11,6 +11,11 @@ import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
+const normalizeNameList = (value: any) => {
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,\n]/);
+  return raw.map((item) => String(item).trim()).filter(Boolean);
+};
+
 router.get('/', authenticate, (req, res) => {
   Teacher.find({ institutionId: req.user.institutionId })
     .populate('userId', 'name email phone avatar')
@@ -33,19 +38,43 @@ router.get('/:id', authenticate, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load teacher', error }));
 });
 
-const findClasses = async (names: string[], institutionId: any) => {
+const findOrCreateClasses = async (names: string[], institutionId: any) => {
   const ids = [];
   for (const name of names.filter(Boolean)) {
-    const classItem = await ClassModel.findOne({ name: name.trim(), institutionId });
-    if (classItem) ids.push(classItem._id);
+    const trimmed = name.trim();
+    let classItem = await ClassModel.findOne({ name: trimmed, institutionId });
+    if (!classItem) {
+      classItem = await ClassModel.create({
+        name: trimmed,
+        grade: trimmed.match(/\d+/)?.[0] || trimmed,
+        shift: 'day',
+        academicYear: String(new Date().getFullYear()),
+        isActive: true,
+        institutionId,
+      });
+    }
+    ids.push(classItem._id);
   }
   return ids;
 };
 
-const findSubjects = async (names: string[], institutionId: any) => {
+const findOrCreateSubjects = async (names: string[], institutionId: any, classIds: any[] = []) => {
   const ids = [];
+  const primaryClassId = classIds[0];
   for (const name of names.filter(Boolean)) {
-    const subject = await Subject.findOne({ name: name.trim(), institutionId });
+    const trimmed = name.trim();
+    let subject = await Subject.findOne({ name: trimmed, institutionId });
+    if (!subject && primaryClassId) {
+      subject = await Subject.create({
+        name: trimmed,
+        code: trimmed.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) || `SUB${Date.now().toString().slice(-4)}`,
+        type: 'core',
+        classId: primaryClassId,
+        creditHours: 1,
+        isActive: true,
+        institutionId,
+      });
+    }
     if (subject) ids.push(subject._id);
   }
   return ids;
@@ -97,8 +126,8 @@ router.post('/', authenticate, async (req, res) => {
       employeeId: req.body.employeeId || `T-${Date.now()}`,
       designation: req.body.designation,
       department: req.body.department,
-      subjects: await findSubjects(String(req.body.subjects || '').split(','), req.user.institutionId),
-      assignedClasses: await findClasses(String(req.body.assignedClasses || '').split(','), req.user.institutionId),
+      assignedClasses: await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId),
+      subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId)),
       joiningDate: req.body.joiningDate || new Date(),
       qualification: req.body.qualification || 'Not specified',
       experience: Number(req.body.experience) || 0,
@@ -131,8 +160,8 @@ router.put('/:id', authenticate, async (req, res) => {
     teacher.employeeId = req.body.employeeId || teacher.employeeId;
     teacher.designation = req.body.designation;
     teacher.department = req.body.department;
-    teacher.subjects = await findSubjects(String(req.body.subjects || '').split(','), req.user.institutionId) as any;
-    teacher.assignedClasses = await findClasses(String(req.body.assignedClasses || '').split(','), req.user.institutionId) as any;
+    teacher.assignedClasses = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId) as any;
+    teacher.subjects = await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, teacher.assignedClasses as any) as any;
     teacher.joiningDate = req.body.joiningDate;
     teacher.qualification = req.body.qualification || teacher.qualification;
     teacher.experience = Number(req.body.experience) || 0;

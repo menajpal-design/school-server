@@ -128,6 +128,34 @@ const normalizeSubjectMarks = (items: any[] = []) =>
       passingMarks: Number(item.passingMarks) || 33,
     }));
 
+const normalizeBulkItems = (input: any) => {
+  if (Array.isArray(input)) return input;
+  if (Array.isArray(input?.items)) return input.items;
+  return null;
+};
+
+const defaultSections = () => [{ name: 'A', capacity: 30, currentStudents: 0, isActive: true }];
+
+const deriveGrade = (value: any) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const digit = text.match(/\d+/)?.[0];
+  return digit || text;
+};
+
+const deriveCode = (value: any) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const code = text
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 3))
+    .join('');
+  return code.slice(0, 10) || `SUB${Date.now().toString().slice(-4)}`;
+};
+
 const getGrade = (marks: number | undefined, totalMarks: number) => {
   if (marks === undefined || marks === null || Number.isNaN(marks)) return undefined;
   const percentage = totalMarks ? (marks / totalMarks) * 100 : 0;
@@ -688,23 +716,31 @@ router.get('/report-card/students', authenticate, canManageAcademic(), async (re
 
 router.post('/classes', authenticate, canManageAcademic(), async (req, res) => {
   try {
-    const classItem = await ClassModel.create({
-      name: req.body.name,
-      grade: req.body.grade,
-      shift: req.body.shift || 'day',
-      classTeacherId: req.body.classTeacherId || undefined,
-      academicYear: req.body.academicYear,
-      isActive: req.body.isActive !== false,
-      institutionId: req.user.institutionId,
-    });
+    const bulkItems = normalizeBulkItems(req.body);
+    const payloadItems = bulkItems && bulkItems.length > 0 ? bulkItems : [req.body];
+    const createdItems: any[] = [];
 
-    classItem.sections = await syncSections(classItem._id, req.user.institutionId, req.body.sections);
-    await classItem.save();
+    for (const item of payloadItems) {
+      const classItem = await ClassModel.create({
+        name: item.name,
+        grade: item.grade || deriveGrade(item.name),
+        shift: item.shift || req.body.shift || 'day',
+        classTeacherId: item.classTeacherId || req.body.classTeacherId || undefined,
+        academicYear: item.academicYear || req.body.academicYear,
+        isActive: item.isActive !== false,
+        institutionId: req.user.institutionId,
+      });
 
-    const created = await populateClassQuery()
-      .where({ _id: classItem._id, institutionId: req.user.institutionId })
-      .findOne();
-    res.status(201).json({ classItem: created });
+      classItem.sections = await syncSections(classItem._id, req.user.institutionId, item.sections || req.body.sections || defaultSections());
+      await classItem.save();
+
+      const created = await populateClassQuery()
+        .where({ _id: classItem._id, institutionId: req.user.institutionId })
+        .findOne();
+      createdItems.push(created);
+    }
+
+    res.status(201).json(bulkItems && bulkItems.length > 0 ? { classItems: createdItems } : { classItem: createdItems[0] });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create class', error });
   }
@@ -840,28 +876,36 @@ router.delete('/exams/:id', authenticate, canManageAcademic(), async (req, res) 
 
 router.post('/subjects', authenticate, canManageAcademic(), async (req, res) => {
   try {
-    const subject = await Subject.create({
-      name: req.body.name,
-      code: req.body.code,
-      type: req.body.type,
-      classId: req.body.classId,
-      teacherId: req.body.teacherId || undefined,
-      description: req.body.description,
-      creditHours: Number(req.body.creditHours) || 1,
-      isActive: req.body.isActive !== false,
-      institutionId: req.user.institutionId,
-    });
+    const bulkItems = normalizeBulkItems(req.body);
+    const payloadItems = bulkItems && bulkItems.length > 0 ? bulkItems : [req.body];
+    const createdItems: any[] = [];
 
-    await ClassModel.findOneAndUpdate(
-      { _id: subject.classId, institutionId: req.user.institutionId },
-      { $addToSet: { subjects: subject._id } }
-    );
-    await syncSubjectTeacher(subject._id, subject.classId, subject.teacherId, req.user.institutionId);
+    for (const item of payloadItems) {
+      const subject = await Subject.create({
+        name: item.name,
+        code: item.code || deriveCode(item.name),
+        type: item.type,
+        classId: item.classId,
+        teacherId: item.teacherId || undefined,
+        description: item.description,
+        creditHours: Number(item.creditHours) || 1,
+        isActive: item.isActive !== false,
+        institutionId: req.user.institutionId,
+      });
 
-    const created = await populateSubjectQuery()
-      .where({ _id: subject._id, institutionId: req.user.institutionId })
-      .findOne();
-    res.status(201).json({ subject: created });
+      await ClassModel.findOneAndUpdate(
+        { _id: subject.classId, institutionId: req.user.institutionId },
+        { $addToSet: { subjects: subject._id } }
+      );
+      await syncSubjectTeacher(subject._id, subject.classId, subject.teacherId, req.user.institutionId);
+
+      const created = await populateSubjectQuery()
+        .where({ _id: subject._id, institutionId: req.user.institutionId })
+        .findOne();
+      createdItems.push(created);
+    }
+
+    res.status(201).json(bulkItems && bulkItems.length > 0 ? { subjects: createdItems } : { subject: createdItems[0] });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create subject', error });
   }
