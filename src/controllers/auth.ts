@@ -62,7 +62,8 @@ export const register = async (req: Request, res: Response) => {
     const userId = new mongoose.Types.ObjectId();
 
     if (!institutionId) {
-      const selected = calculatePlanDue(req.body.planCode, 'monthly', true);
+      const billingCycle = req.body.billingCycle === 'yearly' ? 'yearly' : 'monthly';
+      const selected = calculatePlanDue(req.body.planCode, billingCycle, true);
       const paymentAmount = Number(req.body.receivedAmount || 0);
       const institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
@@ -79,7 +80,7 @@ export const register = async (req: Request, res: Response) => {
           yearlyPrice: selected.plan.yearlyPrice,
           monthlySmsLimit: selected.plan.monthlySmsLimit,
           yearlyDiscountPercent: selected.plan.yearlyDiscountPercent,
-          billingCycle: 'monthly',
+          billingCycle,
           useEasySchoolStorage: true,
           storageMonthlyPrice: 100,
           storageAmount: selected.storageAmount,
