@@ -50,7 +50,7 @@ npm run seed
 ```powershell
 cd 'c:\New folder\school_n\server'
 npm run dev
-# Output: DRMS Server running on port 5000
+# Output: easy school Server running on port 5000
 ```
 
 **Terminal 2 - Client (Web):**
@@ -98,7 +98,7 @@ Password: admin123
 
 ```powershell
 curl http://localhost:5000/api/health
-# Output: {"status":"OK","message":"DRMS Server is running"}
+# Output: {"status":"OK","message":"easy school Server is running"}
 ```
 
 ## Common Issues & Fixes
@@ -156,8 +156,8 @@ school_n/
 ```
 PORT=5000
 NODE_ENV=development
-MONGO_URI=mongodb://localhost:27017/drms
-MONGO_DB_NAME=drms
+MONGO_URI=mongodb://localhost:27017/easy_school
+MONGO_DB_NAME=easy_school
 JWT_SECRET=super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012
 FRONTEND_URL=http://localhost:3000
 MOBILE_URL=http://localhost:8081

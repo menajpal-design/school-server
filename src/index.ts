@@ -91,7 +91,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'DRMS Server is running' });
+  res.json({ status: 'OK', message: 'easy school Server is running' });
 });
 
 // Error handling middleware

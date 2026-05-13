@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# DRMS Heroku Deployment Script
+# easy school Heroku Deployment Script
 # This script deploys both server and client to Heroku
 
 set -e  # Exit on error
 
 echo "======================================"
-echo "🚀 DRMS Heroku Deployment Script"
+echo "🚀 easy school Heroku Deployment Script"
 echo "======================================"
 
 # Check if Heroku CLI is installed
@@ -38,7 +38,7 @@ echo "======================================"
 echo "📦 Server Deployment"
 echo "======================================"
 
-read -p "Enter server app name (e.g., drms-server): " SERVER_APP_NAME
+read -p "Enter server app name (e.g., easy-school-server): " SERVER_APP_NAME
 
 if [ -z "$SERVER_APP_NAME" ]; then
     echo "❌ App name cannot be empty"
@@ -85,7 +85,7 @@ echo "======================================"
 
 cd ../client
 
-read -p "Enter client app name (e.g., drms-client): " CLIENT_APP_NAME
+read -p "Enter client app name (e.g., easy-school-client): " CLIENT_APP_NAME
 
 if [ -z "$CLIENT_APP_NAME" ]; then
     echo "❌ App name cannot be empty"

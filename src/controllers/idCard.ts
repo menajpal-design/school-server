@@ -39,7 +39,7 @@ export const generateStudentIdCard = async (req: Request, res: Response) => {
     const institution = student.institutionId as any;
     const cardNumber = await generateCardNumber('student', institution._id);
 
-    const qrData = `drms://idcard/${cardNumber}`;
+    const qrData = `easy_school://idcard/${cardNumber}`;
     const qrCodeDataURL = await QRCode.toDataURL(qrData);
 
     const now = new Date();
@@ -106,7 +106,7 @@ export const generateTeacherIdCard = async (req: Request, res: Response) => {
 
     const institution = teacher.institutionId as any;
     const cardNumber = await generateCardNumber('teacher', institution._id);
-    const qrData = `drms://idcard/${cardNumber}`;
+    const qrData = `easy_school://idcard/${cardNumber}`;
     const qrCodeDataURL = await QRCode.toDataURL(qrData);
     const now = new Date();
     const validityStart = now;
@@ -162,7 +162,7 @@ export const generateStaffIdCard = async (req: Request, res: Response) => {
 
     const institution = staff.institutionId as any;
     const cardNumber = await generateCardNumber('staff', institution._id);
-    const qrData = `drms://idcard/${cardNumber}`;
+    const qrData = `easy_school://idcard/${cardNumber}`;
     const qrCodeDataURL = await QRCode.toDataURL(qrData);
     const now = new Date();
     const validityStart = now;
@@ -219,7 +219,7 @@ export const bulkGenerateIdCards = async (req: Request, res: Response) => {
       if (!owner) { results.push({ ownerId, error: 'not found' }); continue; }
       const institution = (owner as any).institutionId as any;
       const cardNumber = await generateCardNumber(ownerType, institution._id);
-      const qrData = `drms://idcard/${cardNumber}`;
+      const qrData = `easy_school://idcard/${cardNumber}`;
       const now = new Date();
       const validityStart = now;
       const validityEnd = moment(now).add(1, 'year').toDate();
@@ -428,7 +428,7 @@ export const generateIdCardRecord = async (req: Request, res: Response) => {
       cardNumber,
       cardType: ownerType,
       photoUrl: (owner as any).userId.avatar || '',
-      qrCodeData: `drms://idcard/${cardNumber}`,
+      qrCodeData: `easy_school://idcard/${cardNumber}`,
       barcodeData: cardNumber,
       validityStart: now,
       validityEnd,

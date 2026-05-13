@@ -248,7 +248,7 @@ After running `npm run seed` in server:
 
 ## Summary
 
-The DRMS School Management System is now **fully functional** with:
+The easy school School Management System is now **fully functional** with:
 - ✅ Complete authentication system
 - ✅ Registration feature on web and mobile
 - ✅ Professional UI/UX

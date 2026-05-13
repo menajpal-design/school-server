@@ -1,4 +1,4 @@
-# DRMS - Setup and Run Script
+# easy school - Setup and Run Script
 # This script installs all dependencies and starts all services
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +73,7 @@ function Create-Env-File {
 }
 
 # Main script
-Write-Host "DRMS - School Management System Setup" -ForegroundColor Cyan -BackgroundColor Black
+Write-Host "easy school - School Management System Setup" -ForegroundColor Cyan -BackgroundColor Black
 Write-Host "=====================================" -ForegroundColor Cyan
 
 $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -92,8 +92,8 @@ if (-not (Check-MongoDB)) {
 # Create server .env
 $serverEnv = @"
 PORT=5000
-MONGO_URI=mongodb://localhost:27017/drms
-MONGO_DB_NAME=drms
+MONGO_URI=mongodb://localhost:27017/easy_school
+MONGO_DB_NAME=easy_school
 JWT_SECRET=super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012
 NODE_ENV=development
 EMAIL_ENABLED=false

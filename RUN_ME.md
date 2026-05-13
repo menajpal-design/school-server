@@ -120,8 +120,8 @@ npm install
 
 # Create .env file
 echo "PORT=5000" > .env
-echo "MONGO_URI=mongodb://localhost:27017/drms" >> .env
-echo "MONGO_DB_NAME=drms" >> .env
+echo "MONGO_URI=mongodb://localhost:27017/easy_school" >> .env
+echo "MONGO_DB_NAME=easy_school" >> .env
 echo "JWT_SECRET=super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012" >> .env
 echo "NODE_ENV=development" >> .env
 echo "EMAIL_ENABLED=false" >> .env

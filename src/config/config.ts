@@ -66,7 +66,7 @@ export const getConfig = (): Config => {
 
     // MongoDB
     mongoUri: 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0',
-    mongoDbName: process.env.MONGO_DB_NAME || 'drms',
+    mongoDbName: process.env.MONGO_DB_NAME || 'easy_school',
     mongoReplicaSet: process.env.MONGO_REPLICA_SET || '',
     mongoSSL: process.env.MONGO_SSL === 'true',
     mongoPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10', 10),

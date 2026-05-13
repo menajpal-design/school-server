@@ -43,8 +43,8 @@ PORT=5000
 NODE_ENV=development
 
 # Database
-MONGODB_URI=mongodb://localhost:27017/drms
-MONGODB_URI_PROD=mongodb+srv://username:password@cluster.mongodb.net/drms
+MONGODB_URI=mongodb://localhost:27017/easy_school
+MONGODB_URI_PROD=mongodb+srv://username:password@cluster.mongodb.net/easy_school
 
 # JWT Authentication
 JWT_SECRET=your_jwt_secret_key_min_32_chars_1234567890

@@ -1,8 +1,8 @@
-# DRMS Heroku Deployment Script for Windows PowerShell
+# easy school Heroku Deployment Script for Windows PowerShell
 # This script deploys both server and client to Heroku
 
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "🚀 DRMS Heroku Deployment Script" -ForegroundColor Green
+Write-Host "🚀 easy school Heroku Deployment Script" -ForegroundColor Green
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -40,7 +40,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 Write-Host "📦 Server Deployment" -ForegroundColor Green
 Write-Host "======================================" -ForegroundColor Cyan
 
-$SERVER_APP_NAME = Read-Host "Enter server app name (e.g., drms-server)"
+$SERVER_APP_NAME = Read-Host "Enter server app name (e.g., easy-school-server)"
 
 if ([string]::IsNullOrWhiteSpace($SERVER_APP_NAME)) {
     Write-Host "❌ App name cannot be empty" -ForegroundColor Red
@@ -95,7 +95,7 @@ Write-Host "======================================" -ForegroundColor Cyan
 
 Set-Location ../client
 
-$CLIENT_APP_NAME = Read-Host "Enter client app name (e.g., drms-client)"
+$CLIENT_APP_NAME = Read-Host "Enter client app name (e.g., easy-school-client)"
 
 if ([string]::IsNullOrWhiteSpace($CLIENT_APP_NAME)) {
     Write-Host "❌ App name cannot be empty" -ForegroundColor Red
