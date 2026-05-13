@@ -66,3 +66,5 @@ const connectDB = async () => {
 };
 
 export default connectDB;
+
+export const isDatabaseConnected = (): boolean => mongoose.connection.readyState === 1;
