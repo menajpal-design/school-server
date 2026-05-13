@@ -61,13 +61,13 @@ router.post('/seed', async (req: Request, res: Response) => {
         institutionId: institution._id
       },
       {
-        name: 'Admin User',
-        email: 'admin@demoschool.edu',
+        name: 'Demo Coordinator',
+        email: 'coordinator@demoschool.edu',
         password: hashedPassword,
-        role: 'staff',
+        role: 'assistant_head',
         phone: '+1234567891',
         isActive: true,
-        permissions: ['manage_users', 'manage_institution'],
+        permissions: ['manage:assignedArea', 'manage:academic'],
         institutionId: institution._id
       },
       {
