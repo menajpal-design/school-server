@@ -122,6 +122,21 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', message: 'DRMS Server is running' });
 });
 
+app.get('/', (req, res) => {
+  res.json({
+    message: 'DRMS School Management System API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      users: '/api/users',
+      students: '/api/students',
+      teachers: '/api/teachers',
+    },
+  });
+});
+
 app.use(notFoundHandler);
 app.use(errorHandler);
 
