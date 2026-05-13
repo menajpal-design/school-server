@@ -71,3 +71,17 @@ const connectDB = async () => {
 export default connectDB;
 
 export const isDatabaseConnected = (): boolean => mongoose.connection.readyState === 1;
+
+export const waitForDatabaseReady = async (timeoutMs = 15000, intervalMs = 250): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return mongoose.connection.readyState === 1;
+};
