@@ -119,12 +119,12 @@ router.post('/import', authenticate, async (req, res) => {
 
               if (existing) {
                 // Update existing
-                await Model.findByIdAndUpdate(item._id, item);
+                await (Model as any).findByIdAndUpdate(item._id, item).exec();
                 results[collection].skipped++;
               } else {
                 // Create new
                 delete item._id; // Let Mongo generate new ID
-                await Model.create(item);
+                await (Model as any).create(item);
                 results[collection].imported++;
               }
             } catch (err) {
