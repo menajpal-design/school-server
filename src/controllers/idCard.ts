@@ -11,6 +11,42 @@ import moment from 'moment';
 
 const YEAR = () => new Date().getFullYear();
 
+const getRoleTheme = (role: string) => {
+  const normalizedRole = String(role || '').toLowerCase();
+
+  return {
+    student: {
+      header: '#0f766e',
+      body: '#e8f4fd',
+      accent: '#0ea5e9',
+      title: 'Student ID Card',
+    },
+    teacher: {
+      header: '#047857',
+      body: '#ecfdf5',
+      accent: '#10b981',
+      title: 'Teacher ID Card',
+    },
+    head: {
+      header: '#b45309',
+      body: '#fffbeb',
+      accent: '#f59e0b',
+      title: 'Head ID Card',
+    },
+    staff: {
+      header: '#334155',
+      body: '#f8fafc',
+      accent: '#64748b',
+      title: 'Staff ID Card',
+    },
+  }[normalizedRole] || {
+    header: '#0f766e',
+    body: '#e8f4fd',
+    accent: '#0ea5e9',
+    title: 'ID Card',
+  };
+};
+
 async function generateCardNumber(ownerType: string, institutionId: Types.ObjectId) {
   const prefix = ownerType === 'student' ? 'STU' : ownerType === 'teacher' ? 'TCH' : 'STF';
   const year = YEAR();
@@ -105,6 +141,8 @@ export const generateTeacherIdCard = async (req: Request, res: Response) => {
     }
 
     const institution = teacher.institutionId as any;
+    const ownerRole = String((teacher.userId as any)?.role || 'teacher').toLowerCase();
+    const theme = getRoleTheme(ownerRole === 'head' ? 'head' : ownerRole === 'assistant_head' ? 'head' : 'teacher');
     const cardNumber = await generateCardNumber('teacher', institution._id);
     const qrData = `easy_school://idcard/${cardNumber}`;
     const qrCodeDataURL = await QRCode.toDataURL(qrData);
@@ -134,13 +172,17 @@ export const generateTeacherIdCard = async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${cardNumber}.pdf"`);
     doc.pipe(res);
-    doc.rect(0, 0, 255.12, 158.74).fill('#e9f7ef');
-    doc.fontSize(10).text(institution.name || 'Institution', 10, 8);
+    doc.rect(0, 0, 255.12, 158.74).fill(theme.body);
+    doc.rect(0, 0, 255.12, 18).fill(theme.header);
+    doc.fillColor('#ffffff').fontSize(9).text(institution.name || 'Institution', 10, 5);
+    doc.fillColor('#111827');
     doc.rect(10, 28, 60, 80).stroke();
-    doc.fontSize(10).text(`Name: ${(teacher.userId as any).name}`, 80, 34);
-    doc.text(`Card: ${cardNumber}`, 80, 50);
-    doc.text(`Designation: ${teacher.designation}`, 80, 66);
+    doc.fontSize(10).fillColor('#111827').text(`Name: ${(teacher.userId as any).name}`, 80, 34);
+    doc.text(`Role: ${ownerRole === 'head' ? 'Head' : ownerRole === 'assistant_head' ? 'Head' : 'Teacher'}`, 80, 50);
+    doc.text(`Card: ${cardNumber}`, 80, 66);
+    doc.text(`Designation: ${teacher.designation}`, 80, 82);
     doc.text(`Valid: ${validityStart.toISOString().slice(0,10)} - ${validityEnd.toISOString().slice(0,10)}`, 10, 120);
+    doc.rect(78, 96, 90, 4).fill(theme.accent);
     const qrBuffer = Buffer.from(qrCodeDataURL.split(',')[1], 'base64');
     try { doc.image(qrBuffer, 200, 80, { width: 44, height: 44 }); } catch(e){}
     doc.end();
@@ -239,6 +281,8 @@ export const downloadIdCard = async (req: Request, res: Response) => {
     const format = req.query.format === 'png' ? 'png' : 'pdf';
     const card = await IDCard.findById(id).populate('institutionId').populate('ownerId');
     if (!card) return res.status(404).json({ message: 'Card not found' });
+    const ownerRole = String((card.ownerId as any)?.role || card.ownerType || 'student').toLowerCase();
+    const theme = getRoleTheme(ownerRole === 'assistant_head' ? 'head' : ownerRole);
 
     // increment download
     card.downloadCount = (card.downloadCount || 0) + 1;
@@ -251,10 +295,15 @@ export const downloadIdCard = async (req: Request, res: Response) => {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${card.cardNumber}.pdf"`);
       doc.pipe(res);
-      doc.rect(0, 0, 255.12, 158.74).fill('#fff');
-      doc.fontSize(10).text((card.institutionId as any).name || 'Institution', 10, 8);
+      doc.rect(0, 0, 255.12, 158.74).fill(theme.body);
+      doc.rect(0, 0, 255.12, 18).fill(theme.header);
+      doc.fillColor('#ffffff').fontSize(9).text((card.institutionId as any).name || 'Institution', 10, 5);
+      doc.fillColor('#111827');
       doc.text(`Name: ${((card.ownerId as any).name) || ''}`, 80, 34);
-      doc.text(`Card: ${card.cardNumber}`, 80, 50);
+      doc.text(`Role: ${ownerRole === 'head' ? 'Head' : ownerRole === 'assistant_head' ? 'Head' : ownerRole}`, 80, 50);
+      doc.text(`Card: ${card.cardNumber}`, 80, 66);
+      doc.text(`ID Type: ${theme.title}`, 80, 82);
+      doc.rect(78, 96, 90, 4).fill(theme.accent);
       if (card.qrCodeData) {
         const qr = await QRCode.toDataURL(card.qrCodeData);
         const qrBuffer = Buffer.from(qr.split(',')[1], 'base64');
