@@ -9,6 +9,25 @@ import { sendEmail } from '../utils/email';
 import { Types } from 'mongoose';
 import moment from 'moment';
 
+async function fetchImageBuffer(url?: string): Promise<Buffer | null> {
+  try {
+    if (!url) return null;
+    if (typeof url !== 'string') return null;
+    // support data URLs
+    if (url.startsWith('data:')) {
+      const base = url.split(',')[1];
+      if (!base) return null;
+      return Buffer.from(base, 'base64');
+    }
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
+  } catch (err) {
+    return null;
+  }
+}
+
 const YEAR = () => new Date().getFullYear();
 
 const getRoleTheme = (role: string) => {
@@ -113,6 +132,14 @@ export const generateStudentIdCard = async (req: Request, res: Response) => {
 
     // photo box
     doc.rect(10, 28, 60, 80).stroke();
+    // embed profile photo if available
+    try {
+      const photoUrl = (student.userId as any).avatar || '';
+      const photoBuf = await fetchImageBuffer(photoUrl);
+      if (photoBuf) {
+        try { doc.image(photoBuf, 10, 28, { fit: [60, 80], align: 'center' }); } catch(e) {}
+      }
+    } catch (e) {}
     doc.fontSize(10).text(`Name: ${(student.userId as any).name}`, 80, 34);
     doc.text(`Card: ${cardNumber}`, 80, 50);
     doc.text(`Class: ${(student.classId as any)?.name || ''}`, 80, 66);
@@ -177,6 +204,14 @@ export const generateTeacherIdCard = async (req: Request, res: Response) => {
     doc.fillColor('#ffffff').fontSize(9).text(institution.name || 'Institution', 10, 5);
     doc.fillColor('#111827');
     doc.rect(10, 28, 60, 80).stroke();
+    // embed profile photo if available
+    try {
+      const photoUrl = (teacher.userId as any).avatar || '';
+      const photoBuf = await fetchImageBuffer(photoUrl);
+      if (photoBuf) {
+        try { doc.image(photoBuf, 10, 28, { fit: [60, 80], align: 'center' }); } catch(e) {}
+      }
+    } catch (e) {}
     doc.fontSize(10).fillColor('#111827').text(`Name: ${(teacher.userId as any).name}`, 80, 34);
     doc.text(`Role: ${ownerRole === 'head' ? 'Head' : ownerRole === 'assistant_head' ? 'Head' : 'Teacher'}`, 80, 50);
     doc.text(`Card: ${cardNumber}`, 80, 66);
@@ -235,6 +270,14 @@ export const generateStaffIdCard = async (req: Request, res: Response) => {
     doc.rect(0, 0, 255.12, 158.74).fill('#fff7ed');
     doc.fontSize(10).text(institution.name || 'Institution', 10, 8);
     doc.rect(10, 28, 60, 80).stroke();
+    // embed profile photo if available
+    try {
+      const photoUrl = (staff.userId as any).avatar || '';
+      const photoBuf = await fetchImageBuffer(photoUrl);
+      if (photoBuf) {
+        try { doc.image(photoBuf, 10, 28, { fit: [60, 80], align: 'center' }); } catch(e) {}
+      }
+    } catch (e) {}
     doc.fontSize(10).text(`Name: ${(staff.userId as any).name}`, 80, 34);
     doc.text(`Card: ${cardNumber}`, 80, 50);
     doc.text(`Designation: ${staff.designation}`, 80, 66);
@@ -309,6 +352,14 @@ export const downloadIdCard = async (req: Request, res: Response) => {
         const qrBuffer = Buffer.from(qr.split(',')[1], 'base64');
         try { doc.image(qrBuffer, 200, 80, { width: 44, height: 44 }); } catch(e){}
       }
+      // try embedding stored photo or owner avatar
+      try {
+        const photoUrl = (card as any).photoUrl || ((card.ownerId as any)?.avatar) || '';
+        const photoBuf = await fetchImageBuffer(photoUrl);
+        if (photoBuf) {
+          try { doc.image(photoBuf, 10, 28, { fit: [60, 80], align: 'center' }); } catch(e){}
+        }
+      } catch (e) {}
       doc.end();
     } else {
       // For png, render PDF to PNG would require heavy libs; fallback: return JSON with data
