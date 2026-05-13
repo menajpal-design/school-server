@@ -65,7 +65,7 @@ export const getConfig = (): Config => {
     jwtExpire: process.env.JWT_EXPIRE || '7d',
 
     // MongoDB
-    mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/drms',
+    mongoUri: process.env.MONGO_URIS || process.env.MONGO_URI || process.env.MONGODB_URI || process.env.MONGODB_URI_PROD || process.env.DATABASE_URL || 'mongodb://localhost:27017/drms',
     mongoDbName: process.env.MONGO_DB_NAME || 'drms',
     mongoReplicaSet: process.env.MONGO_REPLICA_SET || '',
     mongoSSL: process.env.MONGO_SSL === 'true',
