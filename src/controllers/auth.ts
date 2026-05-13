@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User';
 import Institution from '../models/Institution';
+import Student from '../models/Student';
 import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
@@ -148,34 +149,69 @@ export const login = async (req: Request, res: Response) => {
       return res.status(503).json({ message: 'Database is not connected' });
     }
 
-    const identifier = (req.body.username || req.body.email || req.body.identifier || '').trim();
+    const identifier = (req.body.username || req.body.email || req.body.identifier || req.body.phone || req.body.mobile || '').trim();
     const { password } = req.body;
 
     // Validate input
     if (!identifier || !password) {
+      console.warn('Login validation failed:', { hasIdentifier: !!identifier, hasPassword: !!password });
       return res.status(400).json({ 
-        message: 'Email/mobile and password are required',
-        details: { identifier: !identifier ? 'missing' : 'ok', password: !password ? 'missing' : 'ok' }
+        message: 'Validation failed',
+        errors: [
+          !identifier ? 'Username/email/phone is required' : null,
+          !password ? 'Password is required' : null,
+        ].filter(Boolean),
+        details: { identifier: !identifier ? 'missing' : 'provided', password: !password ? 'missing' : 'provided' }
       });
     }
 
+    const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || '');
+    const institutionScope = mongoose.Types.ObjectId.isValid(institutionId) ? { institutionId } : {};
+
     // Find user
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
-    const user = await User.findOne({
+    console.log('Login attempt:', { identifier, emailQuery, hasInstitutionScope: !!institutionScope.institutionId });
+    
+    let user = await User.findOne({
+      ...institutionScope,
       $or: [
         { email: emailQuery },
         { username: emailQuery.toLowerCase() },
         { phone: identifier },
       ],
     }).populate('institutionId');
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid email or password' });
+
+    console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
+
+    let isMatch = user ? await bcrypt.compare(password, user.password) : false;
+
+    if (!isMatch) {
+      const student = await Student.findOne({
+        ...institutionScope,
+        $or: [
+          { rollNumber: identifier },
+          { guardianPhone: identifier },
+          { guardianEmail: emailQuery },
+        ],
+        isActive: true,
+      }).select('userId');
+
+      console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
+
+      if (student?.userId) {
+        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
+        isMatch = user ? await bcrypt.compare(password, user.password) : false;
+      }
     }
 
-    // Check password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid email or password' });
+    if (!user || !isMatch) {
+      const errorMsg = user ? 'Incorrect password' : 'User not found';
+      console.warn('Login failed:', { identifier, userFound: !!user, passwordMatch: isMatch, error: errorMsg });
+      return res.status(400).json({ 
+        message: 'Invalid credentials',
+        errors: [errorMsg],
+      });
     }
 
     // Update last login
@@ -202,7 +238,8 @@ export const login = async (req: Request, res: Response) => {
 
     res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error });
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'Server error', error: String(error) });
   }
 };
 
