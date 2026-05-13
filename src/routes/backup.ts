@@ -96,7 +96,7 @@ router.post('/import', authenticate, async (req, res) => {
     const data = req.body;
     const results: any = {};
 
-    // Import in order to avoid reference issues
+    // Simple import - just create new records
     const importOrder = ['classes', 'subjects', 'users', 'teachers', 'staff', 'students', 'attendance', 'finance', 'documents', 'idcards', 'notices', 'exams', 'results'];
 
     for (const collection of importOrder) {
@@ -104,31 +104,20 @@ router.post('/import', authenticate, async (req, res) => {
         const Model = getModel(collection);
         if (Model) {
           const items = data.collections[collection];
-          results[collection] = { imported: 0, skipped: 0 };
+          results[collection] = { imported: 0, errors: 0 };
 
           for (const item of items) {
             try {
               // Add institutionId if not present
               if (!item.institutionId) item.institutionId = institutionId;
 
-              // Check if exists (by _id or unique field)
-              let existing = null;
-              if (item._id) {
-                existing = await Model.findById(item._id);
-              }
-
-              if (existing) {
-                // Update existing
-                await (Model as any).findByIdAndUpdate(item._id, item).exec();
-                results[collection].skipped++;
-              } else {
-                // Create new
-                delete item._id; // Let Mongo generate new ID
-                await (Model as any).create(item);
-                results[collection].imported++;
-              }
+              // Always create new (avoid conflicts)
+              delete item._id; // Let Mongo generate new ID
+              await new (Model as any)(item).save();
+              results[collection].imported++;
             } catch (err) {
               console.error(`Error importing ${collection} item:`, err);
+              results[collection].errors++;
             }
           }
         }
