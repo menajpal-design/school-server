@@ -25,6 +25,7 @@ import institutionRoutes from './routes/institution';
 import messageRoutes from './routes/messages';
 import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
+import smsMonitoringRoutes from './routes/smsMonitoring';
 import { config } from './config/config';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
@@ -142,6 +143,7 @@ app.use('/api/institution', institutionRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/sms-monitoring', smsMonitoringRoutes);
 
 // Static files
 app.use('/uploads', express.static('uploads'));

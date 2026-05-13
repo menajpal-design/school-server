@@ -6,8 +6,11 @@ import User from '../models/User';
 import ClassModel from '../models/Class';
 import Subject from '../models/Subject';
 import IDCard from '../models/IDCard';
+import Institution from '../models/Institution';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
 import { sendSMS } from '../utils/sms';
+import { sendEmail } from '../services/emailService';
+import { generateAppointmentLetter } from '../utils/appointmentLetter';
 
 const router = express.Router();
 
@@ -121,13 +124,14 @@ router.post('/', authenticate, async (req, res) => {
       institutionId: req.user.institutionId,
     });
 
+    const classIds = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId);
     const teacher = await Teacher.create({
       userId: user._id,
       employeeId: req.body.employeeId || `T-${Date.now()}`,
       designation: req.body.designation,
       department: req.body.department,
-      assignedClasses: await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId),
-      subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId)),
+      assignedClasses: classIds,
+      subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, classIds),
       joiningDate: req.body.joiningDate || new Date(),
       qualification: req.body.qualification || 'Not specified',
       experience: Number(req.body.experience) || 0,
@@ -136,9 +140,50 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;
+    
+    // Send SMS with credentials if phone provided
     if (req.body.phone) {
-      await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}`, institutionId: req.user.institutionId });
+      await sendSMS({
+        to: req.body.phone,
+        message: `Your teacher account: username ${username}, password ${temporaryPassword}`,
+        institutionId: req.user.institutionId,
+        recipientName: req.body.name,
+        recipientPhone: req.body.phone,
+        type: 'notification',
+      });
     }
+
+    // Send appointment letter email if requested and email is provided
+    if (req.body.sendAppointmentLetter && req.body.email) {
+      try {
+        const institution = await Institution.findById(req.user.institutionId);
+        const appointmentLetterHtml = generateAppointmentLetter({
+          teacherName: req.body.name,
+          position: req.body.designation,
+          designation: req.body.designation,
+          joiningDate: req.body.joiningDate
+            ? new Date(req.body.joiningDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+            : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+          departmentName: req.body.department,
+          salary: Number(req.body.salary) || 0,
+          qualification: req.body.qualification || 'Not specified',
+          schoolName: institution?.name || 'School',
+          schoolAddress: institution?.address || 'School Address',
+          principalName: req.user.name || 'Principal',
+          letterDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        });
+
+        await sendEmail({
+          to: req.body.email,
+          subject: `Appointment Letter - ${req.body.name}`,
+          html: appointmentLetterHtml,
+        });
+      } catch (emailError) {
+        console.error('Error sending appointment letter:', emailError);
+        // Don't fail the entire request if email fails
+      }
+    }
+
     res.status(201).json({ teacher, user, idCard, credentials: { username, password: temporaryPassword } });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create teacher', error });
