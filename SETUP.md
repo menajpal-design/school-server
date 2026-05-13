@@ -76,7 +76,7 @@ Password: admin123
 
 OR
 
-Email: admin@demoschool.edu
+Email: coordinator@demoschool.edu
 Password: admin123
 
 OR
