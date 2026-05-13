@@ -8,9 +8,19 @@ const parseConnectionList = (value?: string | null): string[] => {
     .filter(Boolean);
 };
 
+const getMongoUriCandidates = (): string[] => {
+  return [
+    process.env.MONGO_URIS,
+    process.env.MONGO_URI,
+    process.env.MONGODB_URI,
+    process.env.MONGODB_URI_PROD,
+    process.env.DATABASE_URL,
+  ].flatMap((value) => parseConnectionList(value));
+};
+
 const connectDB = async () => {
   try {
-    const mongoUris = parseConnectionList(process.env.MONGO_URIS || process.env.MONGO_URI);
+    const mongoUris = getMongoUriCandidates();
 
     if (mongoUris.length === 0) {
       console.warn('⚠️ MONGO_URI not set; database features disabled');
