@@ -1,6 +1,6 @@
-# DRMS Server Setup & Configuration Guide
+# easy school Server Setup & Configuration Guide
 
-Complete setup guide for the DRMS Backend Server with MongoDB, Email, SMS, and file upload services.
+Complete setup guide for the easy school Backend Server with MongoDB, Email, SMS, and file upload services.
 
 ## Quick Start
 
@@ -13,7 +13,7 @@ npm install
 cp .env.example .env
 
 # Update .env with local MongoDB
-# MONGO_URI=mongodb://localhost:27017/drms
+# MONGO_URI=mongodb://localhost:27017/easy_school
 # MONGO_SSL=false
 
 # Seed demo data
@@ -53,7 +53,7 @@ JWT_EXPIRE=7d                               # Token expiration (7 days)
 
 #### Local MongoDB
 ```env
-MONGO_URI=mongodb://localhost:27017/drms
+MONGO_URI=mongodb://localhost:27017/easy_school
 MONGO_SSL=false
 MONGO_POOL_SIZE=10
 ```

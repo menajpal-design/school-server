@@ -148,17 +148,17 @@ app.use('/uploads', express.static('uploads'));
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'DRMS Server is running' });
+  res.json({ status: 'OK', message: 'easy school Server is running' });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'DRMS Server is running' });
+  res.json({ status: 'OK', message: 'easy school Server is running' });
 });
 
 // Home route
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'DRMS School Management System API',
+    message: 'easy school School Management System API',
     version: '1.0.0',
     status: 'running',
     endpoints: {

@@ -15,7 +15,7 @@ export const generateCardNumber = async (ownerType: 'student' | 'teacher' | 'sta
 
 export const buildCardPayload = async (ownerType: 'student' | 'teacher' | 'staff', ownerId: any, institutionId: any, issuedBy: any, photoUrl = '') => {
   const cardNumber = await generateCardNumber(ownerType, institutionId);
-  const qrCodeData = `drms://id-card/${cardNumber}`;
+  const qrCodeData = `easy_school://id-card/${cardNumber}`;
   return {
     ownerType,
     ownerId,

@@ -40,14 +40,14 @@ const connectDB = async () => {
         maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10'),
         serverSelectionTimeoutMS: 8000,
         retryWrites: true,
-        dbName: process.env.MONGO_DB_NAME || 'drms',
+        dbName: process.env.MONGO_DB_NAME || 'easy_school',
       };
 
       for (const mongoUri of mongoUris) {
         try {
           const conn = await mongoose.connect(mongoUri, options);
           console.log(`MongoDB Connected: ${conn.connection.host}`);
-          console.log(`Database: ${process.env.MONGO_DB_NAME || 'drms'}`);
+          console.log(`Database: ${process.env.MONGO_DB_NAME || 'easy_school'}`);
           return conn;
         } catch (error) {
           console.warn(`MongoDB connection failed for configured URI`);
