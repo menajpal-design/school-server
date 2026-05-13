@@ -5,67 +5,68 @@ const COMPANY_MONGO_URI = 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-sh
 const parseConnectionList = (value?: string | null): string[] => {
   if (!value) return [];
   return value
-    .split(/[\n,;]+/)
+    .split(/[\n;]+/)
     .map((item) => item.trim())
     .filter(Boolean);
 };
 
 const getMongoUriCandidates = (): string[] => {
   return [
-    COMPANY_MONGO_URI,
     process.env.MONGO_URIS,
     process.env.MONGO_URI,
     process.env.MONGODB_URI,
     process.env.MONGODB_URI_PROD,
     process.env.DATABASE_URL,
+    COMPANY_MONGO_URI,
   ].flatMap((value) => parseConnectionList(value));
 };
 
+let connectionPromise: Promise<typeof mongoose | null> | null = null;
+
 const connectDB = async () => {
-  try {
-    const mongoUris = getMongoUriCandidates();
+  if (mongoose.connection.readyState === 1) return mongoose;
+  if (mongoose.connection.readyState === 2 && connectionPromise) return connectionPromise;
 
-    if (mongoUris.length === 0) {
-      console.warn('MONGO_URI not set; database features disabled');
-      return null;
-    }
+  connectionPromise = (async () => {
+    try {
+      const mongoUris = getMongoUriCandidates();
 
-    const options: mongoose.ConnectOptions = {
-      maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10'),
-      serverSelectionTimeoutMS: 5000,
-      retryWrites: true,
-      dbName: process.env.MONGO_DB_NAME || 'drms',
-    };
-
-    for (const mongoUri of mongoUris) {
-      try {
-        const connectOptions = { ...options };
-
-        // MongoDB Atlas uses SSL by default
-        if (process.env.MONGO_SSL === 'true' && mongoUri.includes('mongodb+srv://')) {
-          connectOptions.ssl = true;
-        }
-
-        const conn = await mongoose.connect(mongoUri, connectOptions);
-
-        console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
-        console.log(`📦 Database: ${process.env.MONGO_DB_NAME}`);
-        console.log(`🔒 SSL Enabled: ${process.env.MONGO_SSL}`);
-
-        return conn;
-      } catch (error) {
-        console.warn(`⚠️ MongoDB connection failed for ${mongoUri}`);
-        console.warn(error);
+      if (mongoUris.length === 0) {
+        console.warn('MONGO_URI not set; database features disabled');
+        return null;
       }
-    }
 
-    console.error('❌ All MongoDB URIs failed to connect');
-    return null;
-  } catch (error) {
-    console.error('❌ MongoDB Connection Error:', error);
-    console.error('Server will continue running without MongoDB connection');
-    return null;
-  }
+      const options: mongoose.ConnectOptions = {
+        maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10'),
+        serverSelectionTimeoutMS: 8000,
+        retryWrites: true,
+        dbName: process.env.MONGO_DB_NAME || 'drms',
+      };
+
+      for (const mongoUri of mongoUris) {
+        try {
+          const conn = await mongoose.connect(mongoUri, options);
+          console.log(`MongoDB Connected: ${conn.connection.host}`);
+          console.log(`Database: ${process.env.MONGO_DB_NAME || 'drms'}`);
+          return conn;
+        } catch (error) {
+          console.warn(`MongoDB connection failed for configured URI`);
+          console.warn(error);
+        }
+      }
+
+      console.error('All MongoDB URIs failed to connect');
+      return null;
+    } catch (error) {
+      console.error('MongoDB Connection Error:', error);
+      console.error('Server will continue running without MongoDB connection');
+      return null;
+    } finally {
+      connectionPromise = null;
+    }
+  })();
+
+  return connectionPromise;
 };
 
 export default connectDB;
@@ -76,12 +77,15 @@ export const waitForDatabaseReady = async (timeoutMs = 15000, intervalMs = 250):
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (mongoose.connection.readyState === 1) {
-      return true;
-    }
-
+    if (mongoose.connection.readyState === 1) return true;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
   return mongoose.connection.readyState === 1;
+};
+
+export const ensureDatabaseReady = async (): Promise<boolean> => {
+  if (isDatabaseConnected()) return true;
+  await connectDB();
+  return waitForDatabaseReady();
 };

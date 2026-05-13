@@ -6,7 +6,7 @@ import User from '../models/User';
 import Institution from '../models/Institution';
 import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
-import { isDatabaseConnected, waitForDatabaseReady } from '../config/database';
+import { ensureDatabaseReady } from '../config/database';
 
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
 
@@ -41,7 +41,7 @@ const serializeInstitution = (institution: any) => {
 
 export const register = async (req: Request, res: Response) => {
   try {
-    if (!isDatabaseConnected() && !(await waitForDatabaseReady())) {
+    if (!(await ensureDatabaseReady())) {
       return res.status(503).json({ message: 'Database is not connected' });
     }
 
@@ -143,7 +143,7 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    if (!isDatabaseConnected() && !(await waitForDatabaseReady())) {
+    if (!(await ensureDatabaseReady())) {
       return res.status(503).json({ message: 'Database is not connected' });
     }
 
