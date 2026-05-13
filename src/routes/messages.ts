@@ -38,6 +38,21 @@ router.get('/sent', authenticate, async (req: any, res: any) => {
   }
 });
 
+// Get unread count
+router.get('/stats/unread', authenticate, async (req: any, res: any) => {
+  try {
+    const unreadCount = await Message.countDocuments({
+      toUserId: req.user.id,
+      isRead: false,
+      folder: 'inbox',
+    });
+
+    res.json({ success: true, unreadCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to get unread count' });
+  }
+});
+
 // Get single message
 router.get('/:id', authenticate, async (req: any, res: any) => {
   try {
@@ -173,20 +188,4 @@ router.delete('/:id', authenticate, async (req: any, res: any) => {
     res.status(500).json({ success: false, message: 'Failed to delete message' });
   }
 });
-
-// Get unread count
-router.get('/stats/unread', authenticate, async (req: any, res: any) => {
-  try {
-    const unreadCount = await Message.countDocuments({
-      toUserId: req.user.id,
-      isRead: false,
-      folder: 'inbox',
-    });
-
-    res.json({ success: true, unreadCount });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to get unread count' });
-  }
-});
-
 export default router;
