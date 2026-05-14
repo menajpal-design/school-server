@@ -28,6 +28,191 @@ async function fetchImageBuffer(url?: string): Promise<Buffer | null> {
   }
 }
 
+function sanitizeFilename(value: string) {
+  return String(value || 'card')
+    .trim()
+    .replace(/[^a-z0-9-_]+/gi, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'card';
+}
+
+function drawLabelValue(
+  doc: any,
+  label: string,
+  value: string | undefined,
+  x: number,
+  y: number,
+  labelWidth: number,
+  valueWidth: number,
+  labelFontSize = 11,
+  valueFontSize = 11,
+) {
+  const safeValue = value || '';
+  doc.font('Helvetica-Bold').fontSize(labelFontSize).fillColor('#111111').text(`${label}:`, x, y, { width: labelWidth });
+  const labelHeight = doc.heightOfString(`${label}:`, { width: labelWidth });
+  doc.font('Helvetica').fontSize(valueFontSize).fillColor('#111111').text(safeValue, x + labelWidth, y, { width: valueWidth });
+  const valueHeight = doc.heightOfString(safeValue, { width: valueWidth });
+  return Math.max(labelHeight, valueHeight);
+}
+
+async function generateServerPdfFromPayload(payload: any): Promise<Buffer> {
+  return await new Promise<Buffer>(async (resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 28, bufferPages: true });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    try {
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const isAdmitCard = String(payload.cardType || '').toLowerCase() === 'admit-card';
+      const title = isAdmitCard ? 'Admit Card' : 'ID Card';
+      const institutionName = payload.institutionName || 'Institution';
+      const displayName = payload.name || '';
+      const rollOrId = payload.idNumber || '';
+      const qrData = JSON.stringify({
+        cardType: payload.cardType,
+        name: displayName,
+        idNumber: rollOrId,
+        institutionName,
+        examName: payload.examName,
+        examDate: payload.examDate,
+        examCenter: payload.examCenter,
+        centerCode: payload.centerCode,
+      });
+      const qrDataUrl = await QRCode.toDataURL(qrData, { width: 160, margin: 1 });
+      const qrBuffer = Buffer.from(qrDataUrl.split(',')[1], 'base64');
+
+      const headerFill = isAdmitCard ? '#1d4ed8' : '#0f766e';
+      const bodyFill = isAdmitCard ? '#eff6ff' : '#e8f4fd';
+
+      doc.rect(0, 0, pageWidth, pageHeight).fill('#ffffff');
+      doc.rect(0, 0, pageWidth, 36).fill(headerFill);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(institutionName, 28, 11, { width: pageWidth - 56, align: 'center' });
+      doc.fillColor('#0f172a');
+
+      if (isAdmitCard) {
+        const cardX = 28;
+        const cardY = 58;
+        const cardW = pageWidth - 56;
+        const cardH = pageHeight - 86;
+        const photoW = 150;
+        const photoH = 188;
+        const photoX = cardX + cardW - photoW - 22;
+        const photoY = cardY + 26;
+
+        doc.roundedRect(cardX, cardY, cardW, cardH, 12).fillAndStroke(bodyFill, '#1f2937');
+        doc.font('Helvetica-Bold').fontSize(22).fillColor('#0f172a').text(title, cardX, cardY + 14, { width: cardW - 20, align: 'center' });
+        doc.font('Helvetica').fontSize(10).fillColor('#475569').text(payload.examName || '', cardX, cardY + 40, { width: cardW - 20, align: 'center' });
+
+        if (payload.institutionLogo) {
+          const logoBuffer = await fetchImageBuffer(payload.institutionLogo);
+          if (logoBuffer) {
+            try { doc.image(logoBuffer, cardX + 18, cardY + 18, { fit: [56, 56] }); } catch (e) {}
+          }
+        }
+
+        let textY = cardY + 76;
+        const leftX = cardX + 24;
+        const leftWidth = cardW - photoW - 92;
+        const valueWidth = leftWidth - 132;
+        const lineGap = 8;
+        textY += drawLabelValue(doc, 'Student Name', displayName, leftX, textY, 120, valueWidth, 11, 11) + lineGap;
+        textY += drawLabelValue(doc, 'Roll Number', rollOrId, leftX, textY, 120, valueWidth, 11, 11) + lineGap;
+        textY += drawLabelValue(doc, 'Date of Birth', payload.dateOfBirth, leftX, textY, 120, valueWidth, 11, 11) + lineGap;
+        textY += drawLabelValue(doc, 'Father Name', payload.fatherName, leftX, textY, 120, valueWidth, 11, 11) + lineGap;
+        textY += drawLabelValue(doc, 'Class / Stream', payload.stream, leftX, textY, 120, valueWidth, 11, 11) + lineGap;
+
+        doc.roundedRect(photoX, photoY, photoW, photoH, 8).fill('#ffffff').stroke('#111827');
+        if (payload.photoUrl) {
+          const photoBuffer = await fetchImageBuffer(payload.photoUrl);
+          if (photoBuffer) {
+            try { doc.image(photoBuffer, photoX + 2, photoY + 2, { fit: [photoW - 4, photoH - 4], align: 'center', valign: 'center' }); } catch (e) {}
+          }
+        }
+
+        const tableY = cardY + 280;
+        const tableW = cardW - 48;
+        const tableX = cardX + 24;
+        const rowH = 30;
+        const rowBodyH = 44;
+        const widths = [0.22, 0.22, 0.24, 0.32].map((ratio) => tableW * ratio);
+        const headers = ['Class / Subject', 'Exam Date', 'Exam Time', 'Exam Centre'];
+        let currentX = tableX;
+        headers.forEach((header, index) => {
+          const width = widths[index];
+          doc.rect(currentX, tableY, width, rowH).fillAndStroke('#ffffff', '#111827');
+          doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text(header, currentX + 4, tableY + 9, { width: width - 8, align: 'center' });
+          currentX += width;
+        });
+        const rowValues = [payload.stream || '', payload.examDate || '', '', `${payload.centerCode || ''}${payload.examCenter ? `\n${payload.examCenter}` : ''}`];
+        currentX = tableX;
+        rowValues.forEach((value, index) => {
+          const width = widths[index];
+          doc.rect(currentX, tableY + rowH, width, rowBodyH).fillAndStroke('#ffffff', '#111827');
+          doc.font('Helvetica').fontSize(10).fillColor('#111827').text(value, currentX + 4, tableY + rowH + 10, { width: width - 8, align: index === 3 ? 'left' : 'center' });
+          currentX += width;
+        });
+
+        doc.roundedRect(cardX + cardW - 136, pageHeight - 140, 104, 104, 8).fill('#ffffff').stroke('#111827');
+        try { doc.image(qrBuffer, cardX + cardW - 132, pageHeight - 136, { fit: [96, 96] }); } catch (e) {}
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#334155').text('Scan to verify', cardX + cardW - 136, pageHeight - 30, { width: 104, align: 'center' });
+      } else {
+        const cardW = 520;
+        const cardH = 320;
+        const cardX = (pageWidth - cardW) / 2;
+        const cardY = 90;
+        const photoW = 112;
+        const photoH = 140;
+        const photoX = cardX + cardW - photoW - 18;
+        const photoY = cardY + 54;
+
+        doc.roundedRect(cardX, cardY, cardW, cardH, 14).fillAndStroke(bodyFill, '#1f2937');
+        doc.rect(cardX, cardY, cardW, 26).fill(headerFill);
+        doc.font('Helvetica-Bold').fontSize(12).fillColor('#ffffff').text(title, cardX, cardY + 7, { width: cardW, align: 'center' });
+
+        if (payload.institutionLogo) {
+          const logoBuffer = await fetchImageBuffer(payload.institutionLogo);
+          if (logoBuffer) {
+            try { doc.image(logoBuffer, cardX + 12, cardY + 36, { fit: [54, 54] }); } catch (e) {}
+          }
+        }
+
+        doc.font('Helvetica-Bold').fontSize(14).fillColor('#0f172a').text(displayName, cardX + 78, cardY + 38, { width: cardW - 210, lineBreak: true });
+        doc.font('Helvetica').fontSize(10).fillColor('#334155').text(payload.designation || payload.cardType || 'ID Card', cardX + 78, cardY + 58, { width: cardW - 210 });
+
+        let y = cardY + 94;
+        const leftWidth = cardW - photoW - 54;
+        const valueWidth = leftWidth - 128;
+        y += drawLabelValue(doc, 'ID Number', rollOrId, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Validity', payload.validityDate, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Date of Birth', payload.dateOfBirth, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Father Name', payload.fatherName, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Admission No.', payload.admissionNumber, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Registration No.', payload.registrationNumber, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+        y += drawLabelValue(doc, 'Stream', payload.stream, cardX + 18, y, 118, valueWidth, 10, 10) + 6;
+
+        doc.roundedRect(photoX, photoY, photoW, photoH, 8).fill('#ffffff').stroke('#111827');
+        if (payload.photoUrl) {
+          const photoBuffer = await fetchImageBuffer(payload.photoUrl);
+          if (photoBuffer) {
+            try { doc.image(photoBuffer, photoX + 2, photoY + 2, { fit: [photoW - 4, photoH - 4], align: 'center', valign: 'center' }); } catch (e) {}
+          }
+        }
+
+        doc.roundedRect(cardX + cardW - 126, cardY + cardH - 126, 92, 92, 8).fill('#ffffff').stroke('#111827');
+        try { doc.image(qrBuffer, cardX + cardW - 122, cardY + cardH - 122, { fit: [84, 84] }); } catch (e) {}
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#334155').text('Verify QR', cardX + cardW - 126, cardY + cardH - 28, { width: 92, align: 'center' });
+      }
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 const YEAR = () => new Date().getFullYear();
 
 const getRoleTheme = (role: string) => {
@@ -541,6 +726,23 @@ export const generateIdCardRecord = async (req: Request, res: Response) => {
     res.status(201).json({ card: await IDCard.findById(card._id).populate('ownerId').populate('institutionId') });
   } catch (err) {
     res.status(500).json({ message: 'Server error', err });
+  }
+};
+
+export const renderCardPdf = async (req: Request, res: Response) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.cardType || !payload.name || !payload.idNumber) {
+      return res.status(400).json({ message: 'cardType, name, and idNumber are required' });
+    }
+
+    const pdfBuffer = await generateServerPdfFromPayload(payload);
+    const filename = sanitizeFilename(`${payload.cardType}-${payload.idNumber}.pdf`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    return res.status(500).json({ message: 'Server error', error });
   }
 };
 
