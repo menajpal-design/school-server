@@ -23,11 +23,12 @@ interface EmailOptions {
 const getSmtpConfig = () => {
   const user = process.env.SMTP_USER || process.env.EMAIL_USER || '';
   const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
+  const port = Number(process.env.SMTP_PORT || 587);
 
   return {
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_PORT || '587') === '465',
+    port,
+    secure: port === 465,
     auth: user && pass ? { user, pass } : undefined,
     from: process.env.EMAIL_FROM || user,
   };
@@ -49,17 +50,31 @@ const createTransporter = () => {
 
 export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
   const emailEnabled = process.env.EMAIL_ENABLED === 'true';
+  const isProduction = process.env.NODE_ENV === 'production';
 
   if (!emailEnabled) {
-    console.log(`Email service disabled. Would send email to ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`);
+    const recipients = Array.isArray(options.to) ? options.to.join(', ') : options.to;
+    const message = `Email service disabled. Set EMAIL_ENABLED=true with SMTP config to send mail to ${recipients}`;
+    if (isProduction) {
+      console.error(message);
+      return false;
+    }
+    console.log(message);
     return true;
   }
 
   try {
     const config = getSmtpConfig();
     const transporter = createTransporter();
+    const from = config.from || config.auth?.user;
+
+    if (!from) {
+      console.error('EMAIL_FROM or SMTP_USER is required when EMAIL_ENABLED=true');
+      return false;
+    }
+
     await transporter.sendMail({
-      from: config.from,
+      from,
       to: options.to,
       subject: options.subject,
       html: options.html,
@@ -77,9 +92,15 @@ export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
 
 export const sendBulkEmails = async (recipients: string[], subject: string, html: string): Promise<boolean> => {
   const emailEnabled = process.env.EMAIL_ENABLED === 'true';
+  const isProduction = process.env.NODE_ENV === 'production';
 
   if (!emailEnabled) {
-    console.log(`Email service disabled. Would send bulk email to ${recipients.length} recipients.`);
+    const message = `Email service disabled. Set EMAIL_ENABLED=true with SMTP config to send bulk email to ${recipients.length} recipients.`;
+    if (isProduction) {
+      console.error(message);
+      return false;
+    }
+    console.log(message);
     return true;
   }
 
@@ -87,7 +108,10 @@ export const sendBulkEmails = async (recipients: string[], subject: string, html
     const batchSize = 10;
     for (let i = 0; i < recipients.length; i += batchSize) {
       const batch = recipients.slice(i, i + batchSize);
-      await Promise.all(batch.map((email) => sendEmail({ to: email, subject, html })));
+      const results = await Promise.all(batch.map((email) => sendEmail({ to: email, subject, html })));
+      if (results.some((result) => !result)) {
+        return false;
+      }
     }
     console.log(`Bulk emails sent to ${recipients.length} recipients`);
     return true;

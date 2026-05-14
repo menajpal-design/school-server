@@ -58,6 +58,12 @@ echo "Setting environment variables for server..."
 
 read -p "Enter MongoDB Atlas URI: " MONGO_URI
 read -p "Enter JWT Secret (or press Enter for default): " JWT_SECRET
+read -p "Enable email sending? (true/false, press Enter for false): " EMAIL_ENABLED
+read -p "Enter sender email (optional): " EMAIL_FROM
+read -p "Enter SMTP host (optional): " SMTP_HOST
+read -p "Enter SMTP port (optional): " SMTP_PORT
+read -p "Enter SMTP username/email (optional): " SMTP_USER
+read -p "Enter SMTP password/app password (optional): " SMTP_PASS
 
 if [ -z "$JWT_SECRET" ]; then
     JWT_SECRET="super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012"
@@ -66,6 +72,25 @@ fi
 heroku config:set MONGO_URI="$MONGO_URI" -a $SERVER_APP_NAME
 heroku config:set JWT_SECRET="$JWT_SECRET" -a $SERVER_APP_NAME
 heroku config:set NODE_ENV="production" -a $SERVER_APP_NAME
+
+if [ -n "$EMAIL_ENABLED" ]; then
+    heroku config:set EMAIL_ENABLED="$EMAIL_ENABLED" -a $SERVER_APP_NAME
+fi
+if [ -n "$EMAIL_FROM" ]; then
+    heroku config:set EMAIL_FROM="$EMAIL_FROM" -a $SERVER_APP_NAME
+fi
+if [ -n "$SMTP_HOST" ]; then
+    heroku config:set SMTP_HOST="$SMTP_HOST" -a $SERVER_APP_NAME
+fi
+if [ -n "$SMTP_PORT" ]; then
+    heroku config:set SMTP_PORT="$SMTP_PORT" -a $SERVER_APP_NAME
+fi
+if [ -n "$SMTP_USER" ]; then
+    heroku config:set SMTP_USER="$SMTP_USER" -a $SERVER_APP_NAME
+fi
+if [ -n "$SMTP_PASS" ]; then
+    heroku config:set SMTP_PASS="$SMTP_PASS" -a $SERVER_APP_NAME
+fi
 
 echo ""
 echo "✅ Server config set. Deploying..."

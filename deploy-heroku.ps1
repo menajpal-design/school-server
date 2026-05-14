@@ -63,6 +63,12 @@ Write-Host "Setting environment variables for server..." -ForegroundColor Cyan
 
 $MONGO_URI = Read-Host "Enter MongoDB Atlas URI"
 $JWT_SECRET = Read-Host "Enter JWT Secret (or press Enter for default)"
+$EMAIL_ENABLED = Read-Host "Enable email sending? (true/false, press Enter for false)"
+$EMAIL_FROM = Read-Host "Enter sender email (e.g. noreply@yourdomain.com, optional)"
+$SMTP_HOST = Read-Host "Enter SMTP host (e.g. smtp.gmail.com, optional)"
+$SMTP_PORT = Read-Host "Enter SMTP port (e.g. 587, optional)"
+$SMTP_USER = Read-Host "Enter SMTP username/email (optional)"
+$SMTP_PASS = Read-Host "Enter SMTP password/app password (optional)"
 
 if ([string]::IsNullOrWhiteSpace($JWT_SECRET)) {
     $JWT_SECRET = "super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012"
@@ -72,6 +78,25 @@ Write-Host "Configuring server..." -ForegroundColor Cyan
 heroku config:set MONGO_URI=$MONGO_URI -a $SERVER_APP_NAME
 heroku config:set JWT_SECRET=$JWT_SECRET -a $SERVER_APP_NAME
 heroku config:set NODE_ENV="production" -a $SERVER_APP_NAME
+
+if (-not [string]::IsNullOrWhiteSpace($EMAIL_ENABLED)) {
+    heroku config:set EMAIL_ENABLED=$EMAIL_ENABLED -a $SERVER_APP_NAME
+}
+if (-not [string]::IsNullOrWhiteSpace($EMAIL_FROM)) {
+    heroku config:set EMAIL_FROM=$EMAIL_FROM -a $SERVER_APP_NAME
+}
+if (-not [string]::IsNullOrWhiteSpace($SMTP_HOST)) {
+    heroku config:set SMTP_HOST=$SMTP_HOST -a $SERVER_APP_NAME
+}
+if (-not [string]::IsNullOrWhiteSpace($SMTP_PORT)) {
+    heroku config:set SMTP_PORT=$SMTP_PORT -a $SERVER_APP_NAME
+}
+if (-not [string]::IsNullOrWhiteSpace($SMTP_USER)) {
+    heroku config:set SMTP_USER=$SMTP_USER -a $SERVER_APP_NAME
+}
+if (-not [string]::IsNullOrWhiteSpace($SMTP_PASS)) {
+    heroku config:set SMTP_PASS=$SMTP_PASS -a $SERVER_APP_NAME
+}
 
 Write-Host ""
 Write-Host "✅ Server config set. Deploying..." -ForegroundColor Green
