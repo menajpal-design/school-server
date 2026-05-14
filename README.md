@@ -55,11 +55,16 @@ FRONTEND_URL=http://localhost:3000
 MOBILE_URL=http://localhost:8081
 
 # Email Configuration (Optional - for notifications)
+EMAIL_ENABLED=false
 EMAIL_FROM=noreply@easyschool.edu
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_app_password
+
+## Heroku deployment note
+
+If automatic mail is needed in production, set `EMAIL_ENABLED=true` and add `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `SMTP_PASS` in Heroku config vars.
 
 # File Upload
 MAX_FILE_SIZE=10485760
