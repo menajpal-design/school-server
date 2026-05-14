@@ -22,8 +22,10 @@ export const loginSchema = Joi.object({
   email: Joi.string().email(),
   identifier: Joi.string().min(2),
   username: Joi.string().min(2),
+  phone: Joi.string().min(2),
+  mobile: Joi.string().min(2),
   password: Joi.string().required(),
-}).or('email', 'identifier', 'username');
+}).or('email', 'identifier', 'username', 'phone', 'mobile');
 
 export const changePasswordSchema = Joi.object({
   currentPassword: Joi.string().required(),

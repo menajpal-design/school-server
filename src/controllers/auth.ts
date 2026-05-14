@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User';
 import Institution from '../models/Institution';
+import Student from '../models/Student';
 import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
@@ -148,7 +149,7 @@ export const login = async (req: Request, res: Response) => {
       return res.status(503).json({ message: 'Database is not connected' });
     }
 
-    const identifier = (req.body.username || req.body.email || req.body.identifier || '').trim();
+    const identifier = (req.body.username || req.body.email || req.body.identifier || req.body.phone || req.body.mobile || '').trim();
     const { password } = req.body;
 
     // Validate input
@@ -159,23 +160,41 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
+    const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || '');
+    const institutionScope = mongoose.Types.ObjectId.isValid(institutionId) ? { institutionId } : {};
+
     // Find user
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
-    const user = await User.findOne({
+    let user = await User.findOne({
+      ...institutionScope,
       $or: [
         { email: emailQuery },
         { username: emailQuery.toLowerCase() },
         { phone: identifier },
       ],
     }).populate('institutionId');
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid email or password' });
+
+    let isMatch = user ? await bcrypt.compare(password, user.password) : false;
+
+    if (!isMatch) {
+      const student = await Student.findOne({
+        ...institutionScope,
+        $or: [
+          { rollNumber: identifier },
+          { guardianPhone: identifier },
+          { guardianEmail: emailQuery },
+        ],
+        isActive: true,
+      }).select('userId');
+
+      if (student?.userId) {
+        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        isMatch = user ? await bcrypt.compare(password, user.password) : false;
+      }
     }
 
-    // Check password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid email or password' });
+    if (!user || !isMatch) {
+      return res.status(400).json({ message: 'Invalid username, email, mobile number or password' });
     }
 
     // Update last login
