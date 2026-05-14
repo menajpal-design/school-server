@@ -64,7 +64,7 @@ SMTP_PASS=your_app_password
 
 ## Heroku deployment note
 
-If automatic mail is needed in production, set `EMAIL_ENABLED=true` and add `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `SMTP_PASS` in Heroku config vars.
+If automatic mail is needed in production, add either `SENDGRID_USERNAME`/`SENDGRID_PASSWORD` or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `SMTP_PASS` in Heroku config vars. `EMAIL_ENABLED` is optional and no longer blocks mail when a transport is configured.
 
 # File Upload
 MAX_FILE_SIZE=10485760
