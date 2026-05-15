@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import { authenticate, canManageAcademic, canScanIDCard } from '../middleware/auth';
 import Attendance from '../models/Attendance';
 import Student from '../models/Student';
@@ -9,17 +10,26 @@ import IDCard from '../models/IDCard';
 
 const router = express.Router();
 
+const parseDateOnly = (value?: string) => {
+  if (!value) return new Date();
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return new Date(value);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+};
+
 const dayRange = (value?: string) => {
-  const date = value ? new Date(value) : new Date();
+  const date = parseDateOnly(value);
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
   return { start, end };
 };
 
 const toDateValue = (value?: string) => {
-  const date = value ? new Date(value) : new Date();
+  const date = parseDateOnly(value);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 };
+
+const toObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value)) ? new mongoose.Types.ObjectId(String(value)) : value;
 
 const statusSummary = (records: any[]) => ({
   total: records.length,
@@ -204,15 +214,15 @@ router.post('/scan-id-card', authenticate, canScanIDCard(), async (req, res) => 
 });
 
 router.get('/reports', authenticate, canManageAcademic(), (req, res) => {
-  const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const endSource = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+  const startDate = req.query.startDate ? parseDateOnly(req.query.startDate as string) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const endSource = req.query.endDate ? parseDateOnly(req.query.endDate as string) : new Date();
   const endDate = new Date(endSource.getFullYear(), endSource.getMonth(), endSource.getDate() + 1);
   const query: any = { institutionId: req.user.institutionId, date: { $gte: startDate, $lt: endDate } };
-  if (req.query.classId) query.classId = req.query.classId;
-  if (req.query.sectionId) query.sectionId = req.query.sectionId;
-  if (req.query.personId) query.studentId = req.query.personId;
+  if (req.query.classId) query.classId = toObjectId(req.query.classId);
+  if (req.query.sectionId) query.sectionId = toObjectId(req.query.sectionId);
+  if (req.query.personId) query.studentId = toObjectId(req.query.personId);
   if (req.query.userType) query.userType = req.query.userType;
-  if (req.query.userId) query.userId = req.query.userId;
+  if (req.query.userId) query.userId = toObjectId(req.query.userId);
 
   Promise.all([
     Attendance.find(query)
@@ -271,6 +281,7 @@ router.get('/me', authenticate, (req, res) => {
 
       if (student) {
         attendance = await Attendance.find({ institutionId, studentId: student._id, date: { $gte: start, $lt: end } })
+          .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
           .populate('classId', 'name grade')
           .populate('sectionId', 'name')
           .sort({ date: -1 })
@@ -280,6 +291,7 @@ router.get('/me', authenticate, (req, res) => {
         const parent = await Parent.findOne({ institutionId, userId: req.user._id });
         const childIds = parent?.children || [];
         attendance = await Attendance.find({ institutionId, studentId: { $in: childIds }, date: { $gte: start, $lt: end } })
+          .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
           .populate('classId', 'name grade')
           .populate('sectionId', 'name')
           .sort({ date: -1 })
