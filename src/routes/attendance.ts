@@ -298,6 +298,29 @@ router.get('/me', authenticate, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load attendance', error }));
 });
 
+router.get('/student/:studentId', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const studentQuery: any = await attendanceStudentQuery(req);
+    studentQuery._id = req.params.studentId;
+
+    const student = await Student.findOne(studentQuery).select('_id').lean();
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+
+    const attendance = await Attendance.find({
+      institutionId: req.user.institutionId,
+      studentId: student._id,
+    })
+      .populate('classId', 'name grade')
+      .populate('sectionId', 'name')
+      .sort({ date: -1 })
+      .lean();
+
+    res.json({ attendance });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load student attendance', error });
+  }
+});
+
 router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const query: any = await attendanceStudentQuery(req);
