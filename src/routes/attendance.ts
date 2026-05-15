@@ -120,6 +120,41 @@ const attendanceStudentQuery = async (req: any) => {
   return query;
 };
 
+const canManageTeacherAttendance = (role: string) => ['head', 'assistant_head', 'admin', 'super_admin'].includes(role);
+
+const employeeAttendanceQuery = (req: any) => ({
+  institutionId: req.user.institutionId,
+  isActive: true,
+});
+
+const normalizePersonType = (value: any) => String(value || 'student').toLowerCase();
+
+const canMarkAttendanceRecords = async (req: any, records: any[]) => {
+  const role = req.user.role;
+  if (['admin', 'super_admin', 'head'].includes(role)) return true;
+
+  for (const record of records) {
+    const userType = record.userType || (record.studentId ? 'student' : 'staff');
+    if (userType === 'teacher' || (!record.studentId && record.userId)) {
+      if (!canManageTeacherAttendance(role)) return false;
+      continue;
+    }
+
+    if (userType === 'student' || record.studentId) {
+      if (role === 'assistant_head' || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) continue;
+      if (!['class_teacher', 'subject_teacher'].includes(role)) return false;
+      if (role === 'class_teacher') {
+        const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+        const assignedClasses = (teacher?.assignedClasses || []).map(String);
+        const classId = String(record.classId || req.body.classId || '');
+        if (!assignedClasses.includes(classId)) return false;
+      }
+    }
+  }
+
+  return true;
+};
+
 router.get('/', authenticate, canManageAcademic(), (req, res) => {
   const { start, end } = dayRange(req.query.date as string | undefined);
   const query: any = { institutionId: req.user.institutionId };
@@ -131,6 +166,7 @@ router.get('/', authenticate, canManageAcademic(), (req, res) => {
 
   Attendance.find(query)
     .populate('studentId', 'rollNumber guardianName')
+    .populate('userId', 'name avatar email role')
     .populate('classId', 'name grade')
     .populate('sectionId', 'name')
     .sort({ date: -1 })
@@ -142,13 +178,16 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const records = Array.isArray(req.body.records) ? req.body.records : [req.body];
     const saved = [];
+    const allowed = await canMarkAttendanceRecords(req, records);
+    if (!allowed) return res.status(403).json({ message: 'Access denied. You cannot mark this attendance.' });
 
     for (const record of records) {
+      const userType = record.userType || (record.studentId ? 'student' : 'staff');
       const attendance = await Attendance.findOneAndUpdate(
         {
           studentId: record.studentId,
           userId: record.userId,
-          userType: record.userType || (record.studentId ? 'student' : 'staff'),
+          userType,
           classId: record.classId || req.body.classId,
           sectionId: record.sectionId || req.body.sectionId,
           date: toDateValue(record.date || req.body.date),
@@ -157,7 +196,7 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
         {
           studentId: record.studentId,
           userId: record.userId,
-          userType: record.userType || (record.studentId ? 'student' : 'staff'),
+          userType,
           classId: record.classId || req.body.classId,
           sectionId: record.sectionId || req.body.sectionId,
           date: toDateValue(record.date || req.body.date),
@@ -221,12 +260,18 @@ router.get('/reports', authenticate, canManageAcademic(), (req, res) => {
   if (req.query.classId) query.classId = toObjectId(req.query.classId);
   if (req.query.sectionId) query.sectionId = toObjectId(req.query.sectionId);
   if (req.query.personId) query.studentId = toObjectId(req.query.personId);
+  if (req.query.personType === 'teacher' && req.query.personId) {
+    delete query.studentId;
+    query.userId = toObjectId(req.query.personId);
+    query.userType = 'teacher';
+  }
   if (req.query.userType) query.userType = req.query.userType;
   if (req.query.userId) query.userId = toObjectId(req.query.userId);
 
   Promise.all([
     Attendance.find(query)
       .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
+      .populate('userId', 'name avatar email role')
       .populate('classId', 'name grade')
       .populate('sectionId', 'name')
       .sort({ date: -1 })
@@ -300,6 +345,7 @@ router.get('/me', authenticate, (req, res) => {
         const employee = await Teacher.findOne({ institutionId, userId: req.user._id }) || await Staff.findOne({ institutionId, userId: req.user._id });
         profile = { ...profile, employeeId: employee?.employeeId };
         attendance = await Attendance.find({ institutionId, userId: req.user._id, date: { $gte: start, $lt: end } })
+          .populate('userId', 'name avatar email role')
           .sort({ date: -1 })
           .lean();
       }
@@ -308,6 +354,44 @@ router.get('/me', authenticate, (req, res) => {
       return res.json({ attendance, summary, profile, month, year });
     })
     .catch((error) => res.status(500).json({ message: 'Failed to load attendance', error }));
+});
+
+router.post('/me/mark', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'head') {
+      return res.status(403).json({ message: 'Only the Head can mark their own attendance.' });
+    }
+
+    const date = toDateValue(req.body.date);
+    const status = req.body.status || 'present';
+    if (!['present', 'absent', 'late', 'leave'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid attendance status.' });
+    }
+
+    const attendance = await Attendance.findOneAndUpdate(
+      {
+        institutionId: req.user.institutionId,
+        userId: req.user._id,
+        userType: 'staff',
+        date,
+      },
+      {
+        institutionId: req.user.institutionId,
+        userId: req.user._id,
+        userType: 'staff',
+        date,
+        status,
+        notes: req.body.notes || 'Self marked by Head',
+        markedBy: req.user._id,
+        markedAt: new Date(),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).populate('userId', 'name avatar email role');
+
+    res.status(201).json({ attendance });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to mark your attendance', error });
+  }
 });
 
 router.get('/student/:studentId', authenticate, canManageAcademic(), async (req, res) => {
@@ -333,6 +417,31 @@ router.get('/student/:studentId', authenticate, canManageAcademic(), async (req,
   }
 });
 
+router.get('/person/:personType/:personId', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const personType = normalizePersonType(req.params.personType);
+    if (personType === 'teacher') {
+      if (!canManageTeacherAttendance(req.user.role)) return res.status(403).json({ message: 'Access denied. Teacher attendance is only for Head and Assistant Head.' });
+      const teacher = await Teacher.findOne({
+        institutionId: req.user.institutionId,
+        userId: req.params.personId,
+        isActive: true,
+      }).select('userId').lean();
+      if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+      const attendance = await Attendance.find({
+        institutionId: req.user.institutionId,
+        userId: teacher.userId,
+        userType: 'teacher',
+      }).sort({ date: -1 }).lean();
+      return res.json({ attendance });
+    }
+
+    return res.status(400).json({ message: 'Unsupported attendance person type.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load attendance history', error });
+  }
+});
+
 router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const query: any = await attendanceStudentQuery(req);
@@ -346,6 +455,47 @@ router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
     res.json({ students });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load attendance students', error });
+  }
+});
+
+router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const personType = normalizePersonType(req.query.personType);
+    if (personType === 'teacher') {
+      if (!canManageTeacherAttendance(req.user.role)) return res.status(403).json({ message: 'Access denied. Teacher attendance is only for Head and Assistant Head.' });
+      const teachers = await Teacher.find(employeeAttendanceQuery(req))
+        .populate('userId', 'name avatar email role')
+        .sort({ employeeId: 1 });
+      return res.json({
+        people: teachers.map((teacher: any) => ({
+          _id: String(teacher.userId?._id || teacher.userId),
+          profileId: teacher._id,
+          personType: 'teacher',
+          employeeId: teacher.employeeId,
+          rollNumber: teacher.employeeId,
+          userId: teacher.userId,
+          designation: teacher.designation,
+          department: teacher.department,
+        })),
+      });
+    }
+
+    const query: any = await attendanceStudentQuery(req);
+    if (req.query.classId) query.classId = req.query.classId;
+    if (req.query.sectionId) query.sectionId = req.query.sectionId;
+    const students = await Student.find(query)
+      .populate('userId', 'name avatar email')
+      .populate('classId', 'name grade')
+      .populate('sectionId', 'name')
+      .sort({ rollNumber: 1 });
+    return res.json({
+      people: students.map((student: any) => ({
+        ...student.toObject(),
+        personType: 'student',
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load attendance people', error });
   }
 });
 
