@@ -49,12 +49,12 @@ const collectionAliases: Record<string, string> = {
   classroutine: 'classroutines', classroutines: 'classroutines',
 };
 
-const normalizeCollectionName = (name: string) => String(name || '').trim().toLowerCase().replace(/[-_\s]+/g, '');
+const normalizeCollectionName = (name: string): string => String(name || '').trim().toLowerCase().replace(/[-_\s]+/g, '');
 
-function replaceContext(value: any, req: any) {
+function replaceContext(value: any, req: any): any {
   if (value === '__CURRENT_INSTITUTION_ID__') return req.user.institutionId;
   if (value === '__CURRENT_HEAD_USER_ID__') return req.user._id;
-  if (Array.isArray(value)) return value.map((item) => replaceContext(item, req));
+  if (Array.isArray(value)) return value.map((item: any): any => replaceContext(item, req));
   if (value && typeof value === 'object') {
     const next: any = {};
     for (const [key, val] of Object.entries(value)) next[key] = replaceContext(val, req);
@@ -63,13 +63,13 @@ function replaceContext(value: any, req: any) {
   return value;
 }
 
-function prepareDoc(raw: any, req: any) {
+function prepareDoc(raw: any, req: any): any {
   const doc = replaceContext({ ...(raw || {}) }, req);
   doc.institutionId = req.user.institutionId;
   return doc;
 }
 
-async function importCollection(name: string, docs: any[], req: any) {
+async function importCollection(name: string, docs: any[], req: any): Promise<any> {
   const normalized = collectionAliases[normalizeCollectionName(name)] || name;
   const Model = collectionMap[normalized];
   if (!Model) return { collection: name, imported: 0, skipped: docs?.length || 0, reason: 'Unsupported or protected collection' };
@@ -157,7 +157,7 @@ router.post('/import', authenticate, async (req: any, res) => {
     const body = req.body || {};
     const data = body.data && typeof body.data === 'object' ? body.data : body;
     const requestedCollections = Array.isArray(body.collections) ? body.collections : Object.keys(data || {});
-    const results = [];
+    const results: any[] = [];
 
     for (const name of requestedCollections) {
       const normalized = collectionAliases[normalizeCollectionName(name)] || name;
