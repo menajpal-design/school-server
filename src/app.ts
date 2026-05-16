@@ -12,6 +12,7 @@ import academicRoutes from './routes/academic';
 import attendanceRoutes from './routes/attendance';
 import financeRoutes from './routes/finance';
 import payrollRoutes from './routes/payroll';
+import promotionRoutes from './routes/promotions';
 import documentRoutes from './routes/documents';
 import noticeRoutes from './routes/notices';
 import committeeRoutes from './routes/committee';
@@ -100,6 +101,7 @@ app.use('/api/academic', academicRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/promotions', promotionRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/notices', noticeRoutes);
 app.use('/api/committee', committeeRoutes);
@@ -138,6 +140,7 @@ app.get('/', (req, res) => {
       students: '/api/students',
       teachers: '/api/teachers',
       payroll: '/api/payroll',
+      promotions: '/api/promotions',
       sms: '/api/sms',
     },
   });
