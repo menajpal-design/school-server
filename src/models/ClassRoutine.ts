@@ -11,6 +11,11 @@ export interface IClassRoutine extends Document {
   endTime: string;
   room?: string;
   note?: string;
+  status: 'draft' | 'proposed' | 'approved' | 'rejected';
+  proposalNote?: string;
+  approvalNote?: string;
+  approvedBy?: mongoose.Types.ObjectId;
+  approvedAt?: Date;
   isActive: boolean;
   isPublic: boolean;
   institutionId: mongoose.Types.ObjectId;
@@ -35,6 +40,16 @@ const ClassRoutineSchema: Schema = new Schema({
   endTime: { type: String, required: true, trim: true },
   room: { type: String, trim: true },
   note: { type: String, trim: true },
+  status: {
+    type: String,
+    enum: ['draft', 'proposed', 'approved', 'rejected'],
+    default: 'draft',
+    index: true,
+  },
+  proposalNote: { type: String, trim: true },
+  approvalNote: { type: String, trim: true },
+  approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  approvedAt: { type: Date },
   isActive: { type: Boolean, default: true, index: true },
   isPublic: { type: Boolean, default: false, index: true },
   institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true, index: true },
@@ -44,5 +59,6 @@ const ClassRoutineSchema: Schema = new Schema({
 });
 
 ClassRoutineSchema.index({ institutionId: 1, classId: 1, sectionId: 1, dayOfWeek: 1, startTime: 1 });
+ClassRoutineSchema.index({ institutionId: 1, status: 1, isPublic: 1, isActive: 1 });
 
 export default mongoose.model<IClassRoutine>('ClassRoutine', ClassRoutineSchema);
