@@ -22,6 +22,7 @@ import parentRoutes from './routes/parent';
 import idCardRoutes from './routes/idCard';
 import dashboardRoutes from './routes/dashboard';
 import notificationRoutes from './routes/notifications';
+import messageRoutes from './routes/messages';
 import reportRoutes from './routes/reports';
 import backupRoutes from './routes/backup';
 import institutionRoutes from './routes/institution';
@@ -104,6 +105,7 @@ app.use('/api/parent', parentRoutes);
 app.use('/api/id-cards', idCardRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/messages', messageRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/institution', institutionRoutes);
@@ -122,7 +124,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', messages: '/api/messages', sms: '/api/sms',
     },
   });
 });
