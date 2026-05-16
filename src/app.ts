@@ -11,6 +11,7 @@ import staffRoutes from './routes/staff';
 import academicRoutes from './routes/academic';
 import attendanceRoutes from './routes/attendance';
 import financeRoutes from './routes/finance';
+import payrollRoutes from './routes/payroll';
 import documentRoutes from './routes/documents';
 import noticeRoutes from './routes/notices';
 import committeeRoutes from './routes/committee';
@@ -98,6 +99,7 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/payroll', payrollRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/notices', noticeRoutes);
 app.use('/api/committee', committeeRoutes);
@@ -135,6 +137,7 @@ app.get('/', (req, res) => {
       users: '/api/users',
       students: '/api/students',
       teachers: '/api/teachers',
+      payroll: '/api/payroll',
       sms: '/api/sms',
     },
   });
