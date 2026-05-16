@@ -26,6 +26,7 @@ import messageRoutes from './routes/messages';
 import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
 import smsMonitoringRoutes from './routes/smsMonitoring';
+import SmsLog from './models/SmsLog';
 import { config } from './config/config';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
@@ -175,5 +176,24 @@ app.get('/', (req, res) => {
 
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// SMS logs retention: delete logs older than configured days (default 30)
+const SMS_RETENTION_DAYS = Number(process.env.SMS_RETENTION_DAYS || 30);
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const runSmsRetentionCleanup = async () => {
+  try {
+    const cutoff = new Date(Date.now() - SMS_RETENTION_DAYS * MS_PER_DAY);
+    const result = await SmsLog.deleteMany({ createdAt: { $lt: cutoff } });
+    if (result && typeof result.deletedCount === 'number') {
+      console.log(`SMS retention cleanup: removed ${result.deletedCount} logs older than ${SMS_RETENTION_DAYS} days`);
+    }
+  } catch (err) {
+    console.error('Error during SMS retention cleanup:', err);
+  }
+};
+
+// Run once at startup, then schedule daily
+runSmsRetentionCleanup();
+setInterval(runSmsRetentionCleanup, MS_PER_DAY);
 
 export default app;
