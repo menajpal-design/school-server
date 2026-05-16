@@ -11,6 +11,7 @@ import staffRoutes from './routes/staff';
 import academicRoutes from './routes/academic';
 import classRoutineRoutes from './routes/classRoutine';
 import attendanceRoutes from './routes/attendance';
+import leaveRoutes from './routes/leaves';
 import financeRoutes from './routes/finance';
 import payrollRoutes from './routes/payroll';
 import promotionRoutes from './routes/promotions';
@@ -51,10 +52,7 @@ const allowedOrigins = [
   'http://www.easyschool.live',
   'https://easyschool.live',
   'https://www.easyschool.live',
-  ...(process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean),
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
 ];
 
 const isAllowedOrigin = (origin: string): boolean => (
@@ -83,10 +81,7 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
-});
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use(limiter);
 
 app.use('/api/auth', authRoutes);
@@ -98,6 +93,7 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/class-routines', classRoutineRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/leaves', leaveRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/promotions', promotionRoutes);
@@ -117,13 +113,8 @@ app.use('/api/sms', smsRoutes);
 
 app.use('/uploads', express.static('uploads'));
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'easy school Server is running' });
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'easy school Server is running' });
-});
+app.get('/api/health', (req, res) => { res.json({ status: 'OK', message: 'easy school Server is running' }); });
+app.get('/health', (req, res) => { res.json({ status: 'OK', message: 'easy school Server is running' }); });
 
 app.get('/', (req, res) => {
   res.json({
@@ -131,15 +122,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health',
-      auth: '/api/auth',
-      users: '/api/users',
-      students: '/api/students',
-      teachers: '/api/teachers',
-      payroll: '/api/payroll',
-      promotions: '/api/promotions',
-      classRoutines: '/api/class-routines',
-      sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', sms: '/api/sms',
     },
   });
 });
