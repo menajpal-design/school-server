@@ -9,6 +9,7 @@ import studentRoutes from './routes/students';
 import teacherRoutes from './routes/teachers';
 import staffRoutes from './routes/staff';
 import academicRoutes from './routes/academic';
+import classRoutineRoutes from './routes/classRoutine';
 import attendanceRoutes from './routes/attendance';
 import financeRoutes from './routes/finance';
 import payrollRoutes from './routes/payroll';
@@ -76,21 +77,18 @@ const corsOptions: cors.CorsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// Middleware
 app.use(helmet());
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/seed', seedRoutes);
 app.use('/api/users', userRoutes);
@@ -98,6 +96,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/academic', academicRoutes);
+app.use('/api/class-routines', classRoutineRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/payroll', payrollRoutes);
@@ -116,10 +115,8 @@ app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/sms', smsRoutes);
 
-// Static files
 app.use('/uploads', express.static('uploads'));
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'easy school Server is running' });
 });
@@ -141,6 +138,7 @@ app.get('/', (req, res) => {
       teachers: '/api/teachers',
       payroll: '/api/payroll',
       promotions: '/api/promotions',
+      classRoutines: '/api/class-routines',
       sms: '/api/sms',
     },
   });
