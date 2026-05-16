@@ -10,7 +10,7 @@ const router = express.Router();
 const headApprovalRoles = ['head', 'assistant_head', 'admin', 'super_admin'];
 const teacherProposalRoles = ['class_teacher', 'subject_teacher', 'teacher'];
 
-const normalizeBody = (req: any) => {
+const normalizeBody = (req: any): any => {
   const role = req.user?.role;
   const canApproveDirectly = headApprovalRoles.includes(role);
   const requestedStatus = req.body.status;
