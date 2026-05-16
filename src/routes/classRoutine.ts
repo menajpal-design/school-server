@@ -123,13 +123,13 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    const body = normalizeBody(req);
-    if (headApprovalRoles.includes(req.user.role) && body.status === 'approved') {
-      body.approvedBy = req.user._id;
-      body.approvedAt = new Date();
-      body.isPublic = req.body.isPublic === true;
+    const payload: any = { ...normalizeBody(req) };
+    if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') {
+      payload.approvedBy = req.user._id;
+      payload.approvedAt = new Date();
+      payload.isPublic = req.body.isPublic === true;
     }
-    const routine = await ClassRoutine.create(body);
+    const routine = await ClassRoutine.create(payload);
     const created = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
     res.status(201).json({ routine: created, message: headApprovalRoles.includes(req.user.role) ? 'Class routine created' : 'Class routine proposal submitted for approval' });
   } catch (error) { res.status(500).json({ message: 'Failed to create class routine', error }); }
@@ -142,9 +142,9 @@ router.put('/:id', async (req: any, res) => {
     const userId = String(req.user._id || req.user.id);
     const ownerId = String(routine.createdBy || '');
     if (!headApprovalRoles.includes(req.user.role) && ownerId !== userId) return res.status(403).json({ message: 'Only the proposal owner or Head/Assistant Head can edit this routine.' });
-    const body = normalizeBody(req);
-    Object.assign(routine, body);
-    if (headApprovalRoles.includes(req.user.role) && body.status === 'approved') { routine.approvedBy = req.user._id; routine.approvedAt = new Date(); routine.isPublic = req.body.isPublic === true; }
+    const payload: any = { ...normalizeBody(req) };
+    Object.assign(routine, payload);
+    if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') { routine.approvedBy = req.user._id; routine.approvedAt = new Date(); routine.isPublic = req.body.isPublic === true; }
     else if (!headApprovalRoles.includes(req.user.role)) { routine.status = 'proposed'; routine.isPublic = false; routine.approvedBy = undefined; routine.approvedAt = undefined; }
     await routine.save();
     const updated = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
