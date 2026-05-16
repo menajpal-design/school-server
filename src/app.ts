@@ -23,6 +23,7 @@ import backupRoutes from './routes/backup';
 import institutionRoutes from './routes/institution';
 import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
+import smsRoutes from './routes/sms';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -109,6 +110,7 @@ app.use('/api/backup', backupRoutes);
 app.use('/api/institution', institutionRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/sms', smsRoutes);
 
 // Static files
 app.use('/uploads', express.static('uploads'));
@@ -133,6 +135,7 @@ app.get('/', (req, res) => {
       users: '/api/users',
       students: '/api/students',
       teachers: '/api/teachers',
+      sms: '/api/sms',
     },
   });
 });
