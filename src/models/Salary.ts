@@ -14,7 +14,18 @@ export interface ISalary extends Document {
     tax?: number;
     providentFund?: number;
     loan?: number;
+    attendance?: number;
     other?: number;
+  };
+  attendanceSummary?: {
+    workingDays?: number;
+    presentDays?: number;
+    absentDays?: number;
+    lateDays?: number;
+    leaveDays?: number;
+    unpaidAbsentDays?: number;
+    perDaySalary?: number;
+    attendanceDeduction?: number;
   };
   grossSalary: number;
   netSalary: number;
@@ -44,7 +55,18 @@ const SalarySchema: Schema = new Schema({
     tax: { type: Number, default: 0 },
     providentFund: { type: Number, default: 0 },
     loan: { type: Number, default: 0 },
+    attendance: { type: Number, default: 0 },
     other: { type: Number, default: 0 }
+  },
+  attendanceSummary: {
+    workingDays: { type: Number, default: 0 },
+    presentDays: { type: Number, default: 0 },
+    absentDays: { type: Number, default: 0 },
+    lateDays: { type: Number, default: 0 },
+    leaveDays: { type: Number, default: 0 },
+    unpaidAbsentDays: { type: Number, default: 0 },
+    perDaySalary: { type: Number, default: 0 },
+    attendanceDeduction: { type: Number, default: 0 }
   },
   grossSalary: { type: Number, required: true },
   netSalary: { type: Number, required: true },
