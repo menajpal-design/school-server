@@ -55,35 +55,49 @@ const allowedOrigins = [
   'https://easyschool.live',
   'https://www.easyschool.live',
   ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-];
+].map((origin) => origin.replace(/\/$/, ''));
 
-const isAllowedOrigin = (origin: string): boolean => (
-  allowedOrigins.includes(origin) ||
-  /^https?:\/\/(www\.)?easyschool\.live$/i.test(origin) ||
-  /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin)
-);
+const isAllowedOrigin = (origin?: string): boolean => {
+  if (!origin) return true;
+  const normalized = origin.replace(/\/$/, '');
+  return (
+    allowedOrigins.includes(normalized) ||
+    /^https?:\/\/(www\.)?easyschool\.live$/i.test(normalized) ||
+    /^https?:\/\/[a-z0-9-]+\.easyschool\.live$/i.test(normalized) ||
+    /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(normalized)
+  );
+};
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin as string | undefined;
+  if (isAllowedOrigin(origin) && origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-access-token');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin || isAllowedOrigin(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error(`Not allowed by CORS: ${origin}`));
+    if (isAllowedOrigin(origin || undefined)) return callback(null, true);
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'x-access-token'],
   optionsSuccessStatus: 204,
 };
 
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
 app.use(limiter);
 
 app.use('/api/auth', authRoutes);
