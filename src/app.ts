@@ -29,6 +29,7 @@ import institutionRoutes from './routes/institution';
 import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
 import smsRoutes from './routes/sms';
+import siteSettingsRoutes from './routes/siteSettings';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -112,6 +113,7 @@ app.use('/api/institution', institutionRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/sms', smsRoutes);
+app.use('/api/site-settings', siteSettingsRoutes);
 
 app.use('/uploads', express.static('uploads'));
 
@@ -124,7 +126,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', messages: '/api/messages', sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
   });
 });
