@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IIDCard extends Document {
   ownerId: mongoose.Types.ObjectId;
-  ownerType: 'student' | 'teacher' | 'staff';
+  ownerType: 'student' | 'teacher' | 'staff' | 'head';
   cardNumber: string;
   cardType?: string;
   photoUrl?: string;
@@ -22,7 +22,7 @@ export interface IIDCard extends Document {
 
 const IDCardSchema: Schema = new Schema({
   ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  ownerType: { type: String, enum: ['student', 'teacher', 'staff'], required: true },
+  ownerType: { type: String, enum: ['student', 'teacher', 'staff', 'head'], required: true },
   cardNumber: { type: String, required: true, unique: true },
   cardType: { type: String },
   photoUrl: { type: String },
