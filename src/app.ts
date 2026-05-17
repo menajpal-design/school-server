@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth';
 import seedRoutes from './routes/seed';
+import demoResultRoutes from './routes/demoResults';
 import userRoutes from './routes/users';
 import studentRoutes from './routes/students';
 import teacherRoutes from './routes/teachers';
@@ -103,6 +104,7 @@ app.use(limiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/seed', seedRoutes);
+app.use('/api/demo-results', demoResultRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/teachers', teacherRoutes);
@@ -142,7 +144,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
   });
 });
