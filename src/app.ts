@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import mongoose from 'mongoose';
 import authRoutes from './routes/auth';
 import seedRoutes from './routes/seed';
 import demoResultRoutes from './routes/demoResults';
@@ -40,10 +41,10 @@ const app = express();
 const splitEnv = (value?: string) => (value || '').split(',').map((item) => item.trim().replace(/\/$/, '')).filter(Boolean);
 const isProduction = process.env.NODE_ENV === 'production';
 const devOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
+const productionFallbackOrigins = ['https://www.easyschool.live', 'https://easyschool.live'];
 
-// Production domains must come from Heroku Config Vars / .env:
-// ALLOWED_ORIGINS=https://www.easyschool.live,https://easyschool.live
 const allowedOrigins = Array.from(new Set([
+  ...productionFallbackOrigins,
   ...splitEnv(process.env.ALLOWED_ORIGINS),
   ...splitEnv(process.env.FRONTEND_URL),
   ...splitEnv(process.env.MOBILE_URL),
@@ -58,8 +59,11 @@ const allowedHeaders = Array.from(new Set([
   ...splitEnv(process.env.CORS_ALLOWED_HEADERS),
 ])).join(', ');
 
+const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true' || process.env.ALLOWED_ORIGINS === '*';
+
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin) return true;
+  if (allowAllOrigins) return true;
   const normalized = origin.replace(/\/$/, '');
   if (allowedOrigins.includes(normalized)) return true;
   if (!isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
@@ -71,8 +75,9 @@ const setCorsHeaders = (req: Request, res: Response) => {
   if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Vary', 'Origin');
+  } else if (!origin && !isProduction) {
+    res.header('Access-Control-Allow-Origin', '*');
   }
-  if (!origin && !isProduction) res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.header('Access-Control-Allow-Headers', allowedHeaders);
@@ -135,8 +140,15 @@ app.use('/api/site-settings', siteSettingsRoutes);
 
 app.use('/uploads', express.static('uploads'));
 
-app.get('/api/health', (req, res) => { setCorsHeaders(req, res); res.json({ status: 'OK', message: 'easy school Server is running' }); });
-app.get('/health', (req, res) => { setCorsHeaders(req, res); res.json({ status: 'OK', message: 'easy school Server is running' }); });
+const healthPayload = () => ({
+  status: 'OK',
+  message: 'easy school Server is running',
+  dbReadyState: mongoose.connection.readyState,
+  dbConnected: mongoose.connection.readyState === 1,
+  corsOrigins: allowedOrigins.length,
+});
+app.get('/api/health', (req, res) => { setCorsHeaders(req, res); res.json(healthPayload()); });
+app.get('/health', (req, res) => { setCorsHeaders(req, res); res.json(healthPayload()); });
 
 app.get('/', (req, res) => {
   setCorsHeaders(req, res);
@@ -144,8 +156,9 @@ app.get('/', (req, res) => {
     message: 'easy school School Management System API',
     version: '1.0.0',
     status: 'running',
-    cors: 'env-controlled',
+    cors: 'env-controlled-with-easyschool-fallback',
     allowedOriginsCount: allowedOrigins.length,
+    dbReadyState: mongoose.connection.readyState,
     endpoints: { health: '/api/health', auth: '/api/auth', users: '/api/users', academic: '/api/academic', syllabus: '/api/syllabus' },
   });
 });
