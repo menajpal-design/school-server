@@ -17,6 +17,15 @@ type HolidaySeed = {
   description?: string;
 };
 
+const DEFAULT_WEEKLY_DAYS = [5, 6]; // Bangladesh school default: Friday + Saturday
+
+const normalizeWeeklyDays = (value: any): number[] => {
+  const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : DEFAULT_WEEKLY_DAYS;
+  const days = raw.map((item: any) => Number(item)).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6);
+  const unique = Array.from(new Set(days));
+  return unique.length ? unique : DEFAULT_WEEKLY_DAYS;
+};
+
 const parseDateOnly = (value?: string) => {
   if (!value) return new Date();
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -74,20 +83,23 @@ const defaultBangladeshHolidays = (year: number): HolidaySeed[] => {
   ];
 };
 
-const weekendHolidays = (year: number, weeklyDays: number[] = [5]): HolidaySeed[] => {
+const weekendHolidays = (year: number, weeklyDays: number[] = DEFAULT_WEEKLY_DAYS): HolidaySeed[] => {
+  const selectedDays = normalizeWeeklyDays(weeklyDays);
   const items: HolidaySeed[] = [];
   const start = new Date(year, 0, 1);
   const end = new Date(year, 11, 31);
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    if (weeklyDays.includes(d.getDay())) {
+    if (selectedDays.includes(d.getDay())) {
       const iso = d.toISOString().slice(0, 10);
-      items.push({ title: 'Weekly Holiday', titleBn: 'সাপ্তাহিক ছুটি', startDate: iso, endDate: iso, type: 'weekend', color: '#64748b', description: 'Weekly school holiday.' });
+      const dayName = d.getDay() === 5 ? 'Friday' : d.getDay() === 6 ? 'Saturday' : d.toLocaleDateString('en-US', { weekday: 'long' });
+      const dayNameBn = d.getDay() === 5 ? 'শুক্রবার' : d.getDay() === 6 ? 'শনিবার' : 'সাপ্তাহিক ছুটি';
+      items.push({ title: `Weekly Holiday - ${dayName}`, titleBn: `সাপ্তাহিক ছুটি - ${dayNameBn}`, startDate: iso, endDate: iso, type: 'weekend', color: '#64748b', description: `Weekly school holiday (${dayName}).` });
     }
   }
   return items;
 };
 
-const ensureBangladeshHolidays = async (institutionId: any, year: number, createdBy?: any, includeWeekends = true, weeklyDays: number[] = [5]) => {
+const ensureBangladeshHolidays = async (institutionId: any, year: number, createdBy?: any, includeWeekends = true, weeklyDays: number[] = DEFAULT_WEEKLY_DAYS) => {
   const existingCount = await Holiday.countDocuments({ institutionId, academicYear: String(year), source: 'bangladesh_default' });
   if (existingCount > 0) return { created: 0, skipped: true };
   const source = [...defaultBangladeshHolidays(year), ...(includeWeekends ? weekendHolidays(year, weeklyDays) : [])];
@@ -107,13 +119,14 @@ router.get('/', authenticate, async (req: any, res) => {
   try {
     const year = Number(req.query.year || new Date().getFullYear());
     const autoSeed = req.query.autoSeed !== 'false';
-    if (autoSeed) await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, [5]);
+    const weeklyDays = normalizeWeeklyDays(req.query.weeklyDays || DEFAULT_WEEKLY_DAYS);
+    if (autoSeed) await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, weeklyDays);
     const start = new Date(year, 0, 1);
     const end = new Date(year, 11, 31, 23, 59, 59, 999);
     const query: any = { institutionId: req.user.institutionId, startDate: { $lte: end }, endDate: { $gte: start } };
     if (req.query.type) query.type = req.query.type;
     const holidays = await Holiday.find(query).sort({ startDate: 1 }).lean();
-    res.json({ holidays, autoSeeded: autoSeed });
+    res.json({ holidays, autoSeeded: autoSeed, weeklyDays });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load holidays', error });
   }
@@ -123,7 +136,7 @@ router.get('/check', authenticate, async (req: any, res) => {
   try {
     const targetDate = req.query.date as string | undefined;
     const year = targetDate ? parseDateOnly(targetDate).getFullYear() : new Date().getFullYear();
-    await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, [5]);
+    await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, DEFAULT_WEEKLY_DAYS);
     const date = dateOnly(targetDate);
     const holiday = await Holiday.findOne({
       institutionId: req.user.institutionId,
@@ -143,7 +156,7 @@ router.post('/seed/bangladesh', authenticate, async (req: any, res) => {
     if (!canManageHolidays(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant/Admin can seed holidays.' });
     const year = Number(req.body.year || req.query.year || new Date().getFullYear());
     const includeWeekends = req.body.includeWeekends !== false;
-    const weeklyDays = Array.isArray(req.body.weeklyDays) ? req.body.weeklyDays.map(Number) : [5];
+    const weeklyDays = normalizeWeeklyDays(req.body.weeklyDays || DEFAULT_WEEKLY_DAYS);
 
     await Holiday.deleteMany({ institutionId: req.user.institutionId, academicYear: String(year), source: 'bangladesh_default' });
 
@@ -157,7 +170,7 @@ router.post('/seed/bangladesh', authenticate, async (req: any, res) => {
       );
       upserted += 1;
     }
-    res.status(201).json({ message: 'Bangladesh holiday list updated for this institution. Head can disable any holiday or all holidays.', year, upserted });
+    res.status(201).json({ message: `Bangladesh holiday list updated. Weekly holiday: ${weeklyDays.includes(5) ? 'Friday' : ''}${weeklyDays.includes(5) && weeklyDays.includes(6) ? ' + ' : ''}${weeklyDays.includes(6) ? 'Saturday' : ''}. Head can disable any holiday or all holidays.`, year, upserted, weeklyDays });
   } catch (error) {
     res.status(500).json({ message: 'Failed to seed Bangladesh holidays', error });
   }
