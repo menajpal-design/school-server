@@ -58,7 +58,7 @@ const allowedOrigins = [
   'https://easyschool.live',
   'https://www.easyschool.live',
   ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-].map((origin) => origin.replace(/\/$/, ''));
+].filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
 
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin) return true;
@@ -67,40 +67,47 @@ const isAllowedOrigin = (origin?: string): boolean => {
     allowedOrigins.includes(normalized) ||
     /^https?:\/\/(www\.)?easyschool\.live$/i.test(normalized) ||
     /^https?:\/\/[a-z0-9-]+\.easyschool\.live$/i.test(normalized) ||
-    /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(normalized)
+    /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(normalized) ||
+    /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)
   );
 };
 
-app.use((req, res, next) => {
+const setCorsHeaders = (req: express.Request, res: express.Response) => {
   const origin = req.headers.origin as string | undefined;
-  if (isAllowedOrigin(origin) && origin) {
+  if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Vary', 'Origin');
+  } else if (!origin) {
+    res.header('Access-Control-Allow-Origin', '*');
   }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-access-token');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-access-token, X-Access-Token');
+  res.header('Access-Control-Max-Age', '86400');
+};
+
+app.use((req, res, next) => {
+  setCorsHeaders(req, res);
+  if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
 
 const corsOptions: cors.CorsOptions = {
-  origin: (origin, callback) => {
-    if (isAllowedOrigin(origin || undefined)) return callback(null, true);
-    return callback(null, false);
-  },
+  origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'x-access-token'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'x-access-token', 'X-Access-Token'],
   optionsSuccessStatus: 204,
+  preflightContinue: false,
 };
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false });
 app.use(limiter);
 
 app.use('/api/auth', authRoutes);
@@ -137,20 +144,27 @@ app.use('/api/site-settings', siteSettingsRoutes);
 
 app.use('/uploads', express.static('uploads'));
 
-app.get('/api/health', (req, res) => { res.json({ status: 'OK', message: 'easy school Server is running' }); });
-app.get('/health', (req, res) => { res.json({ status: 'OK', message: 'easy school Server is running' }); });
+app.get('/api/health', (req, res) => { setCorsHeaders(req, res); res.json({ status: 'OK', message: 'easy school Server is running' }); });
+app.get('/health', (req, res) => { setCorsHeaders(req, res); res.json({ status: 'OK', message: 'easy school Server is running' }); });
 
 app.get('/', (req, res) => {
+  setCorsHeaders(req, res);
   res.json({
     message: 'easy school School Management System API',
     version: '1.0.0',
     status: 'running',
+    cors: 'enabled',
+    allowedOrigins,
     endpoints: {
       health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', syllabus: '/api/syllabus', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
   });
 });
 
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  setCorsHeaders(req, res);
+  next(err);
+});
 app.use(notFoundHandler);
 app.use(errorHandler);
 
