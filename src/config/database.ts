@@ -1,7 +1,5 @@
 import mongoose from 'mongoose';
 
-const COMPANY_MONGO_URI = 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0';
-
 const parseConnectionList = (value?: string | null): string[] => {
   if (!value) return [];
   return value
@@ -17,7 +15,6 @@ const getMongoUriCandidates = (): string[] => {
     process.env.MONGODB_URI,
     process.env.MONGODB_URI_PROD,
     process.env.DATABASE_URL,
-    COMPANY_MONGO_URI,
   ].flatMap((value) => parseConnectionList(value));
 };
 
@@ -28,64 +25,63 @@ const connectDB = async () => {
   if (mongoose.connection.readyState === 2 && connectionPromise) return connectionPromise;
 
   connectionPromise = (async () => {
-    try {
-      const mongoUris = getMongoUriCandidates();
+    const mongoUris = getMongoUriCandidates();
 
-      if (mongoUris.length === 0) {
-        console.warn('MONGO_URI not set; database features disabled');
-        return null;
-      }
-
-      const options: mongoose.ConnectOptions = {
-        maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10'),
-        serverSelectionTimeoutMS: 8000,
-        retryWrites: true,
-        dbName: process.env.MONGO_DB_NAME || 'easy_school',
-      };
-
-      for (const mongoUri of mongoUris) {
-        try {
-          const conn = await mongoose.connect(mongoUri, options);
-          console.log(`MongoDB Connected: ${conn.connection.host}`);
-          console.log(`Database: ${process.env.MONGO_DB_NAME || 'easy_school'}`);
-          return conn;
-        } catch (error) {
-          console.warn(`MongoDB connection failed for configured URI`);
-          console.warn(error);
-        }
-      }
-
-      console.error('All MongoDB URIs failed to connect');
+    if (mongoUris.length === 0) {
+      console.warn('No MongoDB URI configured. Set MONGO_URI or MONGODB_URI in Heroku Config Vars. Server will keep running, but DB routes will return empty/error data.');
       return null;
-    } catch (error) {
-      console.error('MongoDB Connection Error:', error);
-      console.error('Server will continue running without MongoDB connection');
-      return null;
-    } finally {
-      connectionPromise = null;
     }
+
+    const options: mongoose.ConnectOptions = {
+      maxPoolSize: Number(process.env.MONGO_POOL_SIZE || 10),
+      serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 10000),
+      connectTimeoutMS: Number(process.env.MONGO_CONNECT_TIMEOUT_MS || 10000),
+      socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),
+      retryWrites: true,
+      dbName: process.env.MONGO_DB_NAME || undefined,
+    };
+
+    for (const mongoUri of mongoUris) {
+      try {
+        const conn = await mongoose.connect(mongoUri, options);
+        console.log(`MongoDB Connected: ${conn.connection.host}`);
+        return conn;
+      } catch (error: any) {
+        console.warn('MongoDB connection failed for one configured URI:', error?.message || error);
+      }
+    }
+
+    console.error('All configured MongoDB URIs failed. Server will continue running without DB connection.');
+    return null;
   })();
 
-  return connectionPromise;
+  try {
+    return await connectionPromise;
+  } finally {
+    connectionPromise = null;
+  }
 };
 
+mongoose.connection.on('error', (error) => {
+  console.error('MongoDB runtime error:', error?.message || error);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.warn('MongoDB disconnected. API will keep running and reconnect on demand.');
+});
+
 export default connectDB;
-
 export const isDatabaseConnected = (): boolean => mongoose.connection.readyState === 1;
-
 export const waitForDatabaseReady = async (timeoutMs = 15000, intervalMs = 250): Promise<boolean> => {
   const deadline = Date.now() + timeoutMs;
-
   while (Date.now() < deadline) {
     if (mongoose.connection.readyState === 1) return true;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-
   return mongoose.connection.readyState === 1;
 };
-
 export const ensureDatabaseReady = async (): Promise<boolean> => {
   if (isDatabaseConnected()) return true;
   await connectDB();
-  return waitForDatabaseReady();
+  return waitForDatabaseReady(Number(process.env.DB_READY_TIMEOUT_MS || 5000));
 };
