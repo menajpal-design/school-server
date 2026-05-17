@@ -60,6 +60,20 @@ const allowedOrigins = [
   ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
 ].filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
 
+const allowedHeaders = [
+  'Origin',
+  'X-Requested-With',
+  'Content-Type',
+  'Accept',
+  'Authorization',
+  'x-access-token',
+  'X-Access-Token',
+  'x-institution-id',
+  'X-Institution-Id',
+  'x-school-id',
+  'X-School-Id',
+].join(', ');
+
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin) return true;
   const normalized = origin.replace(/\/$/, '');
@@ -82,7 +96,7 @@ const setCorsHeaders = (req: Request, res: Response) => {
   }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-access-token, X-Access-Token');
+  res.header('Access-Control-Allow-Headers', allowedHeaders);
   res.header('Access-Control-Max-Age', '86400');
 };
 
@@ -96,7 +110,7 @@ const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'x-access-token', 'X-Access-Token'],
+  allowedHeaders: allowedHeaders.split(', '),
   optionsSuccessStatus: 204,
   preflightContinue: false,
 };
@@ -154,6 +168,7 @@ app.get('/', (req, res) => {
     status: 'running',
     cors: 'enabled',
     allowedOrigins,
+    allowedHeaders,
     endpoints: {
       health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', syllabus: '/api/syllabus', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
