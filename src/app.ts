@@ -37,53 +37,33 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3001',
-  process.env.MOBILE_URL || 'http://localhost:8081',
-  process.env.ANDROID_URL || 'http://localhost:8082',
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
-  'http://localhost:8082',
-  'http://127.0.0.1:8082',
-  'https://school-client-447e7d0e2388.herokuapp.com',
-  'https://www.school-client-447e7d0e2388.herokuapp.com',
-  'https://school-client.herokuapp.com',
-  'https://www.school-client.herokuapp.com',
-  'http://easyschool.live',
-  'http://www.easyschool.live',
-  'https://easyschool.live',
-  'https://www.easyschool.live',
-  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-].filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
+const splitEnv = (value?: string) => (value || '').split(',').map((item) => item.trim().replace(/\/$/, '')).filter(Boolean);
+const isProduction = process.env.NODE_ENV === 'production';
+const devOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
 
-const allowedHeaders = [
-  'Origin',
-  'X-Requested-With',
-  'Content-Type',
-  'Accept',
-  'Authorization',
-  'x-access-token',
-  'X-Access-Token',
-  'x-institution-id',
-  'X-Institution-Id',
-  'x-school-id',
-  'X-School-Id',
-].join(', ');
+// Production domains must come from Heroku Config Vars / .env:
+// ALLOWED_ORIGINS=https://www.easyschool.live,https://easyschool.live
+const allowedOrigins = Array.from(new Set([
+  ...splitEnv(process.env.ALLOWED_ORIGINS),
+  ...splitEnv(process.env.FRONTEND_URL),
+  ...splitEnv(process.env.MOBILE_URL),
+  ...splitEnv(process.env.ANDROID_URL),
+  ...(isProduction ? [] : devOrigins),
+]));
+
+const allowedHeaders = Array.from(new Set([
+  'Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization',
+  'x-access-token', 'X-Access-Token', 'x-institution-id', 'X-Institution-Id',
+  'x-school-id', 'X-School-Id',
+  ...splitEnv(process.env.CORS_ALLOWED_HEADERS),
+])).join(', ');
 
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin) return true;
   const normalized = origin.replace(/\/$/, '');
-  return (
-    allowedOrigins.includes(normalized) ||
-    /^https?:\/\/(www\.)?easyschool\.live$/i.test(normalized) ||
-    /^https?:\/\/[a-z0-9-]+\.easyschool\.live$/i.test(normalized) ||
-    /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(normalized) ||
-    /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)
-  );
+  if (allowedOrigins.includes(normalized)) return true;
+  if (!isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
+  return false;
 };
 
 const setCorsHeaders = (req: Request, res: Response) => {
@@ -91,13 +71,12 @@ const setCorsHeaders = (req: Request, res: Response) => {
   if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Vary', 'Origin');
-  } else if (!origin) {
-    res.header('Access-Control-Allow-Origin', '*');
   }
+  if (!origin && !isProduction) res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.header('Access-Control-Allow-Headers', allowedHeaders);
-  res.header('Access-Control-Max-Age', '86400');
+  res.header('Access-Control-Max-Age', process.env.CORS_MAX_AGE || '86400');
 };
 
 app.use((req, res, next) => {
@@ -112,15 +91,14 @@ const corsOptions: cors.CorsOptions = {
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: allowedHeaders.split(', '),
   optionsSuccessStatus: 204,
-  preflightContinue: false,
 };
 
 app.use(cors(corsOptions));
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '50mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.RATE_LIMIT_MAX || 300), standardHeaders: true, legacyHeaders: false });
 app.use(limiter);
 
 app.use('/api/auth', authRoutes);
@@ -166,12 +144,9 @@ app.get('/', (req, res) => {
     message: 'easy school School Management System API',
     version: '1.0.0',
     status: 'running',
-    cors: 'enabled',
-    allowedOrigins,
-    allowedHeaders,
-    endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', syllabus: '/api/syllabus', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
-    },
+    cors: 'env-controlled',
+    allowedOriginsCount: allowedOrigins.length,
+    endpoints: { health: '/api/health', auth: '/api/auth', users: '/api/users', academic: '/api/academic', syllabus: '/api/syllabus' },
   });
 });
 
