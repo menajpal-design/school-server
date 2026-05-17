@@ -7,7 +7,7 @@ export interface IAttendance extends Document {
   classId?: mongoose.Types.ObjectId;
   sectionId?: mongoose.Types.ObjectId;
   date: Date;
-  status: 'present' | 'absent' | 'late' | 'leave';
+  status: 'present' | 'absent' | 'late' | 'leave' | 'holiday';
   markedBy: mongoose.Types.ObjectId;
   markedAt: Date;
   notes?: string;
@@ -23,7 +23,7 @@ const AttendanceSchema: Schema = new Schema({
   classId: { type: Schema.Types.ObjectId, ref: 'Class' },
   sectionId: { type: Schema.Types.ObjectId, ref: 'Section' },
   date: { type: Date, required: true },
-  status: { type: String, enum: ['present', 'absent', 'late', 'leave'], required: true },
+  status: { type: String, enum: ['present', 'absent', 'late', 'leave', 'holiday'], required: true },
   markedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   markedAt: { type: Date, default: Date.now },
   notes: { type: String, trim: true },
@@ -32,7 +32,6 @@ const AttendanceSchema: Schema = new Schema({
   timestamps: true
 });
 
-// Indexes
 AttendanceSchema.index({ studentId: 1, date: 1 });
 AttendanceSchema.index({ studentId: 1, date: 1, classId: 1, sectionId: 1 }, { unique: true });
 AttendanceSchema.index({ userId: 1, userType: 1, date: 1 });
