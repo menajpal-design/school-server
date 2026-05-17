@@ -12,6 +12,7 @@ import academicRoutes from './routes/academic';
 import classRoutineRoutes from './routes/classRoutine';
 import attendanceRoutes from './routes/attendance';
 import leaveRoutes from './routes/leaves';
+import holidayRoutes from './routes/holidays';
 import financeRoutes from './routes/finance';
 import payrollRoutes from './routes/payroll';
 import promotionRoutes from './routes/promotions';
@@ -110,6 +111,7 @@ app.use('/api/academic', academicRoutes);
 app.use('/api/class-routines', classRoutineRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/leaves', leaveRoutes);
+app.use('/api/holidays', holidayRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/promotions', promotionRoutes);
@@ -140,7 +142,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
   });
 });
