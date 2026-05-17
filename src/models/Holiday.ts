@@ -8,6 +8,8 @@ export interface IHoliday extends Document {
   endDate: Date;
   description?: string;
   isSchoolClosed: boolean;
+  isEnabled: boolean;
+  source?: 'bangladesh_default' | 'institution_custom' | 'manual';
   color?: string;
   academicYear?: string;
   institutionId: mongoose.Types.ObjectId;
@@ -24,6 +26,8 @@ const HolidaySchema: Schema = new Schema({
   endDate: { type: Date, required: true },
   description: { type: String, trim: true },
   isSchoolClosed: { type: Boolean, default: true },
+  isEnabled: { type: Boolean, default: true },
+  source: { type: String, enum: ['bangladesh_default', 'institution_custom', 'manual'], default: 'manual' },
   color: { type: String, default: '#ef4444' },
   academicYear: { type: String },
   institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true },
@@ -31,6 +35,7 @@ const HolidaySchema: Schema = new Schema({
 }, { timestamps: true });
 
 HolidaySchema.index({ institutionId: 1, startDate: 1, endDate: 1 });
+HolidaySchema.index({ institutionId: 1, academicYear: 1, source: 1 });
 HolidaySchema.index({ institutionId: 1, title: 1, startDate: 1 }, { unique: true });
 
 export default mongoose.model<IHoliday>('Holiday', HolidaySchema);
