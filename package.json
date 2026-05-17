@@ -2,9 +2,9 @@
   "name": "easy-school-server",
   "version": "1.0.0",
   "description": "easy school School Management System Backend",
-  "main": "index.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node dist/server.js",
+    "start": "node --enable-source-maps dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "heroku-postbuild": "npm run build",
@@ -38,7 +38,7 @@
     "@types/jsonwebtoken": "^9.0.3",
     "@types/multer": "^1.4.8",
     "@types/cors": "^2.8.13",
-    "@types/node": "^20.5.7",
+    "@types/node": "^22.0.0",
     "@types/pdfkit": "^0.13.1",
     "@types/qrcode": "^1.5.2",
     "@types/uuid": "^9.0.4",
@@ -52,6 +52,6 @@
   "author": "EasySholl",
   "license": "ISC",
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   }
 }
