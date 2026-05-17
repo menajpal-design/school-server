@@ -34,15 +34,7 @@ const endOfDate = (value?: string) => {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 };
 
-const rangeHoliday = (title: string, titleBn: string, startDate: string, endDate: string, type: HolidaySeed['type'], color: string, description?: string): HolidaySeed => ({
-  title,
-  titleBn,
-  startDate,
-  endDate,
-  type,
-  color,
-  description,
-});
+const rangeHoliday = (title: string, titleBn: string, startDate: string, endDate: string, type: HolidaySeed['type'], color: string, description?: string): HolidaySeed => ({ title, titleBn, startDate, endDate, type, color, description });
 
 const defaultBangladeshHolidays = (year: number): HolidaySeed[] => {
   if (year === 2026) {
@@ -54,7 +46,7 @@ const defaultBangladeshHolidays = (year: number): HolidaySeed[] => {
       rangeHoliday('Jumatul Bida', 'জুমাতুল বিদা', '2026-03-20', '2026-03-20', 'religious', '#8b5cf6', 'General holiday; overlaps Eid holiday block.'),
       rangeHoliday('Eid-ul-Fitr', 'ঈদুল ফিতর', '2026-03-21', '2026-03-21', 'religious', '#0ea5e9', 'General Eid holiday; overlaps Eid holiday block.'),
       rangeHoliday('Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', '2026-03-26', '2026-03-26', 'government', '#16a34a', 'General holiday.'),
-      rangeHoliday('Chaitra Sankranti', 'চৈত্র সংক্রান্তি', '2026-04-13', '2026-04-13', 'government', '#f97316', 'Bangladesh official/bank holiday list item; editable by institution.'),
+      rangeHoliday('Chaitra Sankranti', 'চৈত্র সংক্রান্তি', '2026-04-13', '2026-04-13', 'government', '#f97316', 'Editable Bangladesh school/bank holiday item.'),
       rangeHoliday('Bengali New Year', 'বাংলা নববর্ষ / পহেলা বৈশাখ', '2026-04-14', '2026-04-14', 'government', '#f97316', 'Executive order holiday.'),
       rangeHoliday('May Day', 'মে দিবস', '2026-05-01', '2026-05-01', 'government', '#64748b', 'General holiday.'),
       rangeHoliday('Buddha Purnima', 'বুদ্ধ পূর্ণিমা', '2026-05-01', '2026-05-01', 'religious', '#f59e0b', 'General holiday; overlaps May Day.'),
@@ -71,7 +63,6 @@ const defaultBangladeshHolidays = (year: number): HolidaySeed[] => {
     ];
   }
 
-  // For other years, only fixed national holidays are seeded. Moon-based holidays should be edited by the institution after the official circular is published.
   return [
     rangeHoliday('Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', `${year}-02-21`, `${year}-02-21`, 'government', '#ef4444'),
     rangeHoliday('Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', `${year}-03-26`, `${year}-03-26`, 'government', '#16a34a'),
@@ -96,15 +87,33 @@ const weekendHolidays = (year: number, weeklyDays: number[] = [5]): HolidaySeed[
   return items;
 };
 
+const ensureBangladeshHolidays = async (institutionId: any, year: number, createdBy?: any, includeWeekends = true, weeklyDays: number[] = [5]) => {
+  const existingCount = await Holiday.countDocuments({ institutionId, academicYear: String(year), source: 'bangladesh_default' });
+  if (existingCount > 0) return { created: 0, skipped: true };
+  const source = [...defaultBangladeshHolidays(year), ...(includeWeekends ? weekendHolidays(year, weeklyDays) : [])];
+  let created = 0;
+  for (const item of source) {
+    await Holiday.findOneAndUpdate(
+      { institutionId, title: item.title, startDate: dateOnly(item.startDate) },
+      { $setOnInsert: { ...item, startDate: dateOnly(item.startDate), endDate: endOfDate(item.endDate), isSchoolClosed: true, isEnabled: true, source: 'bangladesh_default', academicYear: String(year), institutionId, createdBy } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    created += 1;
+  }
+  return { created, skipped: false };
+};
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const year = Number(req.query.year || new Date().getFullYear());
+    const autoSeed = req.query.autoSeed !== 'false';
+    if (autoSeed) await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, [5]);
     const start = new Date(year, 0, 1);
     const end = new Date(year, 11, 31, 23, 59, 59, 999);
     const query: any = { institutionId: req.user.institutionId, startDate: { $lte: end }, endDate: { $gte: start } };
     if (req.query.type) query.type = req.query.type;
     const holidays = await Holiday.find(query).sort({ startDate: 1 }).lean();
-    res.json({ holidays });
+    res.json({ holidays, autoSeeded: autoSeed });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load holidays', error });
   }
@@ -112,11 +121,15 @@ router.get('/', authenticate, async (req: any, res) => {
 
 router.get('/check', authenticate, async (req: any, res) => {
   try {
-    const date = dateOnly(req.query.date as string | undefined);
+    const targetDate = req.query.date as string | undefined;
+    const year = targetDate ? parseDateOnly(targetDate).getFullYear() : new Date().getFullYear();
+    await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, [5]);
+    const date = dateOnly(targetDate);
     const holiday = await Holiday.findOne({
       institutionId: req.user.institutionId,
+      isEnabled: { $ne: false },
       isSchoolClosed: true,
-      startDate: { $lte: endOfDate(req.query.date as string | undefined) },
+      startDate: { $lte: endOfDate(targetDate) },
       endDate: { $gte: date },
     }).lean();
     res.json({ isHoliday: !!holiday, holiday });
@@ -132,31 +145,33 @@ router.post('/seed/bangladesh', authenticate, async (req: any, res) => {
     const includeWeekends = req.body.includeWeekends !== false;
     const weeklyDays = Array.isArray(req.body.weeklyDays) ? req.body.weeklyDays.map(Number) : [5];
 
-    await Holiday.deleteMany({
-      institutionId: req.user.institutionId,
-      academicYear: String(year),
-      type: { $in: ['government', 'religious', 'weekend'] },
-    });
+    await Holiday.deleteMany({ institutionId: req.user.institutionId, academicYear: String(year), source: 'bangladesh_default' });
 
     const source = [...defaultBangladeshHolidays(year), ...(includeWeekends ? weekendHolidays(year, weeklyDays) : [])];
     let upserted = 0;
     for (const item of source) {
       await Holiday.findOneAndUpdate(
         { institutionId: req.user.institutionId, title: item.title, startDate: dateOnly(item.startDate) },
-        { $set: { ...item, startDate: dateOnly(item.startDate), endDate: endOfDate(item.endDate), isSchoolClosed: true, academicYear: String(year), institutionId: req.user.institutionId, createdBy: req.user._id } },
+        { $set: { ...item, startDate: dateOnly(item.startDate), endDate: endOfDate(item.endDate), isSchoolClosed: true, isEnabled: true, source: 'bangladesh_default', academicYear: String(year), institutionId: req.user.institutionId, createdBy: req.user._id } },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       upserted += 1;
     }
-    res.status(201).json({
-      message: year === 2026
-        ? 'Bangladesh 2026 official holiday list updated. School will be off on these dates and attendance will be marked as holiday, not present/absent.'
-        : 'Fixed Bangladesh national holidays added. Please edit moon-based holidays after the official circular is published.',
-      year,
-      upserted,
-    });
+    res.status(201).json({ message: 'Bangladesh holiday list updated for this institution. Head can disable any holiday or all holidays.', year, upserted });
   } catch (error) {
     res.status(500).json({ message: 'Failed to seed Bangladesh holidays', error });
+  }
+});
+
+router.patch('/bulk-status', authenticate, async (req: any, res) => {
+  try {
+    if (!canManageHolidays(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant/Admin can update holidays.' });
+    const year = Number(req.body.year || new Date().getFullYear());
+    const isEnabled = req.body.isEnabled !== false;
+    const result = await Holiday.updateMany({ institutionId: req.user.institutionId, academicYear: String(year), source: 'bangladesh_default' }, { $set: { isEnabled, isSchoolClosed: isEnabled } });
+    res.json({ message: isEnabled ? 'All Bangladesh holidays enabled.' : 'All Bangladesh holidays disabled/opened for school.', modified: result.modifiedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update all holidays', error });
   }
 });
 
@@ -171,6 +186,8 @@ router.post('/', authenticate, async (req: any, res) => {
       endDate: endOfDate(req.body.endDate || req.body.startDate),
       description: req.body.description,
       isSchoolClosed: req.body.isSchoolClosed !== false,
+      isEnabled: req.body.isEnabled !== false,
+      source: 'institution_custom',
       color: req.body.color || '#ef4444',
       academicYear: req.body.academicYear || String(new Date(req.body.startDate || Date.now()).getFullYear()),
       institutionId: req.user.institutionId,
@@ -188,6 +205,7 @@ router.put('/:id', authenticate, async (req: any, res) => {
     const update: any = { ...req.body };
     if (req.body.startDate) update.startDate = dateOnly(req.body.startDate);
     if (req.body.endDate || req.body.startDate) update.endDate = endOfDate(req.body.endDate || req.body.startDate);
+    if (req.body.isEnabled === false) update.isSchoolClosed = false;
     const holiday = await Holiday.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: update }, { new: true });
     if (!holiday) return res.status(404).json({ message: 'Holiday not found' });
     res.json({ holiday });
@@ -199,11 +217,11 @@ router.put('/:id', authenticate, async (req: any, res) => {
 router.delete('/:id', authenticate, async (req: any, res) => {
   try {
     if (!canManageHolidays(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant/Admin can delete holidays.' });
-    const holiday = await Holiday.findOneAndDelete({ _id: req.params.id, institutionId: req.user.institutionId });
+    const holiday = await Holiday.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: { isEnabled: false, isSchoolClosed: false } }, { new: true });
     if (!holiday) return res.status(404).json({ message: 'Holiday not found' });
-    res.json({ message: 'Holiday deleted' });
+    res.json({ message: 'Holiday disabled for this institution', holiday });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to delete holiday', error });
+    res.status(500).json({ message: 'Failed to disable holiday', error });
   }
 });
 
