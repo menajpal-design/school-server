@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -72,7 +72,7 @@ const isAllowedOrigin = (origin?: string): boolean => {
   );
 };
 
-const setCorsHeaders = (req: express.Request, res: express.Response) => {
+const setCorsHeaders = (req: Request, res: Response) => {
   const origin = req.headers.origin as string | undefined;
   if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
@@ -102,7 +102,6 @@ const corsOptions: cors.CorsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -161,7 +160,7 @@ app.get('/', (req, res) => {
   });
 });
 
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   setCorsHeaders(req, res);
   next(err);
 });
