@@ -50,8 +50,8 @@
   },
   "keywords": ["school", "management", "easy school"],
   "author": "EasySholl",
-  "license": "ISC"
-  ,"engines": {
-    "node": "18.x"
+  "license": "ISC",
+  "engines": {
+    "node": "20.x"
   }
 }
