@@ -10,6 +10,7 @@ import studentRoutes from './routes/students';
 import teacherRoutes from './routes/teachers';
 import staffRoutes from './routes/staff';
 import academicRoutes from './routes/academic';
+import syllabusRoutes from './routes/syllabus';
 import classRoutineRoutes from './routes/classRoutine';
 import attendanceRoutes from './routes/attendance';
 import leaveRoutes from './routes/leaves';
@@ -110,6 +111,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/academic', academicRoutes);
+app.use('/api/syllabus', syllabusRoutes);
 app.use('/api/class-routines', classRoutineRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/leaves', leaveRoutes);
@@ -144,7 +146,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     endpoints: {
-      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
+      health: '/api/health', auth: '/api/auth', users: '/api/users', students: '/api/students', teachers: '/api/teachers', demoResults: '/api/demo-results', syllabus: '/api/syllabus', payroll: '/api/payroll', promotions: '/api/promotions', classRoutines: '/api/class-routines', leaves: '/api/leaves', holidays: '/api/holidays', messages: '/api/messages', siteSettings: '/api/site-settings', sms: '/api/sms',
     },
   });
 });
