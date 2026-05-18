@@ -101,19 +101,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use((req, res, next) => {
-  const timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 25000);
-  const timer = setTimeout(() => {
-    if (!res.headersSent) {
-      setCorsHeaders(req, res);
-      res.status(504).json({ message: 'Request timed out before Heroku limit. Please try again.', code: 'REQUEST_TIMEOUT' });
-    }
-  }, timeoutMs);
-  res.on('finish', () => clearTimeout(timer));
-  res.on('close', () => clearTimeout(timer));
-  next();
-});
-
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)),
   credentials: true,
