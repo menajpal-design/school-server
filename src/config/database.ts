@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { getAppConfig } from './config';
 
 const parseConnectionList = (value?: string | null): string[] => {
   if (!value) return [];
@@ -9,12 +10,16 @@ const parseConnectionList = (value?: string | null): string[] => {
 };
 
 const getMongoUriCandidates = (): string[] => {
+    const appCfg = getAppConfig();
+
   return [
     process.env.MONGO_URIS,
     process.env.MONGO_URI,
     process.env.MONGODB_URI,
     process.env.MONGODB_URI_PROD,
     process.env.DATABASE_URL,
+        appCfg.mongoUri,
+
   ].flatMap((value) => parseConnectionList(value));
 };
 
