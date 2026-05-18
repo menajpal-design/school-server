@@ -7,6 +7,8 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/', getNotifications);
+router.patch('/:id/read', markAsRead);
+router.patch('/read-all', markAllRead);
 router.post('/mark-read', markAsRead);
 router.post('/mark-all', markAllRead);
 

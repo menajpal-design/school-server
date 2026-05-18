@@ -23,7 +23,7 @@ export const getNotifications = async (req: Request, res: Response) => {
 
 export const markAsRead = async (req: Request, res: Response) => {
   try {
-    const { id } = req.body;
+    const id = req.params.id || req.body.id;
     const institutionId = req.user.institutionId;
     if (!id) return res.status(400).json({ message: 'Notification id required' });
 
