@@ -92,7 +92,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const platformAdmin = isPlatformAdminRole(user.role);
     const schoolActive = institution?.isActive !== false;
     const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
-    if (!platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
+    const isDevelopment = (process.env.NODE_ENV || 'development') !== 'production';
+    if (!isDevelopment && !platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
       const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
       return res.status(403).json({ message });
     }

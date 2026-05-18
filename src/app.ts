@@ -26,6 +26,7 @@ import messageRoutes from './routes/messages';
 import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
 import smsMonitoringRoutes from './routes/smsMonitoring';
+import libraryRoutes from './routes/library';
 import SmsLog from './models/SmsLog';
 import { config } from './config/config';
 import './config/tenantStorage';
@@ -148,6 +149,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/sms-monitoring', smsMonitoringRoutes);
+app.use('/api/library', libraryRoutes);
 
 // Static files
 app.use('/uploads', express.static('uploads'));

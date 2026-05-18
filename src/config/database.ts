@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
 const COMPANY_MONGO_URI = 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0';
+const LOCAL_MONGO_URI = 'mongodb://127.0.0.1:27017/easy_school';
 
 const parseConnectionList = (value?: string | null): string[] => {
   if (!value) return [];
@@ -11,14 +12,20 @@ const parseConnectionList = (value?: string | null): string[] => {
 };
 
 const getMongoUriCandidates = (): string[] => {
-  return [
+  const candidates = [
     process.env.MONGO_URIS,
     process.env.MONGO_URI,
     process.env.MONGODB_URI,
     process.env.MONGODB_URI_PROD,
     process.env.DATABASE_URL,
-    COMPANY_MONGO_URI,
   ].flatMap((value) => parseConnectionList(value));
+
+  if ((process.env.NODE_ENV || 'development') !== 'production') {
+    candidates.unshift(LOCAL_MONGO_URI);
+  }
+
+  candidates.push(COMPANY_MONGO_URI);
+  return candidates;
 };
 
 let connectionPromise: Promise<typeof mongoose | null> | null = null;
