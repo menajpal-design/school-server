@@ -179,7 +179,7 @@ export const login = async (req: Request, res: Response) => {
         { username: emailQuery.toLowerCase() },
         { phone: identifier },
       ],
-    }).populate('institutionId');
+    }).populate('institutionId').maxTimeMS(5000);
 
     console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
 
@@ -194,12 +194,12 @@ export const login = async (req: Request, res: Response) => {
           { guardianEmail: emailQuery },
         ],
         isActive: true,
-      }).select('userId');
+      }).select('userId').maxTimeMS(5000);
 
       console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
 
       if (student?.userId) {
-        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId').maxTimeMS(5000);
         console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
         isMatch = user ? await bcrypt.compare(password, user.password) : false;
       }
@@ -215,8 +215,9 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Update last login
-    user.lastLogin = new Date();
-    await user.save();
+    User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } }).maxTimeMS(3000).exec().catch((error) => {
+      console.warn('Last login update failed:', error?.message || error);
+    });
 
     // Generate token
     const token = jwt.sign({ id: user._id }, jwtSecret(), {
@@ -245,7 +246,7 @@ export const login = async (req: Request, res: Response) => {
 
 export const getProfile = async (req: Request, res: Response) => {
   try {
-    const user = await User.findById((req as any).user._id).populate('institutionId');
+    const user = await User.findById((req as any).user._id).populate('institutionId').maxTimeMS(5000);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }

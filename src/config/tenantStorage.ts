@@ -123,11 +123,12 @@ const getTenantModel = async (baseModel: any, context: TenantStorageContext | nu
 
 const mirrorPrimaryDocument = async (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
   if (!context?.mongoUri || !baseModel?.modelName || !primaryMirrorModels.has(baseModel.modelName) || !doc?._id) return;
+  if (baseModel.db !== mongoose.connection) return;
   const connection = await getTenantConnection(context);
   if (!connection) return;
   const mirrorModel = registerModel(connection, baseModel);
   if (!mirrorModel) return;
-  await mirrorModel.updateOne({ _id: doc._id }, { $set: getDocumentObject(doc) }, { upsert: true }).exec();
+  await mirrorModel.collection.updateOne({ _id: doc._id }, { $set: getDocumentObject(doc) }, { upsert: true });
 };
 
 const schedulePrimaryMirror = (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
@@ -202,7 +203,7 @@ export const installTenantStoragePatches = () => {
       this.maxTimeMS(tenantQueryMaxTimeMs);
     }
     const result = await originalQueryExec.apply(this, args as any);
-    if (!tenantModel && context?.mongoUri && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) {
+    if (!tenantModel && context?.mongoUri && this.model?.db === mongoose.connection && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) {
       schedulePrimaryMirror(this.model, result, context);
     }
     return result;
@@ -233,7 +234,7 @@ export const installTenantStoragePatches = () => {
     }
 
     const saved = await originalSave.apply(this, args as any);
-    if (context?.mongoUri && primaryMirrorModels.has(this.constructor?.modelName)) {
+    if (context?.mongoUri && this.constructor?.db === mongoose.connection && primaryMirrorModels.has(this.constructor?.modelName)) {
       schedulePrimaryMirror(this.constructor, saved, context);
     }
     return saved;

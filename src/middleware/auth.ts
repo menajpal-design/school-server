@@ -23,7 +23,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const user = await User.findById(decoded.id).populate('institutionId');
+    const user = await User.findById(decoded.id).populate('institutionId').maxTimeMS(5000);
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
