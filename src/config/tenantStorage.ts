@@ -42,6 +42,8 @@ const schoolDataModels = new Set([
 const primaryMirrorModels = new Set(['User', 'Institution']);
 const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
 const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>();
+const tenantConnectionFailures = new Map<string, number>();
+const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 60000);
 let patchesInstalled = false;
 
 const getDocumentObject = (doc: any) => {
@@ -70,6 +72,8 @@ const registerBridgeModels = (connection: mongoose.Connection) => {
 const getTenantConnection = async (context: TenantStorageContext) => {
   if (!context.mongoUri) return null;
   const key = `${context.institutionId}:${context.mongoUri}`;
+  const failedAt = tenantConnectionFailures.get(key) || 0;
+  if (failedAt && Date.now() - failedAt < tenantConnectionRetryMs) return null;
   if (!tenantConnections.has(key)) {
     tenantConnections.set(key, mongoose.createConnection(context.mongoUri, {
       maxPoolSize: Number(process.env.TENANT_MONGO_POOL_SIZE || 5),
@@ -78,10 +82,12 @@ const getTenantConnection = async (context: TenantStorageContext) => {
       socketTimeoutMS: Number(process.env.TENANT_MONGO_SOCKET_TIMEOUT_MS || 15000),
       retryWrites: true,
     }).asPromise().then((connection) => {
+      tenantConnectionFailures.delete(key);
       registerBridgeModels(connection);
       return connection;
     }).catch((error) => {
       tenantConnections.delete(key);
+      tenantConnectionFailures.set(key, Date.now());
       console.warn('Tenant Mongo connection failed:', error?.message || error);
       return null;
     }));
