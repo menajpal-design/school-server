@@ -194,3 +194,7 @@ export const config = (): Config => {
 export const reloadConfig = (): void => {
   configInstance = null;
 };
+
+// Backwards-compatibility alias: some older deployments import `getAppConfig`
+// Use this alias to avoid build failures when older code expects that name.
+export const getAppConfig = getConfig;
