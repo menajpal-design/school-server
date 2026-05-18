@@ -35,18 +35,6 @@ const app = express();
 app.set('trust proxy', 1);
 const cfg = config();
 
-const setRequestTimeout = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS || 25000);
-  const timer = setTimeout(() => {
-    if (!res.headersSent) {
-      res.status(504).json({ message: 'Request timed out before Heroku limit. Please try again.', code: 'REQUEST_TIMEOUT' });
-    }
-  }, timeoutMs);
-  res.on('finish', () => clearTimeout(timer));
-  res.on('close', () => clearTimeout(timer));
-  next();
-};
-
 // Parse comma-separated allowed origins from environment variable
 const parseAllowedOrigins = (): string[] => {
   const baseOrigins = [
@@ -125,7 +113,6 @@ const corsOptions: cors.CorsOptions = {
 app.use(helmet());
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-app.use(setRequestTimeout);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

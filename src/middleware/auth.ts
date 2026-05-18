@@ -2,7 +2,6 @@ import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
 import Institution from '../models/Institution';
-import { expireInstitutionIfNeeded } from '../services/billingService';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 interface AuthRequest extends Request {
@@ -10,9 +9,48 @@ interface AuthRequest extends Request {
 }
 
 const platformAdminRoles = ['admin', 'super_admin'];
+const authQueryTimeoutMs = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 4000);
+const authQueryMaxTimeMs = Number(process.env.AUTH_QUERY_MAX_TIME_MS || 3000);
 
 const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(role || '');
 const isPrivilegedRole = (role?: string) => role === 'head' || platformAdminRoles.includes(role || '');
+
+const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), authQueryTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const expireInstitutionSnapshotIfNeeded = (institution: any) => {
+  if (!institution?.billing?.expiresAt || institution.billing.billingStatus === 'expired') {
+    return institution;
+  }
+
+  if (new Date(institution.billing.expiresAt) <= new Date()) {
+    institution.isActive = false;
+    institution.billing = {
+      ...institution.billing,
+      billingStatus: 'expired',
+    };
+
+    Institution.updateOne(
+      { _id: institution._id },
+      { $set: { isActive: false, 'billing.billingStatus': 'expired' } }
+    ).maxTimeMS(authQueryMaxTimeMs).exec().catch((error) => {
+      console.warn('Institution expiry update failed:', error?.message || error);
+    });
+  }
+
+  return institution;
+};
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -23,22 +61,34 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const user = await User.findById(decoded.id).populate('institutionId').maxTimeMS(5000);
+    const user = await withAuthTimeout(
+      User.findById(decoded.id).select('-password').lean().maxTimeMS(authQueryMaxTimeMs).exec(),
+      'Auth user lookup'
+    );
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
     }
 
+    let institution = user.institutionId
+      ? await withAuthTimeout(
+        Institution.findById(user.institutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
+        'Auth institution lookup'
+      )
+      : null;
+
     const selectedInstitutionId = req.header('x-institution-id');
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
-      const institution = await Institution.findById(selectedInstitutionId);
-      if (institution) {
-        user.institutionId = institution as any;
+      const selectedInstitution = await withAuthTimeout(
+        Institution.findById(selectedInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
+        'Selected institution lookup'
+      );
+      if (selectedInstitution) {
+        institution = selectedInstitution;
       }
     }
 
-    let institution = user.institutionId as any;
-    institution = await expireInstitutionIfNeeded(institution);
+    institution = expireInstitutionSnapshotIfNeeded(institution);
     const platformAdmin = isPlatformAdminRole(user.role);
     const schoolActive = institution?.isActive !== false;
     const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
@@ -46,15 +96,22 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
       return res.status(403).json({ message });
     }
-    if (institution?._id) {
-      user.institutionId = institution._id as any;
-    }
+    const requestUser = {
+      ...user,
+      institutionId: institution?._id || user.institutionId,
+      institution,
+    };
 
-    req.user = user;
+    req.user = requestUser;
+    (req as any).institution = institution;
     const tenantContext = resolveTenantStorageContext(institution);
-    runWithTenantStorage(tenantContext, () => next(), user, institution);
-  } catch (error) {
-    res.status(401).json({ message: 'Invalid token.' });
+    runWithTenantStorage(tenantContext, () => next(), requestUser, institution);
+  } catch (error: any) {
+    const message = error?.name === 'JsonWebTokenError' || error?.name === 'TokenExpiredError'
+      ? 'Invalid token.'
+      : error?.message || 'Authentication failed.';
+    const status = message === 'Invalid token.' ? 401 : 500;
+    res.status(status).json({ message });
   }
 };
 

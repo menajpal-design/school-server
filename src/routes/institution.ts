@@ -56,7 +56,7 @@ router.get('/plans', (req, res) => {
 
 router.get('/profile', authenticate, async (req, res) => {
   try {
-    const institution = await Institution.findById(req.user.institutionId).populate('headId', 'name email phone avatar');
+    const institution = (req as any).institution || await Institution.findById(req.user.institutionId).lean().maxTimeMS(3000);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
     res.json({ institution });
   } catch (error) {

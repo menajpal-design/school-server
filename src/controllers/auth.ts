@@ -246,11 +246,12 @@ export const login = async (req: Request, res: Response) => {
 
 export const getProfile = async (req: Request, res: Response) => {
   try {
-    const user = await User.findById((req as any).user._id).populate('institutionId').maxTimeMS(5000);
+    const user = (req as any).user;
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const institution = (req as any).institution || user.institution;
     res.json({
       user: {
         id: user._id,
@@ -259,8 +260,8 @@ export const getProfile = async (req: Request, res: Response) => {
         role: user.role,
         phone: user.phone,
         avatar: user.avatar,
-        institutionId: (user.institutionId as any)?._id || user.institutionId,
-        institution: serializeInstitution(user.institutionId),
+        institutionId: institution?._id || user.institutionId,
+        institution: serializeInstitution(institution),
         permissions: user.permissions
       }
     });
