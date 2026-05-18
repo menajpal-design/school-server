@@ -55,7 +55,7 @@ const expireInstitutionSnapshotIfNeeded = (institution: any) => {
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
-    
+
     if (!token) {
       return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
@@ -147,7 +147,6 @@ export const checkPermission = (permission: string) => {
   };
 };
 
-// Can access own data (or head / assistant_head)
 export const canAccessOwnData = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
@@ -157,18 +156,12 @@ export const canAccessOwnData = () => {
 
     const targetId = req.params.id || req.body.userId || req.query.userId;
     if (!targetId) return res.status(400).json({ message: 'Target id required.' });
-
-    // If same user
     if (String(req.user._id || req.user.id) === String(targetId)) return next();
-
-    // Parents can access their children's ids stored in req.user.children (array)
     if (req.user.role === 'parent' && Array.isArray(req.user.children) && req.user.children.map(String).includes(String(targetId))) return next();
-
     return res.status(403).json({ message: 'Access denied. Can only access own data.' });
   };
 };
 
-// Assistant head or assigned managers: can access assigned area (if user.assignedAreas contains area)
 export const canAccessAssignedArea = (areaParam = 'areaId') => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
@@ -179,12 +172,10 @@ export const canAccessAssignedArea = (areaParam = 'areaId') => {
       if (!area) return res.status(400).json({ message: 'Area id required.' });
       if (Array.isArray(req.user.assignedAreas) && req.user.assignedAreas.map(String).includes(String(area))) return next();
     }
-
     return res.status(403).json({ message: 'Access denied. Assigned area required.' });
   };
 };
 
-// ID Card related permissions
 export const canManageIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
@@ -215,11 +206,9 @@ export const canDownloadIDCard = () => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
     if (['assistant_head', 'class_teacher', 'subject_teacher', 'staff', 'student', 'teacher', 'parent'].includes(req.user.role)) return next();
-    // Students and parents can download own/child card
     const targetId = req.params.id || req.query.id || req.body.userId;
     if (String(req.user._id || req.user.id) === String(targetId)) return next();
     if (req.user.role === 'parent' && Array.isArray(req.user.children) && req.user.children.map(String).includes(String(targetId))) return next();
-    // others with permission
     if (Array.isArray(req.user.permissions) && req.user.permissions.includes('download:idcard')) return next();
     return res.status(403).json({ message: 'Access denied. Cannot download ID card.' });
   };

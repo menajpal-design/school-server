@@ -1,4 +1,29 @@
 import mongoose from 'mongoose';
+import { getAppConfig } from './config';
+
+const parseConnectionList = (value?: string | null): string[] => {
+  if (!value) return [];
+  return value
+    .split(/[\n;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const getMongoUriCandidates = (): string[] => {
+    const appCfg = getAppConfig();
+
+  return [
+    process.env.MONGO_URIS,
+    process.env.MONGO_URI,
+    process.env.MONGODB_URI,
+    process.env.MONGODB_URI_PROD,
+    process.env.DATABASE_URL,
+        appCfg.mongoUri,
+
+  ].flatMap((value) => parseConnectionList(value));
+};
+
+let connectionPromise: Promise<typeof mongoose | null> | null = null;
 
 const COMPANY_MONGO_URI = 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0';
 const LOCAL_MONGO_URI = 'mongodb://127.0.0.1:27017/easy_school';

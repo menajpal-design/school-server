@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import { authenticate, canManageAcademic, canScanIDCard } from '../middleware/auth';
 import Attendance from '../models/Attendance';
+import Holiday from '../models/Holiday';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
@@ -37,6 +38,7 @@ const statusSummary = (records: any[]) => ({
   absent: records.filter((item) => item.status === 'absent').length,
   late: records.filter((item) => item.status === 'late').length,
   leave: records.filter((item) => item.status === 'leave').length,
+  holiday: records.filter((item) => item.status === 'holiday').length,
 });
 
 const buildAttendanceOverview = async (institutionId: any) => {
@@ -56,6 +58,7 @@ const buildAttendanceOverview = async (institutionId: any) => {
           absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
           late: { $sum: { $cond: [{ $eq: ['$status', 'late'] }, 1, 0] } },
           leave: { $sum: { $cond: [{ $eq: ['$status', 'leave'] }, 1, 0] } },
+          holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } },
         },
       },
       { $lookup: { from: 'classes', localField: '_id', foreignField: '_id', as: 'class' } },
@@ -69,7 +72,9 @@ const buildAttendanceOverview = async (institutionId: any) => {
           absent: 1,
           late: 1,
           leave: 1,
-          percentage: { $cond: [{ $gt: ['$total', 0] }, { $round: [{ $multiply: [{ $divide: ['$present', '$total'] }, 100] }, 0] }, 0] },
+          holiday: 1,
+          attendanceTotal: { $subtract: ['$total', '$holiday'] },
+          percentage: { $cond: [{ $gt: [{ $subtract: ['$total', '$holiday'] }, 0] }, { $round: [{ $multiply: [{ $divide: ['$present', { $subtract: ['$total', '$holiday'] }] }, 100] }, 0] }, 0] },
         },
       },
     ]),
@@ -82,6 +87,7 @@ const buildAttendanceOverview = async (institutionId: any) => {
           present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
           absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
           late: { $sum: { $cond: [{ $eq: ['$status', 'late'] }, 1, 0] } },
+          holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } },
         },
       },
       { $sort: { _id: 1 } },
@@ -91,14 +97,10 @@ const buildAttendanceOverview = async (institutionId: any) => {
   return {
     today: statusSummary(todayRecords),
     classWise,
-    trend: trend.map((item) => ({
-      date: item._id,
-      total: item.total,
-      present: item.present,
-      absent: item.absent,
-      late: item.late,
-      percentage: item.total ? Math.round((item.present / item.total) * 100) : 0,
-    })),
+    trend: trend.map((item) => {
+      const attendanceTotal = Math.max(0, item.total - item.holiday);
+      return { date: item._id, total: item.total, present: item.present, absent: item.absent, late: item.late, holiday: item.holiday, percentage: attendanceTotal ? Math.round((item.present / attendanceTotal) * 100) : 0 };
+    }),
   };
 };
 
@@ -190,7 +192,7 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
           userType,
           classId: record.classId || req.body.classId,
           sectionId: record.sectionId || req.body.sectionId,
-          date: toDateValue(record.date || req.body.date),
+          date: dateValue,
           institutionId: req.user.institutionId,
         },
         {
@@ -199,9 +201,9 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
           userType,
           classId: record.classId || req.body.classId,
           sectionId: record.sectionId || req.body.sectionId,
-          date: toDateValue(record.date || req.body.date),
-          status: record.status,
-          notes: record.notes || '',
+          date: dateValue,
+          status: finalStatus,
+          notes: finalNotes,
           markedBy: req.user._id,
           markedAt: new Date(),
           institutionId: req.user.institutionId,
@@ -222,10 +224,7 @@ router.post('/scan-id-card', authenticate, canScanIDCard(), async (req, res) => 
     const code = req.body.code || req.body.cardNumber || req.body.qrCodeData;
     if (!code) return res.status(400).json({ message: 'Card code required' });
 
-    const card = await IDCard.findOne({
-      institutionId: req.user.institutionId,
-      $or: [{ cardNumber: code }, { qrCodeData: code }, { barcodeData: code }],
-    });
+    const card = await IDCard.findOne({ institutionId: req.user.institutionId, $or: [{ cardNumber: code }, { qrCodeData: code }, { barcodeData: code }] });
     if (!card) return res.status(404).json({ message: 'ID card not found' });
 
     if (card.ownerType === 'teacher') {
@@ -278,36 +277,27 @@ router.get('/reports', authenticate, canManageAcademic(), (req, res) => {
       .lean(),
     Attendance.aggregate([
       { $match: query },
-      {
-        $group: {
-          _id: '$classId',
-          total: { $sum: 1 },
-          present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-          absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
-          late: { $sum: { $cond: [{ $eq: ['$status', 'late'] }, 1, 0] } },
-          leave: { $sum: { $cond: [{ $eq: ['$status', 'leave'] }, 1, 0] } },
-        },
-      },
+      { $group: { _id: '$classId', total: { $sum: 1 }, present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } }, absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } }, late: { $sum: { $cond: [{ $eq: ['$status', 'late'] }, 1, 0] } }, leave: { $sum: { $cond: [{ $eq: ['$status', 'leave'] }, 1, 0] } }, holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } } } },
       { $lookup: { from: 'classes', localField: '_id', foreignField: '_id', as: 'class' } },
       { $unwind: { path: '$class', preserveNullAndEmptyArrays: true } },
-      { $project: { name: '$class.name', total: 1, present: 1, absent: 1, late: 1, leave: 1 } },
+      { $project: { name: '$class.name', total: 1, present: 1, absent: 1, late: 1, leave: 1, holiday: 1 } },
     ]),
     Attendance.aggregate([
       { $match: query },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
-          total: { $sum: 1 },
-          present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-        },
-      },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } }, total: { $sum: 1 }, present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } }, holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } } } },
       { $sort: { _id: 1 } },
     ]),
   ])
     .then(([records, comparison, trend]) => res.json({
       reports: records,
-      comparison: comparison.map((item) => ({ ...item, percentage: item.total ? Math.round((item.present / item.total) * 100) : 0 })),
-      trend: trend.map((item) => ({ date: item._id, total: item.total, present: item.present, percentage: item.total ? Math.round((item.present / item.total) * 100) : 0 })),
+      comparison: comparison.map((item) => {
+        const attendanceTotal = Math.max(0, item.total - item.holiday);
+        return { ...item, percentage: attendanceTotal ? Math.round((item.present / attendanceTotal) * 100) : 0 };
+      }),
+      trend: trend.map((item) => {
+        const attendanceTotal = Math.max(0, item.total - item.holiday);
+        return { date: item._id, total: item.total, present: item.present, holiday: item.holiday, percentage: attendanceTotal ? Math.round((item.present / attendanceTotal) * 100) : 0 };
+      }),
     }))
     .catch((error) => res.status(500).json({ message: 'Failed to load attendance reports', error }));
 });
@@ -447,11 +437,7 @@ router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
     const query: any = await attendanceStudentQuery(req);
     if (req.query.classId) query.classId = req.query.classId;
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
-    const students = await Student.find(query)
-      .populate('userId', 'name avatar email')
-      .populate('classId', 'name grade')
-      .populate('sectionId', 'name')
-      .sort({ rollNumber: 1 });
+    const students = await Student.find(query).populate('userId', 'name avatar email').populate('classId', 'name grade').populate('sectionId', 'name').sort({ rollNumber: 1 });
     res.json({ students });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load attendance students', error });

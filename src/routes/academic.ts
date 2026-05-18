@@ -452,6 +452,30 @@ router.get('/exams/:id', authenticate, canManageAcademic(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load exam', error }));
 });
 
+router.patch('/exams/:id/public-routine', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const exam = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+
+    const subjectMarks = Array.isArray(exam.subjectMarks) ? exam.subjectMarks : [];
+    const routineReady = subjectMarks.length > 0 && subjectMarks.every((item: any) => item.subjectId && item.date && item.duration);
+    if (req.body.isPublished === true && !routineReady) {
+      return res.status(409).json({ message: 'Routine is incomplete. Add subject, date and duration before making it public.' });
+    }
+
+    exam.isPublished = req.body.isPublished === true;
+    if (exam.isPublished && exam.status === 'draft') exam.status = 'published';
+    await exam.save();
+
+    const updated = await populateExamQuery()
+      .where({ _id: exam._id, institutionId: req.user.institutionId })
+      .findOne();
+    res.json({ exam: updated, message: exam.isPublished ? 'Exam routine is now public.' : 'Exam routine is now private.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update public exam routine status', error });
+  }
+});
+
 router.get('/results', authenticate, canManageAcademic(), (req, res) => {
   if (req.query.classId || req.query.examId || req.query.subjectId) {
     getResultContext(req)
