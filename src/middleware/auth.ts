@@ -36,7 +36,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET) as any;
-    const user = await User.findById(decoded.id).populate('institutionId').maxTimeMS(10000);
+    const user = await User.findById(decoded.id).populate('institutionId').maxTimeMS(5000);
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
@@ -44,7 +44,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     const selectedInstitutionId = req.header('x-institution-id');
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
-      const institution = await Institution.findById(selectedInstitutionId).maxTimeMS(10000);
+      const institution = await Institution.findById(selectedInstitutionId).maxTimeMS(5000);
       if (institution) {
         user.institutionId = institution as any;
       }
