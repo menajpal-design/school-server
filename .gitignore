@@ -32,6 +32,9 @@ coverage/
 # Dependency directories
 jspm_packages/
 
+# Nested deployment repo kept locally, not tracked by the root Heroku app
+server/
+
 # Optional npm cache directory
 .npm
 
