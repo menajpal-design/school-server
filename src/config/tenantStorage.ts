@@ -40,6 +40,7 @@ const tenantConnectionFailures = new Map<string, number>();
 const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 60000);
 const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 2500);
 const tenantQueryMaxTimeMs = Number(process.env.TENANT_MONGO_QUERY_MAX_TIME_MS || 8000);
+const tenantQueryHardTimeoutMs = Number(process.env.TENANT_MONGO_QUERY_HARD_TIMEOUT_MS || 2500);
 let patchesInstalled = false;
 
 const getDocumentObject = (doc: any) => {
@@ -122,6 +123,7 @@ const getTenantModel = async (baseModel: any, context: TenantStorageContext | nu
 };
 
 const mirrorPrimaryDocument = async (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
+  if (String(process.env.TENANT_MONGO_MIRROR_ENABLED || '').toLowerCase() !== 'true') return;
   if (!context?.mongoUri || !baseModel?.modelName || !primaryMirrorModels.has(baseModel.modelName) || !doc?._id) return;
   if (baseModel.db !== mongoose.connection) return;
   const connection = await getTenantConnection(context);
@@ -157,7 +159,7 @@ export const runWithTenantStorage = <T>(
   user?: any,
   institution?: any
 ) => tenantStorage.run(context, () => {
-  if (context?.mongoUri) {
+  if (context?.mongoUri && String(process.env.TENANT_MONGO_MIRROR_ENABLED || '').toLowerCase() === 'true') {
     mirrorContextReferences(context, user, institution).catch((error) => {
       console.warn('Tenant reference mirror failed:', error?.message || error);
     });
@@ -195,12 +197,20 @@ export const installTenantStoragePatches = () => {
   const originalQueryExec = mongoose.Query.prototype.exec;
   mongoose.Query.prototype.exec = async function patchedTenantQueryExec(this: any, ...args: any[]) {
     const context = getTenantStorageContext();
+    const primaryQuery = typeof this.clone === 'function' ? this.clone() : null;
     const tenantModel = await getTenantModel(this.model, context);
     if (tenantModel) {
       this.model = tenantModel;
       this.mongooseCollection = tenantModel.collection;
       this._collection = tenantModel.collection;
       this.maxTimeMS(tenantQueryMaxTimeMs);
+      const result = await withTimeout(originalQueryExec.apply(this, args as any), tenantQueryHardTimeoutMs, () => {
+        if (context?.institutionId) tenantConnectionFailures.set(`${context.institutionId}:${context.mongoUri}`, Date.now());
+        console.warn(`Tenant query timed out for ${tenantModel.modelName}; falling back to primary storage.`);
+      });
+      if (result !== null) return result;
+      if (primaryQuery) return originalQueryExec.apply(primaryQuery, args as any);
+      throw new Error(`Tenant query timed out for ${tenantModel.modelName}`);
     }
     const result = await originalQueryExec.apply(this, args as any);
     if (!tenantModel && context?.mongoUri && this.model?.db === mongoose.connection && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) {
@@ -212,10 +222,18 @@ export const installTenantStoragePatches = () => {
   const originalAggregateExec = mongoose.Aggregate.prototype.exec;
   mongoose.Aggregate.prototype.exec = async function patchedTenantAggregateExec(this: any, ...args: any[]) {
     const context = getTenantStorageContext();
+    const primaryAggregate = typeof this.model === 'function' && this._model ? this._model.aggregate(this.pipeline()) : null;
     const tenantModel = await getTenantModel(this._model, context);
     if (tenantModel) {
       this._model = tenantModel;
       this.option({ maxTimeMS: tenantQueryMaxTimeMs });
+      const result = await withTimeout(originalAggregateExec.apply(this, args as any), tenantQueryHardTimeoutMs, () => {
+        if (context?.institutionId) tenantConnectionFailures.set(`${context.institutionId}:${context.mongoUri}`, Date.now());
+        console.warn(`Tenant aggregate timed out for ${tenantModel.modelName}; falling back to primary storage.`);
+      });
+      if (result !== null) return result;
+      if (primaryAggregate) return originalAggregateExec.apply(primaryAggregate, args as any);
+      throw new Error(`Tenant aggregate timed out for ${tenantModel.modelName}`);
     }
     return originalAggregateExec.apply(this, args as any);
   };
