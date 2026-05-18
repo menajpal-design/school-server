@@ -44,6 +44,7 @@ const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
 const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>();
 const tenantConnectionFailures = new Map<string, number>();
 const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 60000);
+const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 2500);
 let patchesInstalled = false;
 
 const getDocumentObject = (doc: any) => {
@@ -66,6 +67,23 @@ const registerBridgeModels = (connection: mongoose.Connection) => {
   for (const modelName of primaryMirrorModels) {
     const baseModel = mongoose.models[modelName];
     if (baseModel) registerModel(connection, baseModel);
+  }
+};
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T | null> => {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => {
+          onTimeout();
+          resolve(null);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 };
 
@@ -92,7 +110,12 @@ const getTenantConnection = async (context: TenantStorageContext) => {
       return null;
     }));
   }
-  return tenantConnections.get(key)!;
+  const connection = await withTimeout(tenantConnections.get(key)!, tenantConnectionHardTimeoutMs, () => {
+    tenantConnectionFailures.set(key, Date.now());
+    console.warn('Tenant Mongo connection timed out; using primary storage fallback.');
+  });
+  if (!connection) return null;
+  return connection;
 };
 
 const getTenantModel = async (baseModel: any, context: TenantStorageContext | null | undefined) => {
@@ -210,7 +233,7 @@ export const installTenantStoragePatches = () => {
       return this;
     }
 
-    const saved = await originalSave.apply(this, args as any);
+  const saved = await originalSave.apply(this, args as any);
     if (context?.mongoUri && primaryMirrorModels.has(this.constructor?.modelName)) {
       schedulePrimaryMirror(this.constructor, saved, context);
     }
