@@ -39,6 +39,7 @@ const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>()
 const tenantConnectionFailures = new Map<string, number>();
 const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 60000);
 const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 2500);
+const tenantQueryMaxTimeMs = Number(process.env.TENANT_MONGO_QUERY_MAX_TIME_MS || 8000);
 let patchesInstalled = false;
 
 const getDocumentObject = (doc: any) => {
@@ -198,6 +199,7 @@ export const installTenantStoragePatches = () => {
       this.model = tenantModel;
       this.mongooseCollection = tenantModel.collection;
       this._collection = tenantModel.collection;
+      this.maxTimeMS(tenantQueryMaxTimeMs);
     }
     const result = await originalQueryExec.apply(this, args as any);
     if (!tenantModel && context?.mongoUri && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) {
@@ -210,7 +212,10 @@ export const installTenantStoragePatches = () => {
   mongoose.Aggregate.prototype.exec = async function patchedTenantAggregateExec(this: any, ...args: any[]) {
     const context = getTenantStorageContext();
     const tenantModel = await getTenantModel(this._model, context);
-    if (tenantModel) this._model = tenantModel;
+    if (tenantModel) {
+      this._model = tenantModel;
+      this.option({ maxTimeMS: tenantQueryMaxTimeMs });
+    }
     return originalAggregateExec.apply(this, args as any);
   };
 
