@@ -170,3 +170,5 @@ export const config = (): Config => {
 export const reloadConfig = (): void => {
   configInstance = null;
 };
+
+export const getAppConfig = getConfig;

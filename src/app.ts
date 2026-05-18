@@ -34,6 +34,7 @@ import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
 import smsRoutes from './routes/sms';
 import siteSettingsRoutes from './routes/siteSettings';
+import './config/tenantStorage';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -41,7 +42,15 @@ const app = express();
 const splitEnv = (value?: string) => (value || '').split(',').map((item) => item.trim().replace(/\/$/, '')).filter(Boolean);
 const isProduction = process.env.NODE_ENV === 'production';
 const devOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'];
-const productionFallbackOrigins = ['https://www.easyschool.live', 'https://easyschool.live'];
+const productionFallbackOrigins = [
+  'https://www.easyschool.live',
+  'https://easyschool.live',
+  'http://www.easyschool.live',
+  'http://easyschool.live',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:5000',
+];
 
 const allowedOrigins = Array.from(new Set([
   ...productionFallbackOrigins,
@@ -66,7 +75,8 @@ const isAllowedOrigin = (origin?: string): boolean => {
   if (allowAllOrigins) return true;
   const normalized = origin.replace(/\/$/, '');
   if (allowedOrigins.includes(normalized)) return true;
-  if (!isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
+  if (/^https?:\/\/(www\.)?easyschool\.live$/i.test(normalized)) return true;
   return false;
 };
 

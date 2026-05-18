@@ -4,6 +4,7 @@ import User from '../models/User';
 import Institution from '../models/Institution';
 import { expireInstitutionIfNeeded } from '../services/billingService';
 import { ensureDatabaseReady } from '../config/database';
+import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 interface AuthRequest extends Request {
   user: any;
@@ -43,9 +44,9 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     const selectedInstitutionId = req.header('x-institution-id');
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
-      const institution = await Institution.findById(selectedInstitutionId).select('_id').maxTimeMS(10000);
+      const institution = await Institution.findById(selectedInstitutionId).maxTimeMS(10000);
       if (institution) {
-        user.institutionId = institution._id as any;
+        user.institutionId = institution as any;
       }
     }
 
@@ -63,7 +64,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     req.user = user;
-    next();
+    const tenantContext = resolveTenantStorageContext(institution);
+    runWithTenantStorage(tenantContext, () => next(), user, institution);
   } catch (error: any) {
     const message = error?.name === 'JsonWebTokenError' || error?.name === 'TokenExpiredError'
       ? 'Invalid token.'
