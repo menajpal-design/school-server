@@ -1,7 +1,10 @@
 import { Router } from 'express';
+import { authenticate } from '../middleware/auth';
 import * as ctrl from '../controllers/libraryController';
 
 const router = Router();
+
+router.use(authenticate);
 
 // Books
 router.post('/books', ctrl.createBook);
