@@ -28,6 +28,7 @@ import adminRoutes from './routes/admin';
 import smsMonitoringRoutes from './routes/smsMonitoring';
 import SmsLog from './models/SmsLog';
 import { config } from './config/config';
+import './config/tenantStorage';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
@@ -94,7 +95,8 @@ const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     const isHerokuApp = !!origin && /^https:\/\/[a-z0-9-]+\.herokuapp\.com$/i.test(origin);
     const isEasySchool = !!origin && /^https?:\/\/(www\.)?easyschool\.live$/i.test(origin);
-    if (!origin || allowedOrigins.includes(origin) || isHerokuApp || isEasySchool) {
+    const isLocalhost = !!origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+    if (!origin || allowedOrigins.includes(origin) || isHerokuApp || isEasySchool || isLocalhost) {
       callback(null, true);
       return;
     }
@@ -102,7 +104,7 @@ const corsOptions: cors.CorsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-institution-id'],
   optionsSuccessStatus: 204,
 };
 

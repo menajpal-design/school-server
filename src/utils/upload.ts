@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { getTenantStorageContext } from '../config/tenantStorage';
 
 const parseKeyList = (value?: string | null): string[] => {
   if (!value) return [];
@@ -14,9 +15,13 @@ const parseKeyList = (value?: string | null): string[] => {
     .filter(Boolean);
 };
 
-const IMGBB_API_KEYS = parseKeyList(process.env.IMGBB_API_KEYS || process.env.IMGBB_API_KEY);
 const MAX_FILE_SIZE = (parseInt(process.env.UPLOAD_MAX_SIZE_MB || '5') || 5) * 1024 * 1024; // Convert MB to bytes
 const ALLOWED_TYPES = (process.env.UPLOAD_ALLOWED_TYPES || 'image/jpeg,image/png,application/pdf').split(',');
+
+const getImgBBApiKeys = () => {
+  const tenantKey = getTenantStorageContext()?.imgbbApiKey;
+  return parseKeyList(tenantKey || process.env.IMGBB_API_KEYS || process.env.IMGBB_API_KEY);
+};
 
 interface UploadResponse {
   success: boolean;
@@ -58,7 +63,8 @@ export const validateFile = (
  */
 export const uploadToImgBB = async (filePath: string): Promise<UploadResponse> => {
   try {
-    if (IMGBB_API_KEYS.length === 0) {
+    const imgbbApiKeys = getImgBBApiKeys();
+    if (imgbbApiKeys.length === 0) {
       return {
         success: false,
         error: 'IMGBB_API_KEY or IMGBB_API_KEYS is not configured',
@@ -70,7 +76,7 @@ export const uploadToImgBB = async (filePath: string): Promise<UploadResponse> =
     const base64String = fileBuffer.toString('base64');
     const filename = path.basename(filePath);
 
-    for (const apiKey of IMGBB_API_KEYS) {
+    for (const apiKey of imgbbApiKeys) {
       try {
         const body = new URLSearchParams({
           key: apiKey,

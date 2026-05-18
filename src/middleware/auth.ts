@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
 import Institution from '../models/Institution';
 import { expireInstitutionIfNeeded } from '../services/billingService';
+import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 interface AuthRequest extends Request {
   user: any;
@@ -30,9 +31,9 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     const selectedInstitutionId = req.header('x-institution-id');
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
-      const institution = await Institution.findById(selectedInstitutionId).select('_id');
+      const institution = await Institution.findById(selectedInstitutionId);
       if (institution) {
-        user.institutionId = institution._id as any;
+        user.institutionId = institution as any;
       }
     }
 
@@ -50,7 +51,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     req.user = user;
-    next();
+    const tenantContext = resolveTenantStorageContext(institution);
+    runWithTenantStorage(tenantContext, () => next(), user, institution);
   } catch (error) {
     res.status(401).json({ message: 'Invalid token.' });
   }
