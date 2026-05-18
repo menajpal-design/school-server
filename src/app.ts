@@ -38,6 +38,7 @@ import './config/tenantStorage';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
+app.set('trust proxy', 1);
 
 const splitEnv = (value?: string) => (value || '').split(',').map((item) => item.trim().replace(/\/$/, '')).filter(Boolean);
 const isProduction = process.env.NODE_ENV === 'production';
