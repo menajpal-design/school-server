@@ -1,24 +1,48 @@
 import Book, { IBook } from '../models/Book';
 import Loan, { ILoan } from '../models/Loan';
 import { Types } from 'mongoose';
+import QRCode from 'qrcode';
+import { randomUUID } from 'crypto';
 
 const DEFAULT_FINE_PER_DAY = Number(process.env.LIBRARY_FINE_PER_DAY || '10');
 
+const buildQrPayload = (book: any) => JSON.stringify({
+  type: 'library-book',
+  bookId: String(book._id),
+  qrCodeValue: book.qrCodeValue,
+  title: book.title,
+});
+
+const attachBookQrCode = async (book: any) => {
+  if (!book) return book;
+  const payload = buildQrPayload(book);
+  const qrCodeDataUrl = await QRCode.toDataURL(payload, { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+  return { ...book.toObject?.() ? book.toObject() : book, qrCodeDataUrl };
+};
+
 export const createBook = async (data: Partial<IBook>, userId?: Types.ObjectId) => {
-  const book = new Book({ ...data, createdBy: userId });
-  return book.save();
+  const book = new Book({
+    ...data,
+    qrCodeValue: data.qrCodeValue || `LIB-${randomUUID()}`,
+    createdBy: userId,
+  });
+  const saved = await book.save();
+  return attachBookQrCode(saved);
 };
 
 export const updateBook = async (id: string, data: Partial<IBook>) => {
-  return Book.findByIdAndUpdate(id, data, { new: true });
+  const book = await Book.findByIdAndUpdate(id, data, { new: true });
+  return attachBookQrCode(book);
 };
 
 export const listBooks = async (query = {}) => {
-  return Book.find(query).sort({ title: 1 });
+  const books = await Book.find(query).sort({ title: 1 });
+  return Promise.all(books.map((book) => attachBookQrCode(book)));
 };
 
 export const getBook = async (id: string) => {
-  return Book.findById(id);
+  const book = await Book.findById(id);
+  return attachBookQrCode(book);
 };
 
 export const deleteBook = async (id: string) => {

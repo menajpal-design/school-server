@@ -7,6 +7,7 @@ export interface IBook extends Document {
   publisher?: string;
   category?: string;
   location?: string;
+  qrCodeValue?: string;
   copiesTotal: number;
   copiesAvailable: number;
   tags?: string[];
@@ -23,6 +24,7 @@ const BookSchema: Schema = new Schema(
     publisher: { type: String },
     category: { type: String },
     location: { type: String },
+    qrCodeValue: { type: String, unique: true, sparse: true },
     copiesTotal: { type: Number, default: 1 },
     copiesAvailable: { type: Number, default: 1 },
     tags: [{ type: String }],
