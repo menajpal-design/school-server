@@ -32,6 +32,7 @@ import './config/tenantStorage';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 
 const app = express();
+app.set('trust proxy', 1);
 const cfg = config();
 
 // Parse comma-separated allowed origins from environment variable

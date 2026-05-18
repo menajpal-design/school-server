@@ -35,7 +35,7 @@ const schoolDataModels = new Set([
 
 const primaryMirrorModels = new Set(['User', 'Institution']);
 const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
-const tenantConnections = new Map<string, Promise<mongoose.Connection>>();
+const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>();
 let patchesInstalled = false;
 
 const getDocumentObject = (doc: any) => {
@@ -67,13 +67,17 @@ const getTenantConnection = async (context: TenantStorageContext) => {
   if (!tenantConnections.has(key)) {
     tenantConnections.set(key, mongoose.createConnection(context.mongoUri, {
       maxPoolSize: Number(process.env.TENANT_MONGO_POOL_SIZE || 5),
-      serverSelectionTimeoutMS: Number(process.env.TENANT_MONGO_SERVER_SELECTION_TIMEOUT_MS || 8000),
-      connectTimeoutMS: Number(process.env.TENANT_MONGO_CONNECT_TIMEOUT_MS || 8000),
-      socketTimeoutMS: Number(process.env.TENANT_MONGO_SOCKET_TIMEOUT_MS || 45000),
+      serverSelectionTimeoutMS: Number(process.env.TENANT_MONGO_SERVER_SELECTION_TIMEOUT_MS || 3000),
+      connectTimeoutMS: Number(process.env.TENANT_MONGO_CONNECT_TIMEOUT_MS || 3000),
+      socketTimeoutMS: Number(process.env.TENANT_MONGO_SOCKET_TIMEOUT_MS || 15000),
       retryWrites: true,
     }).asPromise().then((connection) => {
       registerBridgeModels(connection);
       return connection;
+    }).catch((error) => {
+      tenantConnections.delete(key);
+      console.warn('Tenant Mongo connection failed:', error?.message || error);
+      return null;
     }));
   }
   return tenantConnections.get(key)!;
@@ -94,6 +98,16 @@ const mirrorPrimaryDocument = async (baseModel: any, doc: any, context: TenantSt
   const mirrorModel = registerModel(connection, baseModel);
   if (!mirrorModel) return;
   await mirrorModel.updateOne({ _id: doc._id }, { $set: getDocumentObject(doc) }, { upsert: true }).exec();
+};
+
+const schedulePrimaryMirror = (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
+  if (Array.isArray(doc)) {
+    doc.forEach((item) => schedulePrimaryMirror(baseModel, item, context));
+    return;
+  }
+  mirrorPrimaryDocument(baseModel, doc, context).catch((error) => {
+    console.warn('Tenant primary mirror failed:', error?.message || error);
+  });
 };
 
 const mirrorContextReferences = async (context: TenantStorageContext | null | undefined, user?: any, institution?: any) => {
@@ -158,11 +172,7 @@ export const installTenantStoragePatches = () => {
     }
     const result = await originalQueryExec.apply(this, args as any);
     if (!tenantModel && context?.mongoUri && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) {
-      if (Array.isArray(result)) {
-        await Promise.all(result.map((item) => mirrorPrimaryDocument(this.model, item, context)));
-      } else {
-        await mirrorPrimaryDocument(this.model, result, context);
-      }
+      schedulePrimaryMirror(this.model, result, context);
     }
     return result;
   };
@@ -190,7 +200,7 @@ export const installTenantStoragePatches = () => {
 
     const saved = await originalSave.apply(this, args as any);
     if (context?.mongoUri && primaryMirrorModels.has(this.constructor?.modelName)) {
-      await mirrorPrimaryDocument(this.constructor, saved, context);
+      schedulePrimaryMirror(this.constructor, saved, context);
     }
     return saved;
   };
