@@ -182,6 +182,11 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/sms-monitoring', smsMonitoringRoutes);
 app.use('/api/library', libraryRoutes);
 
+// Temporary test endpoint to verify library routing on deployed servers
+app.get('/api/library/test', (req, res) => {
+  res.json({ success: true, message: 'library route test OK' });
+});
+
 app.use('/uploads', express.static('uploads'));
 
 app.get('/api/health', (req, res) => {
