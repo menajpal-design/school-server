@@ -185,6 +185,9 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
 
     for (const record of records) {
       const userType = record.userType || (record.studentId ? 'student' : 'staff');
+      const dateValue = toDateValue(record.date || req.body.date);
+      const finalStatus = record.status || req.body.status || 'present';
+      const finalNotes = record.notes || req.body.notes || '';
       const attendance = await Attendance.findOneAndUpdate(
         {
           studentId: record.studentId,

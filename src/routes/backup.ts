@@ -12,9 +12,12 @@ import IDCard from '../models/IDCard';
 import Institution from '../models/Institution';
 import Notice from '../models/Notice';
 import Class from '../models/Class';
+import Section from '../models/Section';
+import Parent from '../models/Parent';
 import Subject from '../models/Subject';
 import Exam from '../models/Exam';
 import Result from '../models/Result';
+import ClassRoutine from '../models/ClassRoutine';
 
 const router = express.Router();
 
