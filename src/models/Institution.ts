@@ -34,6 +34,8 @@ export interface IInstitution extends Document {
     paymentGateway?: string;
     paymentTrxId?: string;
     paymentSenderNumber?: string;
+    paymentOrderId?: string;
+    paymentTime?: string;
     activatedAt?: Date;
     subscriptionStartedAt?: Date;
     subscriptionExpiresAt?: Date;
@@ -102,6 +104,8 @@ const InstitutionSchema: Schema = new Schema({
     paymentGateway: { type: String },
     paymentTrxId: { type: String },
     paymentSenderNumber: { type: String },
+    paymentOrderId: { type: String },
+    paymentTime: { type: Date },
     activatedAt: { type: Date },
     subscriptionStartedAt: { type: Date },
     subscriptionExpiresAt: { type: Date },

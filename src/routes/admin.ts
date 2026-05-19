@@ -44,6 +44,8 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     paymentGateway: input.paymentGateway ?? current.paymentGateway,
     paymentTrxId: input.paymentTrxId ?? current.paymentTrxId,
     paymentSenderNumber: input.paymentSenderNumber ?? current.paymentSenderNumber,
+    paymentOrderId: input.paymentOrderId ?? current.paymentOrderId,
+    paymentTime: input.paymentTime ?? current.paymentTime,
   };
   return billingStatus === 'active' ? activateBilling(next, new Date()) : next;
 };
@@ -122,6 +124,9 @@ router.post('/schools/:id/verify-payment', async (req, res) => {
       amount: Number(billing.receivedAmount || billing.dueAmount || 0),
       senderNumber: billing.paymentSenderNumber,
       gateway: billing.paymentGateway,
+      orderId: billing.paymentOrderId,
+      paymentTime: billing.paymentTime ? String(billing.paymentTime) : undefined,
+      domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
     billing.paymentVerifyStatus = verification.status;

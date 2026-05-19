@@ -30,10 +30,6 @@ Insert the hosted widget and a Pay button. For plain HTML:
 
 For Next.js/React (recommended to load the hosted script via `next/script`):
 
-```
-NEXT_PUBLIC_PAYMENT_WIDGET_URL=https://payment-gateway-server-ten.vercel.app
-```
-
 ```jsx
 function PayButton() {
   return (
@@ -51,6 +47,8 @@ function PayButton() {
   );
 }
 ```
+
+> Note: This repo hardcodes the widget host directly and does not require `NEXT_PUBLIC_PAYMENT_WIDGET_URL`.
 
 ### Recommended popup payload
 
@@ -183,3 +181,58 @@ Suggested workflow:
 ---
 
 File created: docs/GATEWAYFLOW_INTEGRATION.md
+
+## 11. সাশ্রয়ী (Economical) পেমেন্ট অপশন
+
+এই সেকশনটি এমন merchants-এর জন্য যারা লো-ফি অথবা কম অপারেশনাল খরচে পেমেন্ট সংগ্রহ করতে চায়। মূল ধারণা হচ্ছে: কস্ট কমাতে সরাসরি ওয়ালেট ব্যবহার, ব্যাচ-ভেরিফিকেশন এবং সার্ভার-সাইড ভেরিফিকেশনকে প্রাধান্য দেওয়া।
+
+- কোন ক্ষেত্রে ব্যবহার করবেন: ছোট ট্রানজ্যাকশান, সাবস্ক্রিপশন ফি, বা যেখানে ট্রানজ্যাকশন ফি কম রাখা প্রয়োজন।
+- কীভাবে কাজ করে (সারাংশ):
+  - পপআপ থেকে গ্রাহক ওয়ালেট বেছে নেয় (bKash/Nagad/Rocket)।
+  - Android অ্যাপ এ এসএমএস সংগ্রহ করে গেটওয়ে সার্ভারে ফরওয়ার্ড করে।
+  - সার্ভার ব্যাচ/পুলিংয়ে এসএমএস মিলায় এবং একবারে একাধিক রিকোয়েস্ট ভেরিফাই করে অপারেশনাল খরচ কমায়।
+
+Best practices (সংশ্লিষ্ট টিপস):
+
+- ওয়ালেট নির্বাচন সীমাবদ্ধ করুন — শুধুমাত্র সস্তা/কম ফি অপশনগুলো দেখান (`preferredMethods: ['bkash','nagad']`)।
+- round amounts আর সংক্ষিপ্ত orderId ব্যবহার করুন যাতে matching সহজ হয় এবং মিস-ম্যাচ কমে।
+- সার্ভার-সাইড ভেরিফিকেশন ব্যবহার করুন — ক্লায়েন্ট থেকে শুধু `orderId` পাঠান, সার্ভার API-কে একবারে ভেরিফাই করান।
+- ব্যাচ ভেরিফিকেশন: gateway সার্ভার থেকে সময়ভিত্তিক SMS/ট্রানজ্যাকশন সেট ফেচ করে একসাথে মিল করুন, যাতে প্রতি-ট্রানজ্যাকশনে আলাদা ম্যানুয়াল চেক না করতে হয়।
+- webhook/notify ব্যবহার করুন: যদি গেটওয়ে সার্ভার `webhook` বা `push` দেয়, সেটা ব্যবহার করে আপনার সার্ভার অন-the-fly আপডেট নিন — পুলিং-কমিয়ে খরচ কমবে।
+
+সংক্ষিপ্ত কোড উদাহরণ (পপআপ থেকে 'preferredMethods' পাঠানো):
+
+```html
+<script src="https://payment-gateway-server-ten.vercel.app/widget.js"></script>
+<button onclick="GatewayWidget.open({
+  amount: 250,
+  preferredMethods: ['bkash','nagad'],
+  callback: 'https://your-merchant-site.com/payment-return',
+  orderId: 'ORD-ECON-1001',
+  onComplete: (r) => console.log('done', r)
+})">Pay Low-Fee</button>
+```
+
+Server-side verify (economical flow): সার্ভার থেকে `_merchant/verify` এ রিকোয়েস্ট পাঠিয়ে নিধারিত মিল (payer_number + amount + payment_time) চেক করুন — ব্যাচ পদ্ধতিতে করে নিলে API কল সংখ্যা কমে। উদাহরণ:
+
+```http
+POST /api/merchant/verify
+X-API-Key: website_api_key
+Content-Type: application/json
+
+{
+  "domain": "school.example.com",
+  "payer_number": "0179007328",
+  "amount": 250,
+  "order_id": "ORD-ECON-1001",
+  "payment_time": "2026-05-19T12:30:00+06:00"
+}
+```
+
+নিরাপত্তা ও রেকমেন্ডেশন:
+
+- ব্যাচ ভেরিফিকেশন চালানোর সময় টাইম-রেঞ্জ সীমাবদ্ধ রাখুন (উদাহরণ: ±2 মিনিট) যাতে মিস-অ্যাসাইনমেন্ট কমে।
+- অ্যাপ/গেটওয়ে থেকে আসা এসএমএসের ফরম্যাট ভ্যারিয়েন্স হ্যান্ডেল করুন (ফোন নম্বর নর্মালাইজেশন)।
+- পেমেন্ট রেকর্ডিংয়ের আগে সার্ভার-সাইডে `amount` এবং `orderId` ভ্যালিডেট করুন।
+
+এই অপশনটি ইউজারদের জন্য খরচ কার্যকর করার লক্ষ্য রাখে — আপনি চাইলে আমি `client` পেজে একটি আলাদা "Low-fee" বোতাম যোগ করে demo করে দিতে পারি।
