@@ -54,6 +54,57 @@ const populatePayment = () =>
     .populate('feeId', 'type month year amount')
     .populate('collectedBy', 'name');
 
+const normalizePaymentAmount = (value: any) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+};
+
+const collectFeePayment = async (req: any, source: 'payment' | 'collection') => {
+  const fee = req.body.feeId
+    ? await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
+    : await Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
+
+  if (!fee) {
+    return { status: 404, body: { message: source === 'payment' ? 'No due fee found for payment' : 'No due fee found for collection' } };
+  }
+
+  const payableAmount = normalizePaymentAmount(fee.amount);
+  const paidAmount = normalizePaymentAmount(req.body.amount);
+
+  if (paidAmount <= 0) {
+    return { status: 400, body: { message: 'Enter a valid payment amount.' } };
+  }
+
+  if (paidAmount > payableAmount) {
+    return { status: 400, body: { message: 'Payment amount cannot be greater than due amount.', dueAmount: payableAmount } };
+  }
+
+  const paymentMethod = req.body.paymentMethod || 'cash';
+  const payment = await Payment.create({
+    feeId: fee._id,
+    studentId: req.body.studentId || fee.studentId,
+    amount: paidAmount,
+    paymentMethod,
+    paymentDate: new Date(),
+    collectedBy: req.user._id,
+    notes: req.body.notes,
+    receiptNumber: receiptNumber(),
+    institutionId: req.user.institutionId,
+  });
+
+  const remainingAmount = normalizePaymentAmount(payableAmount - paidAmount);
+  fee.amount = remainingAmount;
+  fee.status = remainingAmount <= 0 ? 'paid' : 'pending';
+  fee.paidDate = fee.status === 'paid' ? new Date() : undefined;
+  fee.paymentMethod = paymentMethod;
+  fee.transactionId = undefined;
+  await fee.save();
+
+  const created = await populatePayment().where({ _id: payment._id, institutionId: req.user.institutionId }).findOne();
+  await writeAuditLog(req, 'create', source, payment._id, created);
+  return { status: 201, body: { payment: created } };
+};
+
 const buildSummary = async (institutionId: any) => {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -193,29 +244,8 @@ router.get('/collections', authenticate, canManageFinance(), (req, res) => {
 
 router.post('/payments', authenticate, canManageFinance(), async (req, res) => {
   try {
-    const fee = req.body.feeId
-      ? await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
-      : await Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
-    if (!fee) return res.status(404).json({ message: 'No due fee found for payment' });
-    const payment = await Payment.create({
-      feeId: fee._id,
-      studentId: req.body.studentId || fee.studentId,
-      amount: Number(req.body.amount),
-      paymentMethod: req.body.paymentMethod,
-      transactionId: req.body.transactionId,
-      paymentDate: new Date(),
-      collectedBy: req.user._id,
-      notes: req.body.notes,
-      receiptNumber: receiptNumber(),
-      institutionId: req.user.institutionId,
-    });
-    fee.status = Number(req.body.amount) >= fee.amount ? 'paid' : 'pending';
-    fee.paidDate = fee.status === 'paid' ? new Date() : undefined;
-    fee.paymentMethod = req.body.paymentMethod;
-    await fee.save();
-    const created = await populatePayment().where({ _id: payment._id, institutionId: req.user.institutionId }).findOne();
-    await writeAuditLog(req, 'create', 'payment', payment._id, created);
-    res.status(201).json({ payment: created });
+    const result = await collectFeePayment(req, 'payment');
+    res.status(result.status).json(result.body);
   } catch (error) {
     res.status(500).json({ message: 'Failed to collect payment', error });
   }
@@ -223,29 +253,8 @@ router.post('/payments', authenticate, canManageFinance(), async (req, res) => {
 
 router.post('/collections', authenticate, canManageFinance(), async (req, res) => {
   try {
-    const fee = req.body.feeId
-      ? await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
-      : await Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
-    if (!fee) return res.status(404).json({ message: 'No due fee found for collection' });
-    const payment = await Payment.create({
-      feeId: fee._id,
-      studentId: req.body.studentId || fee.studentId,
-      amount: Number(req.body.amount),
-      paymentMethod: req.body.paymentMethod,
-      transactionId: req.body.transactionId,
-      paymentDate: new Date(),
-      collectedBy: req.user._id,
-      notes: req.body.notes,
-      receiptNumber: receiptNumber(),
-      institutionId: req.user.institutionId,
-    });
-    fee.status = Number(req.body.amount) >= fee.amount ? 'paid' : 'pending';
-    fee.paidDate = fee.status === 'paid' ? new Date() : undefined;
-    fee.paymentMethod = req.body.paymentMethod;
-    await fee.save();
-    const created = await populatePayment().where({ _id: payment._id, institutionId: req.user.institutionId }).findOne();
-    await writeAuditLog(req, 'create', 'collection', payment._id, created);
-    res.status(201).json({ payment: created });
+    const result = await collectFeePayment(req, 'collection');
+    res.status(result.status).json(result.body);
   } catch (error) {
     res.status(500).json({ message: 'Failed to collect payment', error });
   }
