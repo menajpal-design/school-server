@@ -48,7 +48,7 @@ function PayButton() {
 }
 ```
 
-> Note: This repo hardcodes the widget host directly and does not require `NEXT_PUBLIC_PAYMENT_WIDGET_URL`.
+> Note: This repo hardcodes the widget host directly in code and does not require a widget URL environment variable.
 
 ### Recommended popup payload
 
