@@ -1,254 +1,262 @@
-# easy school Setup & Run Guide
+# easy school Server Setup & Configuration Guide
 
-## Prerequisites
-- **Node.js** v20.19.4+ (check: `node --version`)
-- **MongoDB** (Local or Atlas)
-- **npm** v10+
+Complete setup guide for the easy school Backend Server with MongoDB, Email, SMS, and file upload services.
 
-## Quick Start (All in One)
+## Quick Start
 
-### 1. Install Dependencies
-
-```powershell
-# Server
-cd 'c:\New folder\school_n\server'
+### Option 1: Local Development
+```bash
+# Install dependencies
 npm install
 
-# Client  
-cd 'c:\New folder\school_n\client'
-npm install
+# Copy example configuration
+cp .env.example .env
 
-# Android
-cd 'c:\New folder\school_n\android'
-npm install
-```
+# Update .env with local MongoDB
+# MONGO_URI=mongodb://localhost:27017/easy_school
+# MONGO_SSL=false
 
-### 2. Seed Database with Demo Users
-
-**Option A: Via API** (Recommended)
-```powershell
-cd 'c:\New folder\school_n\server'
-npm run dev
-```
-
-Then in another terminal, curl or Postman:
-```
-POST http://localhost:5000/api/seed
-```
-
-Response will show demo users created.
-
-**Option B: Via npm script** (If seed script exists)
-```powershell
-cd 'c:\New folder\school_n\server'
+# Seed demo data
 npm run seed
-```
 
-### 3. Start All Three Services
-
-**Terminal 1 - Server:**
-```powershell
-cd 'c:\New folder\school_n\server'
+# Start development server
 npm run dev
-# Output: easy school Server running on port 5000
 ```
 
-**Terminal 2 - Client (Web):**
-```powershell
-cd 'c:\New folder\school_n\client'
-npm run dev
-# Output: ▲ Next.js running on http://localhost:3000
-```
-
-**Terminal 3 - Android:**
-```powershell
-cd 'c:\New folder\school_n\android'
-npx expo start -c
-# Scan QR code with Expo Go app
-```
-
-## Demo Login Credentials
-
-After seeding:
-```
-Email: head@demoschool.edu
-Password: admin123
-
-OR
-
-Email: coordinator@demoschool.edu
-Password: admin123
-
-OR
-
-Email: student@demoschool.edu
-Password: admin123
-```
-
-## Services & URLs
-
-| Service | URL | Status |
-|---------|-----|--------|
-| Server API | http://localhost:5000/api | ✅ |
-| Web Client | http://localhost:3000 | ✅ |
-| Android Emulator | Expo Go app | ✅ |
-| MongoDB | localhost:27017 | ✅ (local) |
-
-## API Health Check
-
-```powershell
-curl http://localhost:5000/api/health
-# Output: {"status":"OK","message":"easy school Server is running"}
-```
-
-## Common Issues & Fixes
-
-### 1. "Could not resolve react-native"
-```powershell
-cd android
-Remove-Item -Recurse -Force node_modules, package-lock.json
+### Option 2: Production with MongoDB Atlas
+```bash
+# Install dependencies
 npm install
+
+# Copy and update .env with MongoDB Atlas credentials
+cp .env.example .env
+
+# Start server
+npm run dev  # or npm start for production build
 ```
 
-### 2. "ERESOLVE unable to resolve dependency tree"
-```powershell
-cd android
-npm install --legacy-peer-deps
+## Environment Configuration
+
+### Server Settings
+```env
+PORT=5000                      # Server port (default: 5000)
+NODE_ENV=development           # Environment: development, production, test
 ```
 
-### 3. "MongoDB connection refused"
-- **Local:** Start MongoDB: `mongod`
-- **Atlas:** Check connection string in `.env` MONGO_URI
-
-### 4. "Invalid email or password" on login
-- Check if database is seeded
-- Call: `POST http://localhost:5000/api/seed`
-- Use correct credentials from seed output
-
-### 5. "Bundler cache is empty"
-- This is normal on first run, just wait 1-2 minutes
-
-## File Structure
-
-```
-school_n/
-├── server/          # Node.js/Express backend
-│   ├── src/
-│   │   ├── controllers/   # API logic
-│   │   ├── models/        # MongoDB schemas
-│   │   ├── routes/        # API endpoints
-│   │   └── config/        # Database config
-│   └── .env         # Environment variables
-├── client/          # Next.js web frontend
-│   ├── app/         # Pages & layouts
-│   ├── components/  # React components
-│   ├── lib/         # API client, auth
-│   └── .env.local   # Environment variables
-└── android/         # Expo React Native app
-    ├── app/         # Screens & navigation
-    ├── assets/      # Images & icons
-    └── package.json # Dependencies
+### JWT Configuration
+```env
+JWT_SECRET=your_secret_key_32_chars_min    # Must be at least 32 characters
+JWT_EXPIRE=7d                               # Token expiration (7 days)
 ```
 
-## Environment Variables
+### MongoDB Configuration
 
-### Server (.env)
-```
-PORT=5000
-NODE_ENV=development
+#### Local MongoDB
+```env
 MONGO_URI=mongodb://localhost:27017/easy_school
-MONGO_DB_NAME=easy_school
-JWT_SECRET=super_secret_jwt_key_32_chars_minimum_12345678901234567890123456789012
-FRONTEND_URL=http://localhost:3000
-MOBILE_URL=http://localhost:8081
+MONGO_SSL=false
+MONGO_POOL_SIZE=10
 ```
 
-### Client (.env.local)
-```
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
-```
-
-### Android (.env)
-```
-API_URL=http://10.0.2.2:5000/api
-```
-
-## Features Implemented
-
-✅ User Authentication (Login/Register)
-✅ Dashboard
-✅ Student Management
-✅ Teacher Management
-✅ Attendance Tracking
-✅ Finance Management
-✅ ID Card Generation
-✅ Notices
-✅ Reports
-✅ Role-Based Access Control (RBAC)
-
-## Development Commands
-
-```powershell
-# Server
-npm run dev       # Development with auto-reload
-npm run build     # Build TypeScript
-npm run seed      # Seed database with demo data
-
-# Client
-npm run dev       # Development server
-npm run build     # Build for production
-npm run lint      # Check code quality
-
-# Android
-npx expo start -c     # Start with cache clear
-npx expo run:android  # Build & run on emulator
-npx expo run:ios      # Build & run on iOS (Mac only)
+#### MongoDB Atlas (Cloud)
+```env
+MONGO_URI=mongodb://user:pass@host1:27017,host2:27017,host3:27017/?ssl=true&replicaSet=replica-set-name&authSource=admin&retryWrites=true&w=majority
+MONGO_DB_NAME=documentwise_demo
+MONGO_REPLICA_SET=atlas-replica-set-name
+MONGO_SSL=true
+MONGO_POOL_SIZE=10
+MONGO_PERSISTENCE_ENABLED=true
 ```
 
-## Testing Login Flow
+### File Upload Configuration
+```env
+IMGBB_API_KEY=your_api_key                   # Get from https://api.imgbb.com/
+UPLOAD_MAX_SIZE_MB=5                         # Max file size in MB
+UPLOAD_ALLOWED_TYPES=image/jpeg,image/png,application/pdf
+UPLOAD_PATH=uploads/                         # Local upload directory
+```
 
-1. **Open Web Client:** http://localhost:3000
-2. **Click "Login"**
-3. **Enter Credentials:**
-   - Email: `head@demoschool.edu`
-   - Password: `admin123`
-4. **Click "Sign In"**
-5. **See Dashboard**
+### Email Configuration (Optional)
+```env
+EMAIL_ENABLED=true                           # Enable email functionality
 
-## For Android Testing
+# SMTP Settings (Gmail example)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password                  # Use app-specific password, not account password
+```
 
-1. **Install Expo Go** from Play Store or App Store
-2. **Make sure server is running** on port 5000
-3. **Run:** `npx expo start -c`
-4. **Scan QR code** with Expo Go
-5. **Use same credentials** as web login
+**Gmail Setup:**
+1. Enable 2-Factor Authentication
+2. Go to https://myaccount.google.com/apppasswords
+3. Select "Mail" and "Windows Computer"
+4. Copy the 16-character app password
+5. Use as `SMTP_PASS`
 
-## Production Deployment
+### SMS Configuration (Optional)
+```env
+SMS_ENABLED=true
+SMS_PROVIDER=twilio                          # twilio or anoncify
 
-For deployment, update:
-- `.env` JWT_SECRET with a strong random value
-- `.env` MONGO_URI with production database
-- `.env` FRONTEND_URL with production domain
-- `.env` MOBILE_URL with production mobile URL
+# Twilio
+SMS_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxx
+SMS_AUTH_TOKEN=your_auth_token
+SMS_PHONE_NUMBER=+1234567890
 
-## Support
+# OR Anoncify
+SMS_API_KEY=your_anoncify_api_key
+SMS_API_URL=https://anoncify.xyz/api/sms
+```
 
-For issues:
-1. Check MongoDB is running
-2. Verify `.env` files exist and are configured
-3. Clear cache: `npx expo start -c`
-4. Check error messages in server console
-5. Try: `npm install --legacy-peer-deps`
+### Frontend URLs
+```env
+FRONTEND_URL=http://localhost:3000           # Web client URL
+MOBILE_URL=http://localhost:8081             # Mobile app URL
+ANDROID_URL=http://localhost:8082            # Android app URL
+ALLOWED_ORIGINS=                              # Comma-separated additional origins
+```
 
-## Success Indicators
+## Project Structure
 
-✅ Server starts without errors
-✅ Client loads on localhost:3000
-✅ Can seed database via API
-✅ Can login with demo credentials
-✅ Dashboard displays after login
-✅ Android app loads with Expo Go
+```
+src/
+├── app.ts                      # Express app configuration
+├── server.ts                   # Server entry point
+├── config/
+│   ├── config.ts              # Configuration management
+│   └── database.ts            # MongoDB connection
+├── controllers/               # Request handlers
+├── routes/                    # API routes
+├── models/                    # Mongoose schemas
+├── services/                  # Business logic
+├── utils/
+│   ├── email.ts              # Email sending
+│   ├── sms.ts                # SMS sending
+│   └── upload.ts             # File upload handling
+├── types/                     # TypeScript types
+└── validators/                # Input validation
+```
 
----
+## Available Scripts
 
-**Happy coding! 🚀**
+```bash
+npm run dev              # Start with hot reload (ts-node-dev)
+npm start               # Start production build
+npm run build           # Compile TypeScript
+npm run seed            # Seed complete demo data
+npm run seed:quick      # Seed minimal test data
+npm run seed:complete   # Seed extensive data
+npm run monthly-sms     # Send monthly guardian SMS
+npm run test            # Run tests
+```
+
+## API Endpoints
+
+### Core Routes
+- `/api/health` - Health check
+- `/api/auth/*` - Authentication (login, register, refresh token)
+- `/api/config/*` - Configuration endpoints
+- `/api/seed/*` - Database seeding
+
+### Resource Routes
+- `/api/users/*` - User management
+- `/api/students/*` - Student records
+- `/api/teachers/*` - Teacher records
+- `/api/staff/*` - Staff management
+- `/api/academic/*` - Academic information
+- `/api/attendance/*` - Attendance tracking
+- `/api/finance/*` - Finance & fees
+- `/api/documents/*` - Document management
+- `/api/notices/*` - Notice board
+- `/api/id-cards/*` - ID card generation
+- `/api/dashboard/*` - Dashboard data
+- `/api/notifications/*` - Notifications
+- `/api/committee/*` - Committee management
+- `/api/parent/*` - Parent portal
+
+## Demo Credentials
+
+After seeding, use these credentials:
+
+```
+Head/Admin:
+  Email: head@demoschool.edu
+  Password: admin123
+
+Teacher:
+  Email: teacher@demoschool.edu
+  Password: teacher123
+
+Student:
+  Email: student@demoschool.edu
+  Password: student123
+```
+
+## Services
+
+### Email Service
+- Disabled by default
+- Supports single and bulk emails
+- Template-based sending
+- Error handling with retry logic
+
+### SMS Service
+- Disabled by default
+- Supports Twilio and Anoncify providers
+- Bulk SMS capability
+- Attendance and fee reminders
+
+### File Upload Service
+- Local filesystem storage
+- ImgBB integration for images
+- File validation
+- Size and type restrictions
+
+## Troubleshooting
+
+### MongoDB Connection Issues
+```
+If "MongoDB Connection Error" appears:
+1. Check MONGO_URI is correct
+2. Verify MongoDB is running (local or Atlas accessible)
+3. Check network connectivity
+4. Verify username/password if using credentials
+```
+
+### Email Not Sending
+```
+If emails don't send:
+1. Set EMAIL_ENABLED=true
+2. Verify SMTP credentials
+3. Check Gmail app password (not account password)
+4. Check SMTP_HOST and SMTP_PORT
+```
+
+### SMS Not Sending
+```
+If SMS doesn't send:
+1. Set SMS_ENABLED=true
+2. Verify SMS_PROVIDER is set correctly
+3. Check API credentials (Twilio or Anoncify)
+4. Ensure phone numbers are in E.164 format
+```
+
+## Performance Tips
+
+- Use MongoDB connection pooling (MONGO_POOL_SIZE)
+- Enable MONGO_PERSISTENCE_ENABLED for Atlas
+- Set rate limiting appropriately
+- Use compression middleware
+- Cache responses when possible
+
+## Security Best Practices
+
+- Use environment variables for all secrets
+- Never commit .env file
+- Use HTTPS in production
+- Rotate JWT_SECRET regularly
+- Use strong passwords (32+ chars for JWT_SECRET)
+- Enable CORS selectively
+- Rate limit API endpoints
+- Validate all input

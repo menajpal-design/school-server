@@ -19,15 +19,19 @@ export const registerSchema = Joi.object({
 }).or('name', 'firstName');
 
 export const loginSchema = Joi.object({
-  email: Joi.string().email(),
-  identifier: Joi.string().min(2),
-  username: Joi.string().min(2),
-  phone: Joi.string().min(2),
-  mobile: Joi.string().min(2),
+  email: Joi.string().email().optional().allow('', null),
+  identifier: Joi.string().min(2).optional().allow('', null),
+  username: Joi.string().min(2).optional().allow('', null),
+  phone: Joi.string().min(2).optional().allow('', null),
+  mobile: Joi.string().min(2).optional().allow('', null),
   password: Joi.string().required(),
-}).or('email', 'identifier', 'username', 'phone', 'mobile');
+}).or('email', 'identifier', 'username', 'phone', 'mobile').unknown(true);
 
 export const changePasswordSchema = Joi.object({
   currentPassword: Joi.string().required(),
   newPassword: Joi.string().min(8).required(),
+});
+
+export const forgotPasswordSchema = Joi.object({
+  identifier: Joi.string().min(2).required(),
 });

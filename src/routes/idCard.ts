@@ -1,5 +1,5 @@
 import express from 'express';
-import { generateStudentIdCard, generateTeacherIdCard, generateStaffIdCard, bulkGenerateIdCards, downloadIdCard, emailIdCard, verifyByQRCode, renewIdCard, idCardStats, getAllIdCards, getIdCardById, getMyIdCard, searchIdCardOwners, generateIdCardRecord } from '../controllers/idCard';
+import { generateStudentIdCard, generateTeacherIdCard, generateStaffIdCard, bulkGenerateIdCards, downloadIdCard, emailIdCard, verifyByQRCode, renewIdCard, idCardStats, getAllIdCards, getIdCardById, getMyIdCard, searchIdCardOwners, generateIdCardRecord, renderCardPdf } from '../controllers/idCard';
 import { authenticate, canDownloadIDCard, canGenerateIDCard, canManageIDCard, canScanIDCard } from '../middleware/auth';
 
 const router = express.Router();
@@ -12,6 +12,7 @@ router.get('/owners/search', authenticate, canGenerateIDCard(), searchIdCardOwne
 router.post('/', authenticate, canGenerateIDCard(), generateIdCardRecord);
 router.post('/generate', authenticate, canGenerateIDCard(), generateIdCardRecord);
 router.post('/bulk', authenticate, canGenerateIDCard(), bulkGenerateIdCards);
+router.post('/render-pdf', authenticate, canDownloadIDCard(), renderCardPdf);
 
 // Download by card id
 router.get('/:id/download', authenticate, canDownloadIDCard(), downloadIdCard);

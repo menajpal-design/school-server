@@ -1,18 +1,22 @@
 import express from 'express';
 import { authenticate } from '../middleware/auth';
 import BackupConfig from '../models/BackupConfig';
+import User from '../models/User';
 import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
+import Attendance from '../models/Attendance';
+import Fee from '../models/Fee';
+import Document from '../models/Document';
+import IDCard from '../models/IDCard';
+import Institution from '../models/Institution';
+import Notice from '../models/Notice';
 import Class from '../models/Class';
 import Section from '../models/Section';
-import Subject from '../models/Subject';
-import Attendance from '../models/Attendance';
 import Parent from '../models/Parent';
-import Fee from '../models/Fee';
-import Notice from '../models/Notice';
-import IDCard from '../models/IDCard';
+import Subject from '../models/Subject';
 import Exam from '../models/Exam';
+import Result from '../models/Result';
 import ClassRoutine from '../models/ClassRoutine';
 
 const router = express.Router();
@@ -188,5 +192,99 @@ router.post('/:id/restore', authenticate, async (req: any, res) => {
     res.status(500).json({ message: 'Failed to queue restore', error });
   }
 });
+
+// Export data
+router.get('/export', authenticate, async (req, res) => {
+  try {
+    const institutionId = req.user.institutionId;
+    const collections = req.query.collections ? (req.query.collections as string).split(',') : ['students', 'teachers', 'staff', 'users', 'attendance', 'finance', 'documents', 'idcards', 'notices', 'classes', 'subjects', 'exams', 'results'];
+
+    const data: any = {
+      institution: await Institution.findById(institutionId),
+      exportedAt: new Date(),
+      collections: {},
+    };
+
+    if (collections.includes('students')) data.collections.students = await Student.find({ institutionId });
+    if (collections.includes('teachers')) data.collections.teachers = await Teacher.find({ institutionId });
+    if (collections.includes('staff')) data.collections.staff = await Staff.find({ institutionId });
+    if (collections.includes('users')) data.collections.users = await User.find({ institutionId });
+    if (collections.includes('attendance')) data.collections.attendance = await Attendance.find({ institutionId });
+    if (collections.includes('finance')) data.collections.finance = await Fee.find({ institutionId });
+    if (collections.includes('documents')) data.collections.documents = await Document.find({ institutionId });
+    if (collections.includes('idcards')) data.collections.idcards = await IDCard.find({ institutionId });
+    if (collections.includes('notices')) data.collections.notices = await Notice.find({ institutionId });
+    if (collections.includes('classes')) data.collections.classes = await Class.find({ institutionId });
+    if (collections.includes('subjects')) data.collections.subjects = await Subject.find({ institutionId });
+    if (collections.includes('exams')) data.collections.exams = await Exam.find({ institutionId });
+    if (collections.includes('results')) data.collections.results = await Result.find({ institutionId });
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="backup-${new Date().toISOString().split('T')[0]}.json"`);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Export failed', error });
+  }
+});
+
+// Import data
+router.post('/import', authenticate, async (req, res) => {
+  try {
+    const institutionId = req.user.institutionId;
+    const data = req.body;
+    const results: any = {};
+
+    // Simple import - just create new records
+    const importOrder = ['classes', 'subjects', 'users', 'teachers', 'staff', 'students', 'attendance', 'finance', 'documents', 'idcards', 'notices', 'exams', 'results'];
+
+    for (const collection of importOrder) {
+      if (data.collections && data.collections[collection]) {
+        const Model = getModel(collection);
+        if (Model) {
+          const items = data.collections[collection];
+          results[collection] = { imported: 0, errors: 0 };
+
+          for (const item of items) {
+            try {
+              // Add institutionId if not present
+              if (!item.institutionId) item.institutionId = institutionId;
+
+              // Always create new (avoid conflicts)
+              delete item._id; // Let Mongo generate new ID
+              await new (Model as any)(item).save();
+              results[collection].imported++;
+            } catch (err) {
+              console.error(`Error importing ${collection} item:`, err);
+              results[collection].errors++;
+            }
+          }
+        }
+      }
+    }
+
+    res.json({ message: 'Import completed', results });
+  } catch (error) {
+    res.status(500).json({ message: 'Import failed', error });
+  }
+});
+
+function getModel(collection: string) {
+  switch (collection) {
+    case 'students': return Student;
+    case 'teachers': return Teacher;
+    case 'staff': return Staff;
+    case 'users': return User;
+    case 'attendance': return Attendance;
+    case 'finance': return Fee;
+    case 'documents': return Document;
+    case 'idcards': return IDCard;
+    case 'notices': return Notice;
+    case 'classes': return Class;
+    case 'subjects': return Subject;
+    case 'exams': return Exam;
+    case 'results': return Result;
+    default: return null;
+  }
+}
 
 export default router;

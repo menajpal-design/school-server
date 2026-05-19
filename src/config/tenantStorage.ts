@@ -13,29 +13,23 @@ const schoolDataModels = new Set([
   'AuditLog',
   'BackupConfig',
   'Class',
-  'ClassRoutine',
   'Committee',
   'Document',
   'Exam',
   'Fee',
-  'Holiday',
   'IDCard',
-  'LeaveApplication',
   'Message',
   'Notice',
   'Notification',
   'Parent',
   'Payment',
-  'PromotionRecord',
   'Result',
   'Salary',
   'Section',
-  'SiteSetting',
   'SmsLog',
   'Staff',
   'Student',
   'Subject',
-  'Syllabus',
   'Teacher',
 ]);
 
@@ -257,7 +251,7 @@ export const installTenantStoragePatches = () => {
       return this;
     }
 
-  const saved = await originalSave.apply(this, args as any);
+    const saved = await originalSave.apply(this, args as any);
     if (context?.mongoUri && this.constructor?.db === mongoose.connection && primaryMirrorModels.has(this.constructor?.modelName)) {
       schedulePrimaryMirror(this.constructor, saved, context);
     }

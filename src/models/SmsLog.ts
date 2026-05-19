@@ -1,60 +1,82 @@
-import mongoose, { Document, Schema } from 'mongoose';
-
-export type SmsDeliveryStatus = 'sent' | 'failed' | 'pending';
-export type SmsRecipientType = 'student' | 'parent' | 'teacher' | 'staff' | 'guardian' | 'other';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ISmsLog extends Document {
   institutionId: mongoose.Types.ObjectId;
-  senderId?: mongoose.Types.ObjectId;
-  recipientId?: mongoose.Types.ObjectId;
-  recipientType: SmsRecipientType;
-  recipientName: string;
-  recipientPhone: string;
+  phoneNumber: string;
+  recipientName: string; // Parent name or contact person name
   message: string;
-  purpose?: string;
-  provider?: string;
-  status: SmsDeliveryStatus;
+  type: 'attendance' | 'fee' | 'notice' | 'notification' | 'other';
+  status: 'sent' | 'failed' | 'pending' | 'delivered';
+  studentId?: mongoose.Types.ObjectId;
+  parentId?: mongoose.Types.ObjectId;
   sentAt: Date;
-  expiresAt: Date;
-  errorMessage?: string;
+  deliveredAt?: Date;
+  failureReason?: string;
+  apiResponse?: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const addOneMonth = () => {
-  const date = new Date();
-  date.setMonth(date.getMonth() + 1);
-  return date;
-};
-
-const SmsLogSchema: Schema = new Schema({
-  institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true, index: true },
-  senderId: { type: Schema.Types.ObjectId, ref: 'User' },
-  recipientId: { type: Schema.Types.ObjectId },
-  recipientType: {
-    type: String,
-    enum: ['student', 'parent', 'teacher', 'staff', 'guardian', 'other'],
-    default: 'guardian',
+const SmsLogSchema = new Schema<ISmsLog>(
+  {
+    institutionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Institution',
+      required: true,
+      index: true,
+    },
+    phoneNumber: {
+      type: String,
+      required: true,
+    },
+    recipientName: {
+      type: String,
+      required: true,
+    },
+    message: {
+      type: String,
+      required: true,
+    },
+    type: {
+      type: String,
+      enum: ['attendance', 'fee', 'notice', 'notification', 'other'],
+      default: 'notification',
+    },
+    status: {
+      type: String,
+      enum: ['sent', 'failed', 'pending', 'delivered'],
+      default: 'pending',
+    },
+    studentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Student',
+    },
+    parentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Parent',
+    },
+    sentAt: {
+      type: Date,
+      default: Date.now,
+    },
+    deliveredAt: {
+      type: Date,
+    },
+    failureReason: {
+      type: String,
+    },
+    apiResponse: {
+      type: String,
+    },
   },
-  recipientName: { type: String, required: true, trim: true },
-  recipientPhone: { type: String, required: true, trim: true, index: true },
-  message: { type: String, required: true, trim: true },
-  purpose: { type: String, trim: true },
-  provider: { type: String, trim: true },
-  status: {
-    type: String,
-    enum: ['sent', 'failed', 'pending'],
-    default: 'sent',
-    index: true,
-  },
-  sentAt: { type: Date, default: Date.now, index: true },
-  expiresAt: { type: Date, default: addOneMonth, index: { expires: 0 } },
-  errorMessage: { type: String, trim: true },
-}, {
-  timestamps: true,
-});
+  { timestamps: true }
+);
 
-SmsLogSchema.index({ institutionId: 1, sentAt: -1 });
-SmsLogSchema.index({ institutionId: 1, status: 1, sentAt: -1 });
+// Index for efficient querying
+SmsLogSchema.index({ institutionId: 1, createdAt: -1 });
+SmsLogSchema.index({ institutionId: 1, parentId: 1 });
+SmsLogSchema.index({ institutionId: 1, status: 1 });
 
-export default mongoose.model<ISmsLog>('SmsLog', SmsLogSchema);
+const SmsLog = mongoose.model<ISmsLog>('SmsLog', SmsLogSchema);
+
+export default SmsLog;

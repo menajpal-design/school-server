@@ -6,10 +6,18 @@ import User from '../models/User';
 import ClassModel from '../models/Class';
 import Subject from '../models/Subject';
 import IDCard from '../models/IDCard';
+import Institution from '../models/Institution';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
 import { sendSMS } from '../utils/sms';
+import { sendEmail } from '../services/emailService';
+import { generateAppointmentLetter } from '../utils/appointmentLetter';
 
 const router = express.Router();
+
+const normalizeNameList = (value: any) => {
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,\n]/);
+  return raw.map((item) => String(item).trim()).filter(Boolean);
+};
 
 router.get('/', authenticate, (req, res) => {
   Teacher.find({ institutionId: req.user.institutionId })
@@ -33,19 +41,43 @@ router.get('/:id', authenticate, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load teacher', error }));
 });
 
-const findClasses = async (names: string[], institutionId: any) => {
+const findOrCreateClasses = async (names: string[], institutionId: any) => {
   const ids = [];
   for (const name of names.filter(Boolean)) {
-    const classItem = await ClassModel.findOne({ name: name.trim(), institutionId });
-    if (classItem) ids.push(classItem._id);
+    const trimmed = name.trim();
+    let classItem = await ClassModel.findOne({ name: trimmed, institutionId });
+    if (!classItem) {
+      classItem = await ClassModel.create({
+        name: trimmed,
+        grade: trimmed.match(/\d+/)?.[0] || trimmed,
+        shift: 'day',
+        academicYear: String(new Date().getFullYear()),
+        isActive: true,
+        institutionId,
+      });
+    }
+    ids.push(classItem._id);
   }
   return ids;
 };
 
-const findSubjects = async (names: string[], institutionId: any) => {
+const findOrCreateSubjects = async (names: string[], institutionId: any, classIds: any[] = []) => {
   const ids = [];
+  const primaryClassId = classIds[0];
   for (const name of names.filter(Boolean)) {
-    const subject = await Subject.findOne({ name: name.trim(), institutionId });
+    const trimmed = name.trim();
+    let subject = await Subject.findOne({ name: trimmed, institutionId });
+    if (!subject && primaryClassId) {
+      subject = await Subject.create({
+        name: trimmed,
+        code: trimmed.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) || `SUB${Date.now().toString().slice(-4)}`,
+        type: 'core',
+        classId: primaryClassId,
+        creditHours: 1,
+        isActive: true,
+        institutionId,
+      });
+    }
     if (subject) ids.push(subject._id);
   }
   return ids;
@@ -92,13 +124,14 @@ router.post('/', authenticate, async (req, res) => {
       institutionId: req.user.institutionId,
     });
 
+    const classIds = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId);
     const teacher = await Teacher.create({
       userId: user._id,
       employeeId: req.body.employeeId || `T-${Date.now()}`,
       designation: req.body.designation,
       department: req.body.department,
-      subjects: await findSubjects(String(req.body.subjects || '').split(','), req.user.institutionId),
-      assignedClasses: await findClasses(String(req.body.assignedClasses || '').split(','), req.user.institutionId),
+      assignedClasses: classIds,
+      subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, classIds),
       joiningDate: req.body.joiningDate || new Date(),
       qualification: req.body.qualification || 'Not specified',
       experience: Number(req.body.experience) || 0,
@@ -107,9 +140,50 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;
+    
+    // Send SMS with credentials if phone provided
     if (req.body.phone) {
-      await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}`, institutionId: req.user.institutionId });
+      await sendSMS({
+        to: req.body.phone,
+        message: `Your teacher account: username ${username}, password ${temporaryPassword}`,
+        institutionId: req.user.institutionId,
+        recipientName: req.body.name,
+        recipientPhone: req.body.phone,
+        type: 'notification',
+      });
     }
+
+    // Send appointment letter email if requested and email is provided
+    if (req.body.sendAppointmentLetter && req.body.email) {
+      try {
+        const institution = await Institution.findById(req.user.institutionId);
+        const appointmentLetterHtml = generateAppointmentLetter({
+          teacherName: req.body.name,
+          position: req.body.designation,
+          designation: req.body.designation,
+          joiningDate: req.body.joiningDate
+            ? new Date(req.body.joiningDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+            : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+          departmentName: req.body.department,
+          salary: Number(req.body.salary) || 0,
+          qualification: req.body.qualification || 'Not specified',
+          schoolName: institution?.name || 'School',
+          schoolAddress: institution?.address || 'School Address',
+          principalName: req.user.name || 'Principal',
+          letterDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        });
+
+        await sendEmail({
+          to: req.body.email,
+          subject: `Appointment Letter - ${req.body.name}`,
+          html: appointmentLetterHtml,
+        });
+      } catch (emailError) {
+        console.error('Error sending appointment letter:', emailError);
+        // Don't fail the entire request if email fails
+      }
+    }
+
     res.status(201).json({ teacher, user, idCard, credentials: { username, password: temporaryPassword } });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create teacher', error });
@@ -131,8 +205,8 @@ router.put('/:id', authenticate, async (req, res) => {
     teacher.employeeId = req.body.employeeId || teacher.employeeId;
     teacher.designation = req.body.designation;
     teacher.department = req.body.department;
-    teacher.subjects = await findSubjects(String(req.body.subjects || '').split(','), req.user.institutionId) as any;
-    teacher.assignedClasses = await findClasses(String(req.body.assignedClasses || '').split(','), req.user.institutionId) as any;
+    teacher.assignedClasses = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId) as any;
+    teacher.subjects = await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, teacher.assignedClasses as any) as any;
     teacher.joiningDate = req.body.joiningDate;
     teacher.qualification = req.body.qualification || teacher.qualification;
     teacher.experience = Number(req.body.experience) || 0;

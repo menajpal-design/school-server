@@ -154,9 +154,14 @@ export const login = async (req: Request, res: Response) => {
 
     // Validate input
     if (!identifier || !password) {
+      console.warn('Login validation failed:', { hasIdentifier: !!identifier, hasPassword: !!password });
       return res.status(400).json({ 
-        message: 'Email/mobile and password are required',
-        details: { identifier: !identifier ? 'missing' : 'ok', password: !password ? 'missing' : 'ok' }
+        message: 'Validation failed',
+        errors: [
+          !identifier ? 'Username/email/phone is required' : null,
+          !password ? 'Password is required' : null,
+        ].filter(Boolean),
+        details: { identifier: !identifier ? 'missing' : 'provided', password: !password ? 'missing' : 'provided' }
       });
     }
 
@@ -165,6 +170,8 @@ export const login = async (req: Request, res: Response) => {
 
     // Find user
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
+    console.log('Login attempt:', { identifier, emailQuery, hasInstitutionScope: !!institutionScope.institutionId });
+    
     let user = await User.findOne({
       ...institutionScope,
       $or: [
@@ -173,6 +180,8 @@ export const login = async (req: Request, res: Response) => {
         { phone: identifier },
       ],
     }).populate('institutionId').maxTimeMS(5000);
+
+    console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
 
     let isMatch = user ? await bcrypt.compare(password, user.password) : false;
 
@@ -187,14 +196,22 @@ export const login = async (req: Request, res: Response) => {
         isActive: true,
       }).select('userId').maxTimeMS(5000);
 
+      console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
+
       if (student?.userId) {
         user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId').maxTimeMS(5000);
+        console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
         isMatch = user ? await bcrypt.compare(password, user.password) : false;
       }
     }
 
     if (!user || !isMatch) {
-      return res.status(400).json({ message: 'Invalid username, email, mobile number or password' });
+      const errorMsg = user ? 'Incorrect password' : 'User not found';
+      console.warn('Login failed:', { identifier, userFound: !!user, passwordMatch: isMatch, error: errorMsg });
+      return res.status(400).json({ 
+        message: 'Invalid credentials',
+        errors: [errorMsg],
+      });
     }
 
     // Update last login
@@ -222,7 +239,8 @@ export const login = async (req: Request, res: Response) => {
 
     res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error });
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'Server error', error: String(error) });
   }
 };
 

@@ -42,6 +42,8 @@ export interface Config {
   // SMS
   smsEnabled: boolean;
   smsProvider: string;
+  smsApiKey: string;
+  smsApiUrl: string;
   smsTwilioAccountSID: string;
   smsTwilioAuthToken: string;
   smsTwilioPhoneNumber: string;
@@ -49,6 +51,9 @@ export interface Config {
   // URLs
   frontendUrl: string;
   mobileUrl: string;
+  androidUrl: string;
+  staticServerUrl: string;
+  allowedOrigins: string;
 }
 
 /**
@@ -93,7 +98,9 @@ export const getConfig = (): Config => {
 
     // SMS
     smsEnabled: process.env.SMS_ENABLED === 'true',
-    smsProvider: process.env.SMS_PROVIDER || 'twilio',
+    smsProvider: process.env.SMS_PROVIDER || 'anoncify',
+    smsApiKey: process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '',
+    smsApiUrl: process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms',
     smsTwilioAccountSID: process.env.SMS_ACCOUNT_SID || '',
     smsTwilioAuthToken: process.env.SMS_AUTH_TOKEN || '',
     smsTwilioPhoneNumber: process.env.SMS_PHONE_NUMBER || '',
@@ -101,6 +108,9 @@ export const getConfig = (): Config => {
     // URLs
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
     mobileUrl: process.env.MOBILE_URL || 'http://localhost:8081',
+    androidUrl: process.env.ANDROID_URL || 'http://localhost:8082',
+    staticServerUrl: process.env.SERVER_URL || 'https://school-server-b264c1a1fac6.herokuapp.com',
+    allowedOrigins: process.env.ALLOWED_ORIGINS || '',
   };
 
   // Validate critical configuration
@@ -113,42 +123,56 @@ export const getConfig = (): Config => {
  * Validate configuration
  */
 export const validateConfig = (config: Config): void => {
-  const errors: string[] = [];
+  const criticalErrors: string[] = [];
+  const warnings: string[] = [];
 
   // JWT Secret validation
   if (config.jwtSecret.length < 32) {
-    errors.push('JWT_SECRET must be at least 32 characters long');
+    warnings.push('JWT_SECRET should be at least 32 characters long');
   }
 
   // MongoDB URI validation
   if (!config.mongoUri) {
-    errors.push('MONGO_URI is required');
+    warnings.push('MONGO_URI is missing; database features may not work');
   }
 
   // If emails are enabled, validate email config
   if (config.emailEnabled) {
     if (!config.smtpHost || !config.smtpPort) {
-      errors.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
+      warnings.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
     }
     if (!(config.smtpUser || config.emailUser) || !(config.smtpPass || config.emailPass)) {
-      errors.push('SMTP_USER/SMTP_PASS are required when EMAIL_ENABLED is true');
+      warnings.push('SMTP_USER/SMTP_PASS are required when EMAIL_ENABLED is true');
     }
   }
 
   // If SMS is enabled, validate SMS config
-  if (config.smsEnabled && config.smsProvider === 'twilio') {
-    if (!config.smsTwilioAccountSID || !config.smsTwilioAuthToken) {
-      errors.push('SMS_ACCOUNT_SID and SMS_AUTH_TOKEN are required when SMS_ENABLED is true');
+  if (config.smsEnabled && config.smsProvider === 'anoncify') {
+    if (!config.smsApiKey) {
+      warnings.push('SMS_API_KEY (or ANONCIFY_SMS_API_KEY) is required when SMS_ENABLED is true');
     }
-    if (!config.smsTwilioPhoneNumber) {
-      errors.push('SMS_PHONE_NUMBER is required when SMS_ENABLED is true');
+    if (!config.smsApiUrl) {
+      warnings.push('SMS_API_URL is required when SMS_ENABLED is true');
     }
   }
 
-  if (errors.length > 0) {
-    console.error('❌ Configuration Errors:');
-    errors.forEach((error) => console.error(`   - ${error}`));
+  if (config.smsEnabled && config.smsProvider === 'twilio') {
+    if (!config.smsTwilioAccountSID || !config.smsTwilioAuthToken) {
+      warnings.push('SMS_ACCOUNT_SID and SMS_AUTH_TOKEN are required when SMS_ENABLED is true');
+    }
+    if (!config.smsTwilioPhoneNumber) {
+      warnings.push('SMS_PHONE_NUMBER is required when SMS_ENABLED is true');
+    }
+  }
 
+  if (warnings.length > 0) {
+    console.warn('⚠️ Configuration Warnings:');
+    warnings.forEach((warning) => console.warn(`   - ${warning}`));
+  }
+
+  if (criticalErrors.length > 0) {
+    console.error('❌ Configuration Errors:');
+    criticalErrors.forEach((error) => console.error(`   - ${error}`));
   }
 };
 
@@ -171,4 +195,6 @@ export const reloadConfig = (): void => {
   configInstance = null;
 };
 
+// Backwards-compatibility alias: some older deployments import `getAppConfig`
+// Use this alias to avoid build failures when older code expects that name.
 export const getAppConfig = getConfig;

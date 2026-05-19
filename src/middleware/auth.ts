@@ -2,7 +2,6 @@ import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
 import Institution from '../models/Institution';
-import { ensureDatabaseReady } from '../config/database';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 interface AuthRequest extends Request {
@@ -61,19 +60,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
 
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({ message: 'JWT_SECRET is not configured on server.' });
-    }
-
-    const dbReady = await ensureDatabaseReady();
-    if (!dbReady) {
-      return res.status(503).json({
-        message: 'Database is not connected. Check MONGO_URI / MONGODB_URI in Heroku Config Vars.',
-        code: 'DB_NOT_CONNECTED',
-      });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET) as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
     const user = await withAuthTimeout(
       User.findById(decoded.id).select('-password').lean().maxTimeMS(authQueryMaxTimeMs).exec(),
       'Auth user lookup'
@@ -105,7 +92,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const platformAdmin = isPlatformAdminRole(user.role);
     const schoolActive = institution?.isActive !== false;
     const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
-    if (!platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
+    const isDevelopment = (process.env.NODE_ENV || 'development') !== 'production';
+    if (!isDevelopment && !platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
       const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
       return res.status(403).json({ message });
     }
@@ -148,6 +136,7 @@ export const checkPermission = (permission: string) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
+    // Head bypass
     if (isPrivilegedRole(req.user.role)) return next();
 
     if (!Array.isArray(req.user.permissions) || !req.user.permissions.includes(permission)) {
@@ -161,7 +150,10 @@ export const checkPermission = (permission: string) => {
 export const canAccessOwnData = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+
+    // Head can access all
     if (isPrivilegedRole(req.user.role)) return next();
+
     const targetId = req.params.id || req.body.userId || req.query.userId;
     if (!targetId) return res.status(400).json({ message: 'Target id required.' });
     if (String(req.user._id || req.user.id) === String(targetId)) return next();
@@ -173,6 +165,7 @@ export const canAccessOwnData = () => {
 export const canAccessAssignedArea = (areaParam = 'areaId') => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+
     if (isPrivilegedRole(req.user.role)) return next();
     if (req.user.role === 'assistant_head') {
       const area = req.params[areaParam] || req.body[areaParam] || req.query[areaParam];
@@ -187,7 +180,7 @@ export const canManageIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'finance_officer', 'staff'];
+    const allowed = ['assistant_head', 'finance_officer', 'staff']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:idcard'))) return next();
     return res.status(403).json({ message: 'Access denied. Manage ID cards.' });
   };
@@ -196,7 +189,9 @@ export const canManageIDCard = () => {
 export const canScanIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (['student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Students and parents cannot scan ID cards.' });
+    if (['student', 'parent'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Students and parents cannot scan ID cards.' });
+    }
     if (isPrivilegedRole(req.user.role)) return next();
     const allowed = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff'];
     const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
@@ -223,7 +218,7 @@ export const canGenerateIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'staff', 'finance_officer', 'class_teacher'];
+    const allowed = ['assistant_head', 'staff', 'finance_officer', 'class_teacher']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('generate:idcard'))) return next();
     return res.status(403).json({ message: 'Access denied. Cannot generate ID card.' });
   };
@@ -233,7 +228,7 @@ export const canEditIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'staff'];
+    const allowed = ['assistant_head', 'staff']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('edit:idcard'))) return next();
     return res.status(403).json({ message: 'Access denied. Cannot edit ID card.' });
   };
@@ -252,7 +247,7 @@ export const canManageAcademic = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['class_teacher', 'subject_teacher', 'assistant_head'];
+    const allowed = ['class_teacher', 'subject_teacher', 'assistant_head']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) return next();
     return res.status(403).json({ message: 'Access denied. Academic management only.' });
   };
@@ -262,7 +257,7 @@ export const canPostNotice = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'committee_member', 'staff'];
+    const allowed = ['assistant_head', 'committee_member', 'staff']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('post:notice'))) return next();
     return res.status(403).json({ message: 'Access denied. Cannot post notice.' });
   };

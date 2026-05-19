@@ -109,4 +109,96 @@ router.put('/permissions', async (req, res) => {
   }
 });
 
+// Get subordinate users (those that current user can manage)
+router.get('/subordinates/list', async (req, res) => {
+  try {
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const institutionId = req.user?.institutionId;
+
+    // Define role hierarchy - who can see whom
+    const roleHierarchy: Record<string, string[]> = {
+      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
+      'class_teacher': ['student', 'parent'],
+      'subject_teacher': ['student', 'parent'],
+      'finance_officer': ['student', 'parent'],
+    };
+
+    const visibleRoles = roleHierarchy[userRole] || [];
+
+    if (!visibleRoles.length) {
+      return res.json({ users: [] });
+    }
+
+    const query: any = { role: { $in: visibleRoles } };
+    if (!isPlatformAdmin(userRole)) {
+      query.institutionId = institutionId;
+    }
+
+    const subordinates = await User.find(query)
+      .select('_id name username email role phone isActive createdAt')
+      .sort({ role: 1, name: 1 })
+      .limit(500);
+
+    res.json({ users: subordinates });
+  } catch (error) {
+    console.error('Error fetching subordinates:', error);
+    res.status(500).json({ message: 'Failed to fetch subordinates', error });
+  }
+});
+
+// View credentials for a specific user
+router.get('/view-credentials/:id', async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const requestingUserId = req.user?.id;
+    const userRole = req.user?.role;
+    const institutionId = req.user?.institutionId;
+
+    // Check if requesting user has permission
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check hierarchy permission
+    const roleHierarchy: Record<string, string[]> = {
+      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
+      'class_teacher': ['student', 'parent'],
+      'subject_teacher': ['student', 'parent'],
+      'finance_officer': ['student', 'parent'],
+    };
+
+    const canSee = roleHierarchy[userRole]?.includes(targetUser.role);
+    if (!canSee || (!isPlatformAdmin(userRole) && targetUser.institutionId.toString() !== institutionId.toString())) {
+      return res.status(403).json({ message: 'You do not have permission to view this user credentials' });
+    }
+
+    res.json({
+      user: {
+        _id: targetUser._id,
+        name: targetUser.name,
+        email: targetUser.email,
+        username: targetUser.username,
+        role: targetUser.role,
+        phone: targetUser.phone,
+      },
+      credentials: {
+        username: targetUser.username,
+        email: targetUser.email,
+        note: 'Password cannot be displayed for security reasons. Use "Reset Password" button to generate a temporary password.',
+      },
+    });
+  } catch (error) {
+    console.error('Error viewing credentials:', error);
+    res.status(500).json({ message: 'Failed to view credentials', error });
+  }
+});
+
 export default router;
