@@ -46,9 +46,20 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     paymentSenderNumber: input.paymentSenderNumber ?? current.paymentSenderNumber,
     paymentOrderId: input.paymentOrderId ?? current.paymentOrderId,
     paymentTime: input.paymentTime ?? current.paymentTime,
+    paymentVerificationRequestId: input.paymentVerificationRequestId ?? current.paymentVerificationRequestId,
+    paymentVerificationRedirectUrl: input.paymentVerificationRedirectUrl ?? current.paymentVerificationRedirectUrl,
+    paymentVerificationResponse: input.paymentVerificationResponse ?? current.paymentVerificationResponse,
   };
   return billingStatus === 'active' ? activateBilling(next, new Date()) : next;
 };
+
+const extractVerificationMeta = (verification: any = {}) => ({
+  paymentVerifyStatus: verification.status || 'pending',
+  paymentVerificationRequestId: verification.data?.requestId || verification.data?.request_id || verification.data?.id || '',
+  paymentVerificationRedirectUrl: verification.data?.redirectUrl || verification.data?.redirect_url || '',
+  paymentVerificationResponse: verification.data || {},
+  paymentVerifiedAt: verification.verified ? new Date() : undefined,
+});
 
 const countsForInstitutions = async (institutionIds: any[]) => {
   const [students, teachers, staff, users] = await Promise.all([
@@ -129,11 +140,13 @@ router.post('/schools/:id/verify-payment', async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    billing.paymentVerifyStatus = verification.status;
+    Object.assign(billing, extractVerificationMeta(verification));
     if (verification.verified) {
-      school.billing = activateBilling(billing) as any;
+      school.billing = activateBilling({
+        ...billing,
+        ...extractVerificationMeta(verification),
+      }, new Date()) as any;
       school.isActive = true;
-      (school.billing as any).paymentVerifiedAt = new Date();
     } else {
       school.billing = billing;
     }

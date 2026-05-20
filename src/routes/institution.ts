@@ -38,9 +38,20 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     paymentSenderNumber: input.paymentSenderNumber ?? current.paymentSenderNumber,
     paymentOrderId: input.paymentOrderId ?? current.paymentOrderId,
     paymentTime: input.paymentTime ?? current.paymentTime,
+    paymentVerificationRequestId: input.paymentVerificationRequestId ?? current.paymentVerificationRequestId,
+    paymentVerificationRedirectUrl: input.paymentVerificationRedirectUrl ?? current.paymentVerificationRedirectUrl,
+    paymentVerificationResponse: input.paymentVerificationResponse ?? current.paymentVerificationResponse,
     receivedAt: isPaymentReceived ? input.receivedAt || current.receivedAt || new Date() : current.receivedAt,
   };
 };
+
+const extractVerificationMeta = (verification: any = {}) => ({
+  paymentVerifyStatus: verification.status || 'pending',
+  paymentVerificationRequestId: verification.data?.requestId || verification.data?.request_id || verification.data?.id || '',
+  paymentVerificationRedirectUrl: verification.data?.redirectUrl || verification.data?.redirect_url || '',
+  paymentVerificationResponse: verification.data || {},
+  paymentVerifiedAt: verification.verified ? new Date() : undefined,
+});
 
 router.get('/plans', (req, res) => {
   res.json({
@@ -141,9 +152,12 @@ router.post('/billing/payment', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    billing.paymentVerifyStatus = verification.status;
+    Object.assign(billing, extractVerificationMeta(verification));
     if (verification.verified) {
-      institution.billing = activateBilling({ ...billing, paymentVerifiedAt: new Date() }) as any;
+      institution.billing = activateBilling({
+        ...billing,
+        ...extractVerificationMeta(verification),
+      }, new Date()) as any;
       institution.isActive = true;
     } else {
       institution.billing = billing as any;

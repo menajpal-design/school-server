@@ -30,11 +30,12 @@ const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T
 };
 
 const expireInstitutionSnapshotIfNeeded = (institution: any) => {
-  if (!institution?.billing?.expiresAt || institution.billing.billingStatus === 'expired') {
+  const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
+  if (!expiresAt || institution.billing.billingStatus === 'expired') {
     return institution;
   }
 
-  if (new Date(institution.billing.expiresAt) <= new Date()) {
+  if (new Date(expiresAt) <= new Date()) {
     institution.isActive = false;
     institution.billing = {
       ...institution.billing,

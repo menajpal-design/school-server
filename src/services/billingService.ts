@@ -22,7 +22,7 @@ export const activateBilling = (billing: any, at = new Date()) => ({
 });
 
 export const isSubscriptionExpired = (institution: any) => {
-  const expiresAt = institution?.billing?.subscriptionExpiresAt;
+  const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
   return institution?.isActive === true && expiresAt && new Date(expiresAt).getTime() < Date.now();
 };
 

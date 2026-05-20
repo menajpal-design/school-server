@@ -36,6 +36,9 @@ export interface IInstitution extends Document {
     paymentSenderNumber?: string;
     paymentOrderId?: string;
     paymentTime?: string;
+    paymentVerificationRequestId?: string;
+    paymentVerificationRedirectUrl?: string;
+    paymentVerificationResponse?: Record<string, any>;
     activatedAt?: Date;
     subscriptionStartedAt?: Date;
     subscriptionExpiresAt?: Date;
@@ -106,6 +109,9 @@ const InstitutionSchema: Schema = new Schema({
     paymentSenderNumber: { type: String },
     paymentOrderId: { type: String },
     paymentTime: { type: Date },
+    paymentVerificationRequestId: { type: String },
+    paymentVerificationRedirectUrl: { type: String },
+    paymentVerificationResponse: { type: Schema.Types.Mixed },
     activatedAt: { type: Date },
     subscriptionStartedAt: { type: Date },
     subscriptionExpiresAt: { type: Date },
