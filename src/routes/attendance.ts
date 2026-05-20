@@ -157,6 +157,39 @@ const canMarkAttendanceRecords = async (req: any, records: any[]) => {
   return true;
 };
 
+const normalizeScanCode = (value: any) => String(value || '').trim();
+
+const findStudentByScanCode = async (institutionId: any, code: string) => {
+  const cleanCode = normalizeScanCode(code);
+  if (!cleanCode) return null;
+
+  const card = await IDCard.findOne({
+    institutionId,
+    ownerType: 'student',
+    $or: [{ cardNumber: cleanCode }, { qrCodeData: cleanCode }, { barcodeData: cleanCode }],
+  }).lean();
+
+  if (card) {
+    return Student.findOne({ institutionId, $or: [{ _id: card.ownerId }, { userId: card.ownerId }] })
+      .populate('userId', 'name avatar email')
+      .populate('classId', 'name grade')
+      .populate('sectionId', 'name');
+  }
+
+  const studentQuery: any[] = [
+    { rollNumber: cleanCode },
+    { idCardNumber: cleanCode },
+  ];
+  if (mongoose.Types.ObjectId.isValid(cleanCode)) {
+    studentQuery.push({ _id: cleanCode }, { userId: cleanCode });
+  }
+
+  return Student.findOne({ institutionId, isActive: true, $or: studentQuery })
+    .populate('userId', 'name avatar email')
+    .populate('classId', 'name grade')
+    .populate('sectionId', 'name');
+};
+
 router.get('/', authenticate, canManageAcademic(), (req, res) => {
   const { start, end } = dayRange(req.query.date as string | undefined);
   const query: any = { institutionId: req.user.institutionId };
@@ -219,6 +252,57 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
     res.status(201).json({ attendance: saved });
   } catch (error) {
     res.status(500).json({ message: 'Failed to mark attendance', error });
+  }
+});
+
+router.post('/scan-present', authenticate, canScanIDCard(), async (req, res) => {
+  try {
+    const code = normalizeScanCode(req.body.code || req.body.cardNumber || req.body.qrCodeData || req.body.barcodeData);
+    if (!code) return res.status(400).json({ message: 'QR code or barcode required' });
+
+    const student = await findStudentByScanCode(req.user.institutionId, code);
+    if (!student) return res.status(404).json({ message: 'Student not found for scanned QR/barcode' });
+
+    const record = {
+      studentId: student._id,
+      userType: 'student',
+      classId: (student as any).classId?._id || (student as any).classId,
+      sectionId: (student as any).sectionId?._id || (student as any).sectionId,
+      status: 'present',
+      date: req.body.date,
+      notes: req.body.notes || `Present by ${req.body.scanMode || 'scanner'} scan`,
+    };
+
+    const allowed = await canMarkAttendanceRecords(req, [record]);
+    if (!allowed) return res.status(403).json({ message: 'Access denied. You cannot mark this student attendance.' });
+
+    const dateValue = toDateValue(req.body.date);
+    const attendance = await Attendance.findOneAndUpdate(
+      {
+        studentId: record.studentId,
+        userType: 'student',
+        classId: record.classId,
+        sectionId: record.sectionId,
+        date: dateValue,
+        institutionId: req.user.institutionId,
+      },
+      {
+        ...record,
+        date: dateValue,
+        markedBy: req.user._id,
+        markedAt: new Date(),
+        institutionId: req.user.institutionId,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    res.status(201).json({
+      attendance,
+      student,
+      message: `${(student as any).userId?.name || 'Student'} marked present.`,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to mark present from scanner', error });
   }
 });
 
@@ -318,173 +402,87 @@ router.get('/me', authenticate, (req, res) => {
       let profile: any = { name: req.user.name, role: req.user.role };
 
       if (student) {
-        attendance = await Attendance.find({ institutionId, studentId: student._id, date: { $gte: start, $lt: end } })
-          .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
-          .populate('classId', 'name grade')
-          .populate('sectionId', 'name')
-          .sort({ date: -1 })
-          .lean();
-        profile = { ...profile, rollNumber: student.rollNumber };
-      } else if (req.user.role === 'parent') {
-        const parent = await Parent.findOne({ institutionId, userId: req.user._id });
-        const childIds = parent?.children || [];
-        attendance = await Attendance.find({ institutionId, studentId: { $in: childIds }, date: { $gte: start, $lt: end } })
-          .populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email' } })
-          .populate('classId', 'name grade')
-          .populate('sectionId', 'name')
-          .sort({ date: -1 })
-          .lean();
-      } else {
-        const employee = await Teacher.findOne({ institutionId, userId: req.user._id }) || await Staff.findOne({ institutionId, userId: req.user._id });
-        profile = { ...profile, employeeId: employee?.employeeId };
-        attendance = await Attendance.find({ institutionId, userId: req.user._id, date: { $gte: start, $lt: end } })
-          .populate('userId', 'name avatar email role')
-          .sort({ date: -1 })
-          .lean();
+        attendance = await Attendance.find({ institutionId, studentId: student._id, date: { $gte: start, $lt: end } }).sort({ date: 1 }).lean();
+        profile = student;
+      } else if (['teacher', 'class_teacher', 'subject_teacher', 'assistant_head', 'head'].includes(req.user.role)) {
+        const teacher = await Teacher.findOne({ institutionId, userId: req.user._id }).lean();
+        profile = teacher || profile;
+        attendance = await Attendance.find({ institutionId, userId: req.user._id, userType: 'teacher', date: { $gte: start, $lt: end } }).sort({ date: 1 }).lean();
+      } else if (req.user.role === 'staff' || req.user.role === 'finance_officer') {
+        const staff = await Staff.findOne({ institutionId, userId: req.user._id }).lean();
+        profile = staff || profile;
+        attendance = await Attendance.find({ institutionId, userId: req.user._id, userType: 'staff', date: { $gte: start, $lt: end } }).sort({ date: 1 }).lean();
       }
 
-      const summary = statusSummary(attendance);
-      return res.json({ attendance, summary, profile, month, year });
+      res.json({ attendance, profile });
     })
-    .catch((error) => res.status(500).json({ message: 'Failed to load attendance', error }));
-});
-
-router.post('/me/mark', authenticate, async (req, res) => {
-  try {
-    if (req.user.role !== 'head') {
-      return res.status(403).json({ message: 'Only the Head can mark their own attendance.' });
-    }
-
-    const date = toDateValue(req.body.date);
-    const status = req.body.status || 'present';
-    if (!['present', 'absent', 'late', 'leave'].includes(status)) {
-      return res.status(400).json({ message: 'Invalid attendance status.' });
-    }
-
-    const attendance = await Attendance.findOneAndUpdate(
-      {
-        institutionId: req.user.institutionId,
-        userId: req.user._id,
-        userType: 'staff',
-        date,
-      },
-      {
-        institutionId: req.user.institutionId,
-        userId: req.user._id,
-        userType: 'staff',
-        date,
-        status,
-        notes: req.body.notes || 'Self marked by Head',
-        markedBy: req.user._id,
-        markedAt: new Date(),
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    ).populate('userId', 'name avatar email role');
-
-    res.status(201).json({ attendance });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to mark your attendance', error });
-  }
-});
-
-router.get('/student/:studentId', authenticate, canManageAcademic(), async (req, res) => {
-  try {
-    const studentQuery: any = await attendanceStudentQuery(req);
-    studentQuery._id = req.params.studentId;
-
-    const student = await Student.findOne(studentQuery).select('_id').lean();
-    if (!student) return res.status(404).json({ message: 'Student not found' });
-
-    const attendance = await Attendance.find({
-      institutionId: req.user.institutionId,
-      studentId: student._id,
-    })
-      .populate('classId', 'name grade')
-      .populate('sectionId', 'name')
-      .sort({ date: -1 })
-      .lean();
-
-    res.json({ attendance });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to load student attendance', error });
-  }
-});
-
-router.get('/person/:personType/:personId', authenticate, canManageAcademic(), async (req, res) => {
-  try {
-    const personType = normalizePersonType(req.params.personType);
-    if (personType === 'teacher') {
-      if (!canManageTeacherAttendance(req.user.role)) return res.status(403).json({ message: 'Access denied. Teacher attendance is only for Head and Assistant Head.' });
-      const teacher = await Teacher.findOne({
-        institutionId: req.user.institutionId,
-        userId: req.params.personId,
-        isActive: true,
-      }).select('userId').lean();
-      if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-      const attendance = await Attendance.find({
-        institutionId: req.user.institutionId,
-        userId: teacher.userId,
-        userType: 'teacher',
-      }).sort({ date: -1 }).lean();
-      return res.json({ attendance });
-    }
-
-    return res.status(400).json({ message: 'Unsupported attendance person type.' });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to load attendance history', error });
-  }
-});
-
-router.get('/students', authenticate, canManageAcademic(), async (req, res) => {
-  try {
-    const query: any = await attendanceStudentQuery(req);
-    if (req.query.classId) query.classId = req.query.classId;
-    if (req.query.sectionId) query.sectionId = req.query.sectionId;
-    const students = await Student.find(query).populate('userId', 'name avatar email').populate('classId', 'name grade').populate('sectionId', 'name').sort({ rollNumber: 1 });
-    res.json({ students });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to load attendance students', error });
-  }
+    .catch((error) => res.status(500).json({ message: 'Failed to load my attendance', error }));
 });
 
 router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const personType = normalizePersonType(req.query.personType);
     if (personType === 'teacher') {
-      if (!canManageTeacherAttendance(req.user.role)) return res.status(403).json({ message: 'Access denied. Teacher attendance is only for Head and Assistant Head.' });
       const teachers = await Teacher.find(employeeAttendanceQuery(req))
         .populate('userId', 'name avatar email role')
-        .sort({ employeeId: 1 });
-      return res.json({
-        people: teachers.map((teacher: any) => ({
-          _id: String(teacher.userId?._id || teacher.userId),
-          profileId: teacher._id,
-          personType: 'teacher',
-          employeeId: teacher.employeeId,
-          rollNumber: teacher.employeeId,
-          userId: teacher.userId,
-          designation: teacher.designation,
-          department: teacher.department,
-        })),
-      });
+        .select('userId employeeId department designation isActive')
+        .sort({ createdAt: -1 })
+        .lean();
+      return res.json({ people: teachers.map((teacher: any) => ({ ...teacher, _id: teacher.userId?._id || teacher.userId, profileId: teacher._id, personType: 'teacher' })) });
     }
 
-    const query: any = await attendanceStudentQuery(req);
+    if (personType === 'staff') {
+      const staff = await Staff.find(employeeAttendanceQuery(req))
+        .populate('userId', 'name avatar email role')
+        .select('userId employeeId department designation isActive')
+        .sort({ createdAt: -1 })
+        .lean();
+      return res.json({ people: staff.map((staffMember: any) => ({ ...staffMember, _id: staffMember.userId?._id || staffMember.userId, profileId: staffMember._id, personType: 'staff' })) });
+    }
+
+    const query = await attendanceStudentQuery(req);
     if (req.query.classId) query.classId = req.query.classId;
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
     const students = await Student.find(query)
       .populate('userId', 'name avatar email')
       .populate('classId', 'name grade')
       .populate('sectionId', 'name')
-      .sort({ rollNumber: 1 });
-    return res.json({
-      people: students.map((student: any) => ({
-        ...student.toObject(),
-        personType: 'student',
-      })),
-    });
+      .sort({ rollNumber: 1 })
+      .lean();
+    res.json({ people: students });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load attendance people', error });
+  }
+});
+
+router.get('/student/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const student = await Student.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).lean();
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+    const attendance = await Attendance.find({ institutionId: req.user.institutionId, studentId: student._id }).sort({ date: 1 }).lean();
+    res.json({ attendance, student });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load student attendance history', error });
+  }
+});
+
+router.get('/person/:type/:id', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const personType = normalizePersonType(req.params.type);
+    if (!['teacher', 'staff'].includes(personType)) return res.status(400).json({ message: 'Invalid person type' });
+    const attendance = await Attendance.find({ institutionId: req.user.institutionId, userId: req.params.id, userType: personType }).sort({ date: 1 }).lean();
+    res.json({ attendance });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load person attendance history', error });
+  }
+});
+
+router.get('/overview', authenticate, canManageAcademic(), async (req, res) => {
+  try {
+    const overview = await buildAttendanceOverview(req.user.institutionId);
+    res.json({ overview });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load attendance overview', error });
   }
 });
 
