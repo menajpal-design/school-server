@@ -53,13 +53,24 @@ const buildBilling = (input: any = {}, current: any = {}) => {
   return billingStatus === 'active' ? activateBilling(next, new Date()) : next;
 };
 
-const extractVerificationMeta = (verification: any = {}) => ({
-  paymentVerifyStatus: verification.status || 'pending',
-  paymentVerificationRequestId: verification.data?.requestId || verification.data?.request_id || verification.data?.id || '',
-  paymentVerificationRedirectUrl: verification.data?.redirectUrl || verification.data?.redirect_url || '',
-  paymentVerificationResponse: verification.data || {},
-  paymentVerifiedAt: verification.verified ? new Date() : undefined,
-});
+const extractVerificationMeta = (verification: any = {}) => {
+  const payload = verification.data || {};
+  const details = payload.verification || {};
+  const verifiedAt = payload.verifiedAt || details.verifiedAt || details.verified_at;
+
+  return {
+    paymentVerifyStatus: verification.status || payload.status || (payload.success ? 'verified' : 'pending'),
+    paymentVerificationRequestId: payload.requestId || payload.request_id || payload.id || details.requestId || details.request_id || details.id || '',
+    paymentVerificationRedirectUrl: payload.redirectUrl || payload.redirect_url || details.redirectUrl || details.redirect_url || '',
+    paymentVerificationResponse: payload,
+    paymentTrxId: payload.payment_ref || payload.transaction_id || details.payment_ref || details.transaction_id || '',
+    paymentSenderNumber: payload.payer_number || details.payer_number || '',
+    paymentOrderId: payload.order_id || details.order_id || '',
+    receivedAmount: typeof (payload.amount ?? details.amount) === 'number' ? Number(payload.amount ?? details.amount) : undefined,
+    paymentTime: verifiedAt ? String(verifiedAt) : undefined,
+    paymentVerifiedAt: verifiedAt ? new Date(verifiedAt) : verification.verified ? new Date() : undefined,
+  };
+};
 
 const countsForInstitutions = async (institutionIds: any[]) => {
   const [students, teachers, staff, users] = await Promise.all([
