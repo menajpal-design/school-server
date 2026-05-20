@@ -55,13 +55,47 @@ const extractVerificationMeta = (verification: any = {}) => {
     paymentVerificationRequestId: payload.requestId || payload.request_id || payload.id || details.requestId || details.request_id || details.id || '',
     paymentVerificationRedirectUrl: payload.redirectUrl || payload.redirect_url || details.redirectUrl || details.redirect_url || '',
     paymentVerificationResponse: payload,
-    paymentTrxId: payload.payment_ref || payload.transaction_id || details.payment_ref || details.transaction_id || '',
-    paymentSenderNumber: payload.payer_number || details.payer_number || '',
-    paymentOrderId: payload.order_id || details.order_id || '',
+    paymentTrxId: payload.payment_ref || payload.transaction_id || payload.transactionId || payload.trxId || details.payment_ref || details.transaction_id || details.transactionId || details.trxId || '',
+    paymentSenderNumber: payload.payer_number || payload.payerNumber || details.payer_number || details.payerNumber || '',
+    paymentOrderId: payload.orderId || payload.order_id || details.orderId || details.order_id || '',
     receivedAmount: typeof (payload.amount ?? details.amount) === 'number' ? Number(payload.amount ?? details.amount) : undefined,
     paymentTime: verifiedAt ? String(verifiedAt) : undefined,
     paymentVerifiedAt: verifiedAt ? new Date(verifiedAt) : verification.verified ? new Date() : undefined,
   };
+};
+
+const normalizePaymentBody = (input: any = {}) => {
+  const payload = input.popupPaymentResponse?.data || input.popupPaymentResponse || input.rawResponse?.data || input.rawResponse || input;
+  const details = input.popupVerification || payload?.verification || payload?.data?.verification || {};
+  const amount = Number(input.receivedAmount ?? payload?.receivedAmount ?? payload?.amount ?? payload?.paidAmount ?? details?.amount ?? 0);
+  const paymentTrxId = input.paymentTrxId || input.transaction_id || input.payment_ref || payload?.transaction_id || payload?.payment_ref || payload?.transactionId || payload?.trxId || details?.transaction_id || details?.payment_ref || details?.transactionId || details?.trxId || '';
+  const paymentOrderId = input.paymentOrderId || input.orderId || input.order_id || payload?.orderId || payload?.order_id || details?.orderId || details?.order_id || '';
+  const paymentSenderNumber = input.paymentSenderNumber || input.payer_number || payload?.payer_number || payload?.payerNumber || payload?.senderNumber || payload?.mobileNumber || details?.payer_number || details?.payerNumber || '';
+  const paymentTime = input.paymentTime || input.verifiedAt || payload?.verifiedAt || payload?.verified_at || details?.verifiedAt || details?.verified_at || payload?.payment_time || payload?.paymentTime;
+
+  return {
+    ...input,
+    paymentGateway: input.paymentGateway || payload?.paymentGateway || payload?.gateway || 'popup',
+    paymentOrderId,
+    paymentTime,
+    paymentTrxId,
+    paymentSenderNumber,
+    receivedAmount: amount,
+    paymentVerificationResponse: input.paymentVerificationResponse || payload,
+    popupPaymentStatus: input.popupPaymentStatus || payload?.status,
+    popupPaymentResponse: input.popupPaymentResponse || payload,
+  };
+};
+
+const isPopupVerifiedPayment = (input: any = {}, dueAmount = 0) => {
+  const payload = input.popupPaymentResponse?.data || input.popupPaymentResponse || input.paymentVerificationResponse || {};
+  const details = input.popupVerification || payload.verification || {};
+  const status = String(input.popupPaymentStatus || payload.status || '').toLowerCase();
+  const amount = Number(input.receivedAmount ?? payload.amount ?? details.amount ?? 0);
+  const hasVerifiedStatus = ['verified', 'success', 'paid'].includes(status) || input.type === 'payment_status';
+  const hasRequiredRefs = Boolean(input.paymentTrxId || payload.transaction_id || payload.payment_ref || details.transaction_id || details.payment_ref);
+  const amountMatches = Number(dueAmount || 0) > 0 && amount === Number(dueAmount);
+  return hasVerifiedStatus && hasRequiredRefs && amountMatches;
 };
 
 router.get('/plans', (req, res) => {
@@ -141,9 +175,10 @@ router.post('/billing/payment', authenticate, async (req, res) => {
     const institution = await Institution.findById(req.user.institutionId);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
 
+    const normalizedBody = normalizePaymentBody(req.body);
     const billing = buildBilling(
       {
-        ...req.body,
+        ...normalizedBody,
         isPaymentReceived: true,
         billingStatus: 'pending',
         receivedAt: new Date(),
@@ -163,11 +198,24 @@ router.post('/billing/payment', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    Object.assign(billing, extractVerificationMeta(verification));
-    if (verification.verified) {
+    const popupVerified = isPopupVerifiedPayment(normalizedBody, Number(billing.dueAmount || 0));
+    const finalVerification = verification.verified
+      ? verification
+      : popupVerified
+        ? {
+          ...verification,
+          verified: true,
+          status: 'verified',
+          data: normalizedBody.popupPaymentResponse || normalizedBody.paymentVerificationResponse || normalizedBody,
+          message: 'Payment verified by popup widget response.',
+        }
+        : verification;
+
+    Object.assign(billing, extractVerificationMeta(finalVerification));
+    if (finalVerification.verified) {
       institution.billing = activateBilling({
         ...billing,
-        ...extractVerificationMeta(verification),
+        ...extractVerificationMeta(finalVerification),
       }, new Date()) as any;
       institution.isActive = true;
     } else {
@@ -175,7 +223,7 @@ router.post('/billing/payment', authenticate, async (req, res) => {
     }
     await institution.save();
 
-    res.json({ institution, verification, message: verification.verified ? 'Payment verified and school activated.' : 'Payment submitted. Admin will verify and activate the school.' });
+    res.json({ institution, verification: finalVerification, message: finalVerification.verified ? 'Payment verified and school activated.' : 'Payment submitted. Admin will verify and activate the school.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save payment', error });
   }
