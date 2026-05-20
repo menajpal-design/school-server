@@ -13,7 +13,7 @@ const authQueryTimeoutMs = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 4000);
 const authQueryMaxTimeMs = Number(process.env.AUTH_QUERY_MAX_TIME_MS || 3000);
 
 const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(role || '');
-const isPrivilegedRole = (role?: string) => role === 'head' || platformAdminRoles.includes(role || '');
+const isPrivilegedRole = (role?: string) => role === 'head';
 
 const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
@@ -122,8 +122,6 @@ export const authorize = (...roles: string[]) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
-    if (isPlatformAdminRole(req.user.role)) return next();
-
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ message: 'Access denied. Insufficient permissions.' });
     }
@@ -190,8 +188,8 @@ export const canManageIDCard = () => {
 export const canScanIDCard = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (['student', 'parent'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Students and parents cannot scan ID cards.' });
+    if (['student', 'parent', 'admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'This role cannot scan or mark attendance.' });
     }
     if (isPrivilegedRole(req.user.role)) return next();
     const allowed = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff'];
@@ -247,8 +245,11 @@ export const canManageFinance = () => {
 export const canManageAcademic = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+    if (['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' });
+    }
     if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['class_teacher', 'subject_teacher', 'assistant_head']
+    const allowed = ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher']
     if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) return next();
     return res.status(403).json({ message: 'Access denied. Academic management only.' });
   };
