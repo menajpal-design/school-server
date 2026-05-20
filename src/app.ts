@@ -35,6 +35,7 @@ import admissionRoutes from './routes/admissions';
 import adminRoutes from './routes/admin';
 import smsMonitoringRoutes from './routes/smsMonitoring';
 import libraryRoutes from './routes/library';
+import siteSettingsRoutes from './routes/siteSettings';
 import SmsLog from './models/SmsLog';
 import { config } from './config/config';
 import './config/tenantStorage';
@@ -182,6 +183,7 @@ app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/sms-monitoring', smsMonitoringRoutes);
 app.use('/api/library', libraryRoutes);
+app.use('/api/site-settings', siteSettingsRoutes);
 
 // Temporary test endpoint to verify library routing on deployed servers
 app.get('/api/library/test', (req, res) => {
@@ -209,6 +211,7 @@ app.get('/', (req, res) => {
       users: '/api/users',
       students: '/api/students',
       teachers: '/api/teachers',
+      siteSettings: '/api/site-settings',
     },
   });
 });
