@@ -83,6 +83,86 @@ const countsForInstitutions = async (institutionIds: any[]) => {
   return { students: map(students), teachers: map(teachers), staff: map(staff), users: map(users) };
 };
 
+const moneyNumber = (value: any) => Number(value || 0);
+
+router.get('/accounting', async (req, res) => {
+  try {
+    const query: any = {};
+    if (req.query.status && req.query.status !== 'all') query['billing.billingStatus'] = req.query.status;
+    if (req.query.cycle && req.query.cycle !== 'all') query['billing.billingCycle'] = req.query.cycle;
+    if (req.query.search) {
+      const pattern = new RegExp(String(req.query.search), 'i');
+      query.$or = [{ name: pattern }, { email: pattern }, { phone: pattern }, { eiin: pattern }];
+    }
+
+    const schools = await Institution.find(query)
+      .select('name email phone eiin isActive billing createdAt updatedAt')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const summary = schools.reduce((acc: any, school: any) => {
+      const billing = school.billing || {};
+      const status = billing.billingStatus || 'pending';
+      const cycle = billing.billingCycle || 'monthly';
+      const dueAmount = moneyNumber(billing.dueAmount);
+      const receivedAmount = moneyNumber(billing.receivedAmount);
+      const balance = Math.max(dueAmount - receivedAmount, 0);
+
+      acc.totalSchools += 1;
+      acc.totalDue += dueAmount;
+      acc.totalReceived += receivedAmount;
+      acc.totalBalance += balance;
+      acc.statusCounts[status] = (acc.statusCounts[status] || 0) + 1;
+      acc.cycleCounts[cycle] = (acc.cycleCounts[cycle] || 0) + 1;
+      if (school.isActive) acc.activeSchools += 1;
+      else acc.blockedSchools += 1;
+      return acc;
+    }, {
+      totalSchools: 0,
+      activeSchools: 0,
+      blockedSchools: 0,
+      totalDue: 0,
+      totalReceived: 0,
+      totalBalance: 0,
+      statusCounts: { active: 0, pending: 0, expired: 0, cancelled: 0 },
+      cycleCounts: { monthly: 0, yearly: 0 },
+    });
+
+    const rows = schools.map((school: any) => {
+      const billing = school.billing || {};
+      const dueAmount = moneyNumber(billing.dueAmount);
+      const receivedAmount = moneyNumber(billing.receivedAmount);
+      return {
+        _id: school._id,
+        name: school.name,
+        email: school.email,
+        phone: school.phone,
+        eiin: school.eiin,
+        isActive: school.isActive,
+        planName: billing.planName || 'No plan',
+        planCode: billing.planCode,
+        billingCycle: billing.billingCycle || 'monthly',
+        billingStatus: billing.billingStatus || 'pending',
+        dueAmount,
+        receivedAmount,
+        balanceAmount: Math.max(dueAmount - receivedAmount, 0),
+        paymentGateway: billing.paymentGateway || '',
+        paymentTrxId: billing.paymentTrxId || '',
+        paymentSenderNumber: billing.paymentSenderNumber || '',
+        receivedAt: billing.receivedAt,
+        subscriptionExpiresAt: billing.subscriptionExpiresAt,
+        smsUsed: moneyNumber(billing.smsUsed),
+        monthlySmsLimit: moneyNumber(billing.monthlySmsLimit),
+        updatedAt: school.updatedAt,
+      };
+    });
+
+    res.json({ summary, rows });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load admin accounting report', error });
+  }
+});
+
 router.get('/schools', async (req, res) => {
   try {
     const query: any = {};
