@@ -58,9 +58,30 @@ async function models(req: any) {
 
 async function enrichUsers(rows: any[]) {
   const userIds = [...new Set(rows.map((item: any) => String(item.userId?._id || item.userId || '')).filter(Boolean))];
-  const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean());
+  const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role salary employeeId designation department createdAt').lean());
   const userMap = new Map(users.map((u: any) => [String(u._id), u]));
   return rows.map((item: any) => ({ ...item, userId: typeof item.userId === 'object' && item.userId?.name ? item.userId : (userMap.get(String(item.userId?._id || item.userId || '')) || item.userId) }));
+}
+
+async function fallbackEmployeesFromUsers(institutionId: any) {
+  const roles = ['teacher', 'subject_teacher', 'class_teacher', 'staff'];
+  const users = await primaryDb(() => User.find({ institutionId, role: { $in: roles }, isActive: { $ne: false } }).select('name username email phone avatar role salary employeeId designation department createdAt').lean());
+  return users.map((user: any, index: number) => {
+    const isStaff = user.role === 'staff';
+    return {
+      _id: `user-${user._id}`,
+      userId: user,
+      employeeId: user.employeeId || `${isStaff ? 'S' : 'T'}-${String(index + 1).padStart(3, '0')}`,
+      designation: user.designation || (isStaff ? 'Staff' : user.role === 'class_teacher' ? 'Class Teacher' : user.role === 'subject_teacher' ? 'Subject Teacher' : 'Teacher'),
+      department: user.department || 'General',
+      salary: Number(user.salary || 0),
+      joiningDate: user.createdAt || new Date(),
+      isActive: true,
+      institutionId,
+      employeeType: isStaff ? 'staff' : 'teacher',
+      fallbackFromUsers: true,
+    };
+  });
 }
 
 router.use(authenticate, canManageFinance());
@@ -75,7 +96,9 @@ router.get('/', async (req: any, res) => {
     ]);
     const teachers = (await enrichUsers(teachersRaw)).map((item: any) => ({ ...item, employeeType: 'teacher' }));
     const staff = (await enrichUsers(staffRaw)).map((item: any) => ({ ...item, employeeType: 'staff' }));
-    res.json({ salaries, employees: [...teachers, ...staff], source: 'settings-active-mongodb-direct' });
+    let employees = [...teachers, ...staff];
+    if (employees.length === 0) employees = await fallbackEmployeesFromUsers(req.user.institutionId);
+    res.json({ salaries, employees, source: employees.some((item: any) => item.fallbackFromUsers) ? 'primary-users-fallback' : 'settings-active-mongodb-direct' });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load salaries', error });
   }
