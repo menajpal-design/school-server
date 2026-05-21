@@ -1,3 +1,3 @@
-import classesStableRouter from './classesStable';
+import classesTenantRouter from './classesTenant';
 
-export default classesStableRouter;
+export default classesTenantRouter;
