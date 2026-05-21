@@ -15,6 +15,7 @@ const canAdd = (role: string) => ['head', 'assistant_head', 'class_teacher', 'su
 const canManualRoll = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role);
 const active = (items: any[] = [], field: string) => String((items.find((x: any) => x?.isActive) || items[items.length - 1])?.[field] || '').trim();
 const errMsg = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.code === 11000 ? 'Duplicate record found. If roll was provided, it may already exist.' : e?.message || 'Student API failed';
+const validBloodGroups = new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
 
 const normalizeRoll = (value: any) => {
   const raw = String(value || '').trim();
@@ -22,6 +23,11 @@ const normalizeRoll = (value: any) => {
   const digits = raw.replace(/[^0-9]/g, '');
   if (!digits) return raw;
   return String(Number(digits)).padStart(2, '0');
+};
+
+const safeDate = (value: any, fallback: Date) => {
+  const date = value ? new Date(value) : fallback;
+  return Number.isNaN(date.getTime()) ? fallback : date;
 };
 
 async function resolveSchoolContext(req: any) {
@@ -125,21 +131,25 @@ router.get('/', authenticate, async (req: any, res) => {
 router.post('/', authenticate, async (req: any, res) => {
   try {
     if (!canAdd(req.user.role)) return res.status(403).json({ message: 'Only school leadership/teachers can add students.' });
-    if (!String(req.body.guardianPhone || '').trim()) return res.status(400).json({ message: 'Guardian phone is required.' });
+    const guardianName = String(req.body.guardianName || 'Guardian').trim() || 'Guardian';
+    const guardianPhone = String(req.body.guardianPhone || req.body.phone || 'N/A').trim() || 'N/A';
+    const studentName = String(req.body.name || 'Student').trim() || 'Student';
+    const address = String(req.body.address || 'Not provided').trim() || 'Not provided';
+    const bloodGroup = validBloodGroups.has(String(req.body.bloodGroup || '')) ? req.body.bloodGroup : undefined;
 
     const { user, parentUser, uname, secret, pUname, pSecret } = await primaryDb(async () => {
-      const studentCreated = await createPrimaryUser({ name: req.body.name, role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId }, req.body.name, 'student');
+      const studentCreated = await createPrimaryUser({ name: studentName, role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId }, studentName, 'student');
       if (req.body.autoParentAccount === false) return { user: studentCreated.user, parentUser: null, uname: studentCreated.username, secret: studentCreated.secret, pUname: undefined, pSecret: undefined };
-      const parentCreated = await createPrimaryUser({ name: req.body.guardianName || 'Guardian', role: 'parent', phone: req.body.guardianPhone, institutionId: req.user.institutionId }, req.body.guardianName || 'Guardian', 'parent');
+      const parentCreated = await createPrimaryUser({ name: guardianName, role: 'parent', phone: guardianPhone, institutionId: req.user.institutionId }, guardianName, 'parent');
       return { user: studentCreated.user, parentUser: parentCreated.user, uname: studentCreated.username, secret: studentCreated.secret, pUname: parentCreated.username, pSecret: parentCreated.secret };
     });
 
     const student = await schoolDb(req, async () => {
       const { classId, sectionId } = await ensureClass(req);
       const rollNumber = await resolveRoll(req, classId, sectionId);
-      const created = await Student.create({ userId: user._id, rollNumber, classId, sectionId, admissionDate: req.body.admissionDate || new Date(), dateOfBirth: req.body.dateOfBirth || undefined, bloodGroup: req.body.bloodGroup || undefined, address: req.body.address, parentId: parentUser?._id, guardianName: req.body.guardianName, guardianPhone: req.body.guardianPhone, subjects: [], institutionId: req.user.institutionId });
+      const created = await Student.create({ userId: user._id, rollNumber, classId, sectionId, admissionDate: safeDate(req.body.admissionDate, new Date()), dateOfBirth: safeDate(req.body.dateOfBirth, new Date('2000-01-01')), bloodGroup, address, parentId: parentUser?._id, guardianName, guardianPhone, subjects: [], institutionId: req.user.institutionId });
       await Section.findByIdAndUpdate(sectionId, { $inc: { currentStudents: 1 } });
-      if (parentUser) await Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address: req.body.address || 'Not provided', emergencyContact: req.body.guardianName || parentUser.name, emergencyPhone: req.body.guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true });
+      if (parentUser) await Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address, emergencyContact: guardianName || parentUser.name, emergencyPhone: guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true });
       return created;
     });
 
