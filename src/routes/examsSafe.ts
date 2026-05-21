@@ -102,30 +102,41 @@ router.post('/', async (req: any, res) => {
 
 router.put('/:id', async (req: any, res) => {
   try {
-    const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
-    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+    if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
+    const exists = await Exam.exists({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!exists) return res.status(404).json({ message: 'Exam not found. Please refresh exam list and select the saved exam again.' });
     const payload = await normalizePayload(req);
-    Object.assign(exam, payload);
-    await exam.save();
-    const updated = await populateExam().where({ _id: exam._id, institutionId: req.user.institutionId }).findOne();
+    const updatedDoc = await Exam.findOneAndUpdate(
+      { _id: req.params.id, institutionId: req.user.institutionId },
+      { $set: payload },
+      { new: true, runValidators: true, context: 'query' }
+    );
+    if (!updatedDoc) return res.status(404).json({ message: 'Exam not found after update. Please refresh and try again.' });
+    const updated = await populateExam().where({ _id: updatedDoc._id, institutionId: req.user.institutionId }).findOne();
     res.json({ exam: updated, message: 'Exam updated successfully' });
   } catch (error: any) {
-    res.status(error?.name === 'ValidationError' ? 400 : 500).json({ message: error?.message || 'Failed to update exam', error: { name: error?.name, message: error?.message } });
+    const message = error?.name === 'VersionError' ? 'Exam update conflict fixed route hit old server. Please redeploy server and try again.' : (error?.message || 'Failed to update exam');
+    res.status(error?.name === 'ValidationError' ? 400 : 500).json({ message, error: { name: error?.name, message: error?.message } });
   }
 });
 
 router.patch('/:id/public-routine', async (req: any, res) => {
   try {
-    const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
+    const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).lean();
     if (!exam) return res.status(404).json({ message: 'Exam not found' });
     const subjectMarks = Array.isArray(exam.subjectMarks) ? exam.subjectMarks : [];
     const ready = subjectMarks.length > 0 && subjectMarks.every((item: any) => item.subjectId && item.date && item.duration);
     if (req.body.isPublished === true && !ready) return res.status(409).json({ message: 'Routine is incomplete. Add subject, date and duration before publishing.' });
-    exam.isPublished = req.body.isPublished === true;
-    if (exam.isPublished && ['draft', 'scheduled', 'approved'].includes(exam.status)) exam.status = 'published';
-    await exam.save();
-    const updated = await populateExam().where({ _id: exam._id, institutionId: req.user.institutionId }).findOne();
-    res.json({ exam: updated, message: exam.isPublished ? 'Exam routine is now public.' : 'Exam routine is now private.' });
+    const nextStatus = req.body.isPublished === true && ['draft', 'scheduled', 'approved'].includes(exam.status) ? 'published' : exam.status;
+    const updatedDoc = await Exam.findOneAndUpdate(
+      { _id: req.params.id, institutionId: req.user.institutionId },
+      { $set: { isPublished: req.body.isPublished === true, status: nextStatus } },
+      { new: true, runValidators: true, context: 'query' }
+    );
+    if (!updatedDoc) return res.status(404).json({ message: 'Exam not found after publish update.' });
+    const updated = await populateExam().where({ _id: updatedDoc._id, institutionId: req.user.institutionId }).findOne();
+    res.json({ exam: updated, message: updatedDoc.isPublished ? 'Exam routine is now public.' : 'Exam routine is now private.' });
   } catch (error: any) {
     res.status(500).json({ message: error?.message || 'Failed to update public exam routine status' });
   }
