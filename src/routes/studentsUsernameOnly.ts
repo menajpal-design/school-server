@@ -84,9 +84,34 @@ async function createPrimaryUser(input: any, name: string, prefix: string) {
   throw e;
 }
 
+async function enrichStudents(rows: any[]) {
+  const plain = rows.map((item: any) => typeof item.toObject === 'function' ? item.toObject() : item);
+  const userIds = [...new Set(plain.map((item: any) => String(item.userId?._id || item.userId || '')).filter(Boolean))];
+  const parentIds = [...new Set(plain.map((item: any) => String(item.parentId?._id || item.parentId || '')).filter(Boolean))];
+  const [users, parents] = await primaryDb(async () => Promise.all([
+    User.find({ _id: { $in: userIds } }).select('name username phone avatar role').lean(),
+    User.find({ _id: { $in: parentIds } }).select('name username phone avatar role').lean(),
+  ]));
+  const userMap = new Map(users.map((user: any) => [String(user._id), user]));
+  const parentMap = new Map(parents.map((user: any) => [String(user._id), user]));
+  return plain.map((student: any) => {
+    const userKey = String(student.userId?._id || student.userId || '');
+    const parentKey = String(student.parentId?._id || student.parentId || '');
+    return {
+      ...student,
+      userId: typeof student.userId === 'object' && student.userId?.name ? student.userId : (userMap.get(userKey) || student.userId),
+      parentId: typeof student.parentId === 'object' && student.parentId?.name ? student.parentId : (parentMap.get(parentKey) || student.parentId),
+    };
+  });
+}
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
-    const students = await schoolDb(req, () => Student.find({ institutionId: req.user.institutionId }).populate('userId', 'name username phone avatar').populate('classId', 'name grade').populate('sectionId', 'name').sort({ createdAt: -1 }));
+    const tenantRows = await schoolDb(req, () => Student.find({ institutionId: req.user.institutionId }).populate('classId', 'name grade').populate('sectionId', 'name').sort({ createdAt: -1 }).lean());
+    const primaryRows = await primaryDb(() => Student.find({ institutionId: req.user.institutionId }).populate('classId', 'name grade').populate('sectionId', 'name').sort({ createdAt: -1 }).lean()).catch(() => [] as any[]);
+    const merged = new Map<string, any>();
+    [...tenantRows, ...primaryRows].forEach((item: any) => merged.set(String(item._id), item));
+    const students = await enrichStudents(Array.from(merged.values()));
     res.json({ students });
   } catch (e: any) {
     res.status(e?.statusCode || 500).json({ message: errMsg(e), error: { name: e?.name, message: e?.message } });
