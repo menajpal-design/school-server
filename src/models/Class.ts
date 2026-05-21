@@ -16,12 +16,12 @@ export interface IClass extends Document {
 
 const ClassSchema: Schema = new Schema({
   name: { type: String, required: true, trim: true },
-  grade: { type: String, required: true, trim: true },
+  grade: { type: String, required: true, trim: true, default: 'General' },
   sections: [{ type: Schema.Types.ObjectId, ref: 'Section' }],
   shift: { type: String, enum: ['morning', 'day', 'evening'], default: 'day' },
   classTeacherId: { type: Schema.Types.ObjectId, ref: 'User' },
   subjects: [{ type: Schema.Types.ObjectId, ref: 'Subject' }],
-  academicYear: { type: String, required: true },
+  academicYear: { type: String, required: true, trim: true, default: () => new Date().getFullYear().toString() },
   isActive: { type: Boolean, default: true },
   institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true }
 }, {
