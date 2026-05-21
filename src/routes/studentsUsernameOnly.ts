@@ -11,9 +11,18 @@ import { getTenantStorageContext, runWithTenantStorage } from '../config/tenantS
 
 const router = express.Router();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
-const canAdd = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher'].includes(role);
+const canAdd = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role);
+const canManualRoll = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role);
 const active = (items: any[] = [], field: string) => String((items.find((x: any) => x?.isActive) || items[items.length - 1])?.[field] || '').trim();
 const errMsg = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.code === 11000 ? 'Duplicate username or roll number found.' : e?.message || 'Student API failed';
+
+const normalizeRoll = (value: any) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/[^0-9]/g, '');
+  if (!digits) return raw;
+  return String(Number(digits)).padStart(2, '0');
+};
 
 async function schoolDb<T>(req: any, fn: () => Promise<T>) {
   let ctx = getTenantStorageContext();
@@ -37,6 +46,29 @@ async function ensureClass(req: any) {
   const sec = await Section.findOneAndUpdate({ institutionId: req.user.institutionId, classId: cls._id, name: sectionName }, { $setOnInsert: { institutionId: req.user.institutionId, classId: cls._id, name: sectionName, capacity: 30, currentStudents: 0 } }, { upsert: true, new: true, setDefaultsOnInsert: true });
   await ClassModel.updateOne({ _id: cls._id }, { $addToSet: { sections: sec._id } });
   return { classId: cls._id, sectionId: sec._id };
+}
+
+async function resolveRoll(req: any, classId: any, sectionId: any) {
+  const requested = normalizeRoll(req.body.rollNumber);
+  if (requested) {
+    if (!canManualRoll(req.user.role)) {
+      const e: any = new Error('You are not allowed to set roll manually. Roll will be generated automatically.');
+      e.statusCode = 403;
+      throw e;
+    }
+    const exists = await Student.findOne({ institutionId: req.user.institutionId, classId, sectionId, rollNumber: requested }).lean();
+    if (exists) {
+      const e: any = new Error(`Roll ${requested} already exists in this class/section. Please use next available roll.`);
+      e.statusCode = 409;
+      throw e;
+    }
+    return requested;
+  }
+  const all = await Student.find({ institutionId: req.user.institutionId, classId, sectionId }).select('rollNumber').lean();
+  const used = new Set(all.map((x: any) => Number(String(x.rollNumber || '').replace(/[^0-9]/g, ''))).filter((n: number) => Number.isFinite(n) && n > 0));
+  let next = 1;
+  while (used.has(next)) next += 1;
+  return String(next).padStart(2, '0');
 }
 
 router.get('/', authenticate, async (req: any, res) => {
@@ -66,7 +98,8 @@ router.post('/', authenticate, async (req: any, res) => {
 
     const student = await schoolDb(req, async () => {
       const { classId, sectionId } = await ensureClass(req);
-      const created = await Student.create({ userId: user._id, rollNumber: req.body.rollNumber, classId, sectionId, admissionDate: req.body.admissionDate || new Date(), dateOfBirth: req.body.dateOfBirth || undefined, bloodGroup: req.body.bloodGroup || undefined, address: req.body.address, parentId: parentUser?._id, guardianName: req.body.guardianName, guardianPhone: req.body.guardianPhone, subjects: [], institutionId: req.user.institutionId });
+      const rollNumber = await resolveRoll(req, classId, sectionId);
+      const created = await Student.create({ userId: user._id, rollNumber, classId, sectionId, admissionDate: req.body.admissionDate || new Date(), dateOfBirth: req.body.dateOfBirth || undefined, bloodGroup: req.body.bloodGroup || undefined, address: req.body.address, parentId: parentUser?._id, guardianName: req.body.guardianName, guardianPhone: req.body.guardianPhone, subjects: [], institutionId: req.user.institutionId });
       await Section.findByIdAndUpdate(sectionId, { $inc: { currentStudents: 1 } });
       if (parentUser) await Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address: req.body.address || 'Not provided', emergencyContact: req.body.guardianName || parentUser.name, emergencyPhone: req.body.guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true });
       return created;
