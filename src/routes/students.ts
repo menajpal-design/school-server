@@ -1,3 +1,1 @@
-import studentsTenantRouter from './studentsTenant';
-
-export default studentsTenantRouter;
+export { default } from './studentsUsernameOnly';
