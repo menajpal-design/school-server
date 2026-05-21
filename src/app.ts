@@ -14,6 +14,7 @@ import staffRoutes from './routes/staff';
 import academicRoutes from './routes/academic';
 import academicClassRoutes from './routes/academicClasses';
 import academicSubjectRoutes from './routes/subjectsSafe';
+import academicExamRoutes from './routes/examsSafe';
 import syllabusRoutes from './routes/syllabus';
 import classRoutineRoutes from './routes/classRoutine';
 import attendanceRoutes from './routes/attendance';
@@ -47,12 +48,10 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 const app = express();
 app.set('trust proxy', 1);
 const cfg = config();
-
 const splitOrigins = (value?: string | null): string[] => (value || '').split(',').map((origin) => origin.trim()).filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
 const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true' || process.env.ALLOWED_ORIGINS === '*';
 const envOrigins = new Set<string>([cfg.frontendUrl, cfg.mobileUrl, cfg.androidUrl, cfg.staticServerUrl, ...splitOrigins(process.env.ALLOWED_ORIGINS), ...splitOrigins(process.env.FRONTEND_URL), ...splitOrigins(process.env.MOBILE_URL), ...splitOrigins(process.env.ANDROID_URL)].filter(Boolean));
 const allowedHeaders = new Set<string>(['Content-Type', 'Authorization', 'x-institution-id', 'X-Institution-Id', 'x-school-id', 'X-School-Id', 'Origin', 'X-Requested-With', 'Accept', 'x-access-token', 'X-Access-Token', ...splitOrigins(process.env.CORS_ALLOWED_HEADERS)].filter(Boolean));
-
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin || allowAllOrigins) return true;
   const normalized = origin.replace(/\/$/, '');
@@ -62,7 +61,6 @@ const isAllowedOrigin = (origin?: string): boolean => {
   if (/^https:\/\/.*\.herokuapp\.com$/i.test(normalized)) return true;
   return false;
 };
-
 const setCorsHeaders = (req: Request, res: Response) => {
   const origin = req.headers.origin as string | undefined;
   if (origin && isAllowedOrigin(origin)) { res.header('Access-Control-Allow-Origin', origin); res.header('Vary', 'Origin'); }
@@ -72,14 +70,12 @@ const setCorsHeaders = (req: Request, res: Response) => {
   res.header('Access-Control-Allow-Headers', Array.from(allowedHeaders).join(', '));
   res.header('Access-Control-Max-Age', process.env.CORS_MAX_AGE || '86400');
 };
-
 app.use((req, res, next) => { setCorsHeaders(req, res); if (req.method === 'OPTIONS') return res.status(204).end(); next(); });
 app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)), credentials: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: Array.from(allowedHeaders), optionsSuccessStatus: 204 }));
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '50mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.RATE_LIMIT_MAX || 300), standardHeaders: true, legacyHeaders: false }));
-
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/seed', seedRoutes);
@@ -90,6 +86,7 @@ app.use('/api/teachers', teacherRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/academic/classes', academicClassRoutes);
 app.use('/api/academic/subjects', academicSubjectRoutes);
+app.use('/api/academic/exams', academicExamRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/syllabus', syllabusRoutes);
 app.use('/api/class-routines', classRoutineRoutes);
@@ -116,17 +113,14 @@ app.use('/api/sms-monitoring', smsMonitoringRoutes);
 app.use('/api/library', libraryRoutes);
 app.use('/api/site-settings', siteSettingsRoutes);
 app.use('/api/storage-sync', storageSyncRoutes);
-
 app.get('/api/library/test', (req, res) => res.json({ success: true, message: 'library route test OK' }));
 app.use('/uploads', express.static('uploads'));
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
 app.get('/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
 app.get('/', (req, res) => res.json({ message: 'easy school School Management System API', version: '1.0.0', status: 'running' }));
-
 app.use((err: any, req: Request, res: Response, next: NextFunction) => { setCorsHeaders(req, res); next(err); });
 app.use(notFoundHandler);
 app.use(errorHandler);
-
 const SMS_RETENTION_DAYS = Number(process.env.SMS_RETENTION_DAYS || 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const runSmsRetentionCleanup = async () => {
@@ -138,5 +132,4 @@ const runSmsRetentionCleanup = async () => {
 };
 runSmsRetentionCleanup();
 setInterval(runSmsRetentionCleanup, MS_PER_DAY);
-
 export default app;
