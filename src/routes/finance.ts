@@ -14,6 +14,19 @@ import { writeAuditLog } from '../services/auditService';
 const router = express.Router();
 
 const receiptNumber = () => `RCPT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+const objectIdOrUndefined = (value: any) => String(value || '').trim() || undefined;
+const normalizeFeePayload = (body: any) => {
+  const payload: any = { ...body };
+  payload.studentId = objectIdOrUndefined(payload.studentId);
+  payload.classId = objectIdOrUndefined(payload.classId);
+  payload.type = payload.type || 'monthly';
+  payload.year = Number(payload.year || new Date().getFullYear());
+  payload.month = payload.type === 'monthly' ? 'All Months' : String(payload.month || 'N/A');
+  payload.dueDate = payload.dueDate || new Date(payload.year, 0, 10);
+  if (payload.studentId === undefined) delete payload.studentId;
+  if (payload.classId === undefined) delete payload.classId;
+  return payload;
+};
 
 const calculateFeeAmount = (body: any) => {
   const originalAmount = Number(body.originalAmount ?? body.baseAmount ?? body.amount ?? 0);
@@ -162,9 +175,10 @@ router.get('/fees', authenticate, canManageFinance(), (req, res) => {
 
 router.post('/fees', authenticate, canManageFinance(), async (req, res) => {
   try {
-    const calculated = calculateFeeAmount(req.body);
+    const payload = normalizeFeePayload(req.body);
+    const calculated = calculateFeeAmount(payload);
     const fee = await Fee.create({
-      ...req.body,
+      ...payload,
       ...calculated,
       collectedBy: req.user._id,
       institutionId: req.user.institutionId,
@@ -172,8 +186,8 @@ router.post('/fees', authenticate, canManageFinance(), async (req, res) => {
     const created = await populateFee().where({ _id: fee._id, institutionId: req.user.institutionId }).findOne();
     await writeAuditLog(req, 'create', 'fee', fee._id, created);
     res.status(201).json({ fee: created });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to create fee', error });
+  } catch (error: any) {
+    res.status(error?.name === 'ValidationError' || error?.name === 'CastError' ? 400 : 500).json({ message: error?.message || 'Failed to create fee', error });
   }
 });
 
@@ -190,18 +204,19 @@ router.get('/fees/:id', authenticate, canManageFinance(), (req, res) => {
 
 router.put('/fees/:id', authenticate, canManageFinance(), async (req, res) => {
   try {
-    const calculated = calculateFeeAmount(req.body);
+    const payload = normalizeFeePayload(req.body);
+    const calculated = calculateFeeAmount(payload);
     const fee = await Fee.findOneAndUpdate(
       { _id: req.params.id, institutionId: req.user.institutionId },
-      { ...req.body, ...calculated },
+      { ...payload, ...calculated },
       { new: true }
     );
     if (!fee) return res.status(404).json({ message: 'Fee not found' });
     const updated = await populateFee().where({ _id: fee._id, institutionId: req.user.institutionId }).findOne();
     await writeAuditLog(req, 'update', 'fee', fee._id, updated);
     res.json({ fee: updated });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to update fee', error });
+  } catch (error: any) {
+    res.status(error?.name === 'ValidationError' || error?.name === 'CastError' ? 400 : 500).json({ message: error?.message || 'Failed to update fee', error });
   }
 });
 
@@ -319,51 +334,41 @@ router.post('/salary', authenticate, canManageFinance(), async (req, res) => {
       status: req.body.status || 'paid',
       paymentMethod: req.body.paymentMethod || 'bank_transfer',
       transactionId: req.body.transactionId,
+      notes: req.body.notes,
       processedBy: req.user._id,
       institutionId: req.user.institutionId,
     });
     await writeAuditLog(req, 'create', 'salary', salary._id, salary);
     res.status(201).json({ salary });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to create salary payment', error });
+    res.status(500).json({ message: 'Failed to add salary', error });
   }
 });
 
-router.get('/reports', authenticate, canManageFinance(), (req, res) => {
-  const institutionId = req.user.institutionId;
-  const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const endSource = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
-  const endDate = new Date(endSource.getFullYear(), endSource.getMonth(), endSource.getDate() + 1);
-  Promise.all([
-    Payment.find({ institutionId, paymentDate: { $gte: startDate, $lt: endDate } }).populate({ path: 'studentId', populate: { path: 'userId', select: 'name' } }).sort({ paymentDate: -1 }).lean(),
-    Fee.find({ institutionId, status: { $in: ['pending', 'overdue'] } }).populate({ path: 'studentId', populate: { path: 'userId', select: 'name' } }).lean(),
-    Salary.find({ institutionId, paymentDate: { $gte: startDate, $lt: endDate } }).sort({ paymentDate: -1 }).lean(),
-    Payment.aggregate([{ $match: { institutionId, paymentDate: { $gte: startDate, $lt: endDate } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$paymentDate' } }, total: { $sum: '$amount' } } }, { $sort: { _id: 1 } }]),
-    Fee.aggregate([{ $match: { institutionId } }, { $group: { _id: '$type', total: { $sum: '$amount' } } }]),
-  ])
-    .then(([collections, dues, salaries, trend, byType]) => res.json({ reports: { collections, dues, salaries, trend: trend.map((item: any) => ({ name: item._id, value: item.total })), byType: byType.map((item: any) => ({ name: item._id, value: item.total })) } }))
-    .catch((error) => res.status(500).json({ message: 'Failed to load finance reports', error }));
+router.get('/my-fees', authenticate, (req, res) => {
+  const now = new Date();
+  const currentMonth = now.toLocaleString('en-US', { month: 'long' });
+  const currentYear = now.getFullYear();
+  Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId })
+    .then((parent) => {
+      if (req.user.role === 'student') {
+        return Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId })
+          .then((student) => student ? Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ dueDate: -1 }).then((fees) => ({ fees, children: [] })) : { fees: [], children: [] });
+      }
+      if (!parent) return { fees: [], children: [] };
+      return Promise.all(parent.children.map((childId) => Student.findById(childId).populate('userId', 'name avatar').then((student) => student ? Fee.find({ studentId: student._id, institutionId: req.user.institutionId, month: currentMonth, year: currentYear }).then((fees) => ({ student, fees })) : null))).then((items) => ({ fees: [], children: items.filter(Boolean) }));
+    })
+    .then((data) => res.json(data))
+    .catch((error) => res.status(500).json({ message: 'Failed to load fee data', error }));
 });
 
-router.get('/my-fees', authenticate, (req, res) => {
-  const institutionId = req.user.institutionId;
-  Student.findOne({ institutionId, userId: req.user._id })
-    .then(async (student) => {
-      if (student) {
-        const [myFees, payments] = await Promise.all([Fee.find({ institutionId, studentId: student._id }).sort({ createdAt: -1 }), Payment.find({ institutionId, studentId: student._id }).sort({ paymentDate: -1 })]);
-        return res.json({ myFees, payments, children: [{ _id: student._id, name: req.user.name }] });
-      }
-
-      if (req.user.role === 'parent') {
-        const parent = await Parent.findOne({ institutionId, userId: req.user._id });
-        const childIds = parent?.children || [];
-        const [myFees, payments, children] = await Promise.all([Fee.find({ institutionId, studentId: { $in: childIds } }).sort({ createdAt: -1 }), Payment.find({ institutionId, studentId: { $in: childIds } }).sort({ paymentDate: -1 }), Student.find({ institutionId, _id: { $in: childIds } }).populate('userId', 'name')]);
-        return res.json({ myFees, payments, children });
-      }
-
-      return res.json({ myFees: [] });
-    })
-    .catch((error) => res.status(500).json({ message: 'Failed to load my fees', error }));
+router.get('/reports', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const data = await buildSummary(req.user.institutionId);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load finance reports', error });
+  }
 });
 
 export default router;
