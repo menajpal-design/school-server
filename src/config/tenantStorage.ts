@@ -8,39 +8,16 @@ export type TenantStorageContext = {
 };
 
 const schoolDataModels = new Set([
-  'AdmissionApplication',
-  'Attendance',
-  'AuditLog',
-  'BackupConfig',
-  'Class',
-  'Committee',
-  'Document',
-  'Exam',
-  'Fee',
-  'IDCard',
-  'Message',
-  'Notice',
-  'Notification',
-  'Parent',
-  'Payment',
-  'Result',
-  'Salary',
-  'Section',
-  'SmsLog',
-  'Staff',
-  'Student',
-  'Subject',
-  'Teacher',
+  'AdmissionApplication', 'Attendance', 'AuditLog', 'BackupConfig', 'Class', 'Committee', 'Document', 'Exam', 'Fee', 'IDCard', 'Message', 'Notice', 'Notification', 'Parent', 'Payment', 'Result', 'Salary', 'Section', 'SmsLog', 'Staff', 'Student', 'Subject', 'Teacher',
 ]);
-
 const primaryMirrorModels = new Set(['User', 'Institution']);
 const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
 const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>();
 const tenantConnectionFailures = new Map<string, number>();
-const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 60000);
-const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 2500);
-const tenantQueryMaxTimeMs = Number(process.env.TENANT_MONGO_QUERY_MAX_TIME_MS || 8000);
-const tenantQueryHardTimeoutMs = Number(process.env.TENANT_MONGO_QUERY_HARD_TIMEOUT_MS || 2500);
+const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 5000);
+const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 15000);
+const tenantQueryMaxTimeMs = Number(process.env.TENANT_MONGO_QUERY_MAX_TIME_MS || 25000);
+const tenantQueryHardTimeoutMs = Number(process.env.TENANT_MONGO_QUERY_HARD_TIMEOUT_MS || 15000);
 const tenantStrictStorage = String(process.env.TENANT_MONGO_STRICT || 'true').toLowerCase() !== 'false';
 let patchesInstalled = false;
 
@@ -51,13 +28,13 @@ const getDocumentObject = (doc: any) => {
 };
 const modelCollectionName = (model: any) => model?.collection?.name || model?.modelName;
 const isPrimarySchoolModel = (model: any) => Boolean(model?.modelName && model?.db === mongoose.connection && schoolDataModels.has(model.modelName));
-const storageUnavailableError = (modelName: string) => {
-  const error: any = new Error(`School data storage unavailable for ${modelName}. Personal MongoDB is required; primary database fallback is disabled for school data.`);
+const storageUnavailableError = (modelName: string, reason = 'Personal MongoDB connection/query failed or timed out') => {
+  const error: any = new Error(`School data storage unavailable for ${modelName}. ${reason}. Please check the school Personal MongoDB URI/network access. Primary database fallback is disabled for school data.`);
   error.statusCode = 503;
   error.code = 'TENANT_STORAGE_UNAVAILABLE';
+  error.reason = reason;
   return error;
 };
-
 const registerModel = (connection: mongoose.Connection, baseModel: any) => {
   if (!baseModel?.modelName || !baseModel?.schema) return null;
   if (connection.models[baseModel.modelName]) return connection.models[baseModel.modelName];
@@ -95,9 +72,9 @@ const getTenantConnection = async (context: TenantStorageContext) => {
   if (!tenantConnections.has(key)) {
     tenantConnections.set(key, mongoose.createConnection(context.mongoUri, {
       maxPoolSize: Number(process.env.TENANT_MONGO_POOL_SIZE || 5),
-      serverSelectionTimeoutMS: Number(process.env.TENANT_MONGO_SERVER_SELECTION_TIMEOUT_MS || 3000),
-      connectTimeoutMS: Number(process.env.TENANT_MONGO_CONNECT_TIMEOUT_MS || 3000),
-      socketTimeoutMS: Number(process.env.TENANT_MONGO_SOCKET_TIMEOUT_MS || 15000),
+      serverSelectionTimeoutMS: Number(process.env.TENANT_MONGO_SERVER_SELECTION_TIMEOUT_MS || 12000),
+      connectTimeoutMS: Number(process.env.TENANT_MONGO_CONNECT_TIMEOUT_MS || 12000),
+      socketTimeoutMS: Number(process.env.TENANT_MONGO_SOCKET_TIMEOUT_MS || 30000),
       retryWrites: true,
     }).asPromise().then((connection) => {
       tenantConnectionFailures.delete(key);
@@ -111,13 +88,11 @@ const getTenantConnection = async (context: TenantStorageContext) => {
     }));
   }
   const connection = await withTimeout(tenantConnections.get(key)!, tenantConnectionHardTimeoutMs, () => {
-    tenantConnectionFailures.set(key, Date.now());
     console.warn('Tenant Mongo connection timed out. Primary fallback is disabled for school data.');
   });
   if (!connection) return null;
   return connection;
 };
-
 const getTenantModel = async (baseModel: any, context: TenantStorageContext | null | undefined) => {
   if (!context?.mongoUri || !baseModel?.modelName || !schoolDataModels.has(baseModel.modelName)) return null;
   if (baseModel.db !== mongoose.connection) return null;
@@ -159,9 +134,7 @@ export const runWithTenantStorage = <T>(context: TenantStorageContext | null, ca
 export const resolveTenantStorageContext = (institution: any): TenantStorageContext | null => {
   const billing = institution?.billing || {};
   const settings = institution?.settings || {};
-  const activeAcademicYear = Array.isArray(settings.academicYears)
-    ? settings.academicYears.find((item: any) => item?.isActive || item?.year === settings.activeAcademicYear)
-    : null;
+  const activeAcademicYear = Array.isArray(settings.academicYears) ? settings.academicYears.find((item: any) => item?.isActive || item?.year === settings.activeAcademicYear) : null;
   const usesEasySchoolStorage = billing.useEasySchoolStorage !== false;
   const mongoUri = !usesEasySchoolStorage ? String(activeAcademicYear?.mongodbUri || settings.mongodbUri || '').trim() : '';
   const imgbbApiKey = !usesEasySchoolStorage ? String(activeAcademicYear?.imgbbApiKey || settings.imgbbApiKey || '').trim() : '';
@@ -185,15 +158,14 @@ export const installTenantStoragePatches = () => {
       this._collection = tenantModel.collection;
       this.maxTimeMS(tenantQueryMaxTimeMs);
       const result = await withTimeout(originalQueryExec.apply(this, args as any), tenantQueryHardTimeoutMs, () => {
-        if (context?.institutionId) tenantConnectionFailures.set(`${context.institutionId}:${context.mongoUri}`, Date.now());
         console.warn(`Tenant query timed out for ${tenantModel.modelName}. Primary fallback disabled.`);
       });
       if (result !== null) return result;
-      if (tenantStrictStorage) throw storageUnavailableError(tenantModel.modelName);
+      if (tenantStrictStorage) throw storageUnavailableError(tenantModel.modelName, `Tenant query timed out after ${tenantQueryHardTimeoutMs}ms`);
       if (primaryQuery) return originalQueryExec.apply(primaryQuery, args as any);
       throw storageUnavailableError(tenantModel.modelName);
     }
-    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.model?.modelName || 'SchoolData');
+    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.model?.modelName || 'SchoolData', `Tenant model connection failed after ${tenantConnectionHardTimeoutMs}ms`);
     const result = await originalQueryExec.apply(this, args as any);
     if (!tenantModel && context?.mongoUri && this.model?.db === mongoose.connection && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) schedulePrimaryMirror(this.model, result, context);
     return result;
@@ -209,15 +181,14 @@ export const installTenantStoragePatches = () => {
       this._model = tenantModel;
       this.option({ maxTimeMS: tenantQueryMaxTimeMs });
       const result = await withTimeout(originalAggregateExec.apply(this, args as any), tenantQueryHardTimeoutMs, () => {
-        if (context?.institutionId) tenantConnectionFailures.set(`${context.institutionId}:${context.mongoUri}`, Date.now());
         console.warn(`Tenant aggregate timed out for ${tenantModel.modelName}. Primary fallback disabled.`);
       });
       if (result !== null) return result;
-      if (tenantStrictStorage) throw storageUnavailableError(tenantModel.modelName);
+      if (tenantStrictStorage) throw storageUnavailableError(tenantModel.modelName, `Tenant aggregate timed out after ${tenantQueryHardTimeoutMs}ms`);
       if (primaryAggregate) return originalAggregateExec.apply(primaryAggregate, args as any);
       throw storageUnavailableError(tenantModel.modelName);
     }
-    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this._model?.modelName || 'SchoolData');
+    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this._model?.modelName || 'SchoolData', `Tenant model connection failed after ${tenantConnectionHardTimeoutMs}ms`);
     return originalAggregateExec.apply(this, args as any);
   };
 
@@ -234,7 +205,7 @@ export const installTenantStoragePatches = () => {
       this.isNew = false;
       return this;
     }
-    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.constructor?.modelName || 'SchoolData');
+    if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.constructor?.modelName || 'SchoolData', `Tenant model connection failed after ${tenantConnectionHardTimeoutMs}ms`);
     const saved = await originalSave.apply(this, args as any);
     if (context?.mongoUri && this.constructor?.db === mongoose.connection && primaryMirrorModels.has(this.constructor?.modelName)) schedulePrimaryMirror(this.constructor, saved, context);
     return saved;
