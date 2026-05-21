@@ -1,31 +1,43 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import ClassRoutine from '../models/ClassRoutine';
 import Institution from '../models/Institution';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
+import Subject from '../models/Subject';
 import { authenticate, canManageAcademic } from '../middleware/auth';
 
 const router = express.Router();
 
 const headApprovalRoles = ['head', 'assistant_head', 'admin', 'super_admin'];
 const teacherProposalRoles = ['class_teacher', 'subject_teacher', 'teacher'];
+const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
 
-const normalizeBody = (req: any): any => {
+const resolveSubject = async (req: any) => {
+  const subjectId = req.body.subjectId;
+  if (!subjectId || !isObjectId(subjectId)) return { subjectId: undefined, subjectName: '' };
+  const subject = await Subject.findOne({ _id: subjectId, institutionId: req.user.institutionId }).select('name code').lean();
+  if (!subject) return { subjectId: undefined, subjectName: '' };
+  return { subjectId: subject._id, subjectName: subject.name || subject.code || '' };
+};
+
+const normalizeBody = async (req: any): Promise<any> => {
   const role = req.user?.role;
   const canApproveDirectly = headApprovalRoles.includes(role);
   const requestedStatus = req.body.status;
   const status = canApproveDirectly ? (requestedStatus || (req.body.isPublic === true ? 'approved' : 'draft')) : 'proposed';
+  const subject = await resolveSubject(req);
   return {
     classId: req.body.classId,
     sectionId: req.body.sectionId || undefined,
-    subjectId: req.body.subjectId || undefined,
+    subjectId: subject.subjectId,
     teacherId: req.body.teacherId || req.user?._id || undefined,
     dayOfWeek: req.body.dayOfWeek,
     periodName: req.body.periodName,
     startTime: req.body.startTime,
     endTime: req.body.endTime,
     room: req.body.room,
-    note: req.body.note,
+    note: subject.subjectName || req.body.note,
     proposalNote: req.body.proposalNote,
     status,
     isActive: req.body.isActive !== false,
@@ -123,7 +135,7 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    const payload: any = { ...normalizeBody(req) };
+    const payload: any = { ...(await normalizeBody(req)) };
     if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') {
       payload.approvedBy = req.user._id;
       payload.approvedAt = new Date();
@@ -132,7 +144,7 @@ router.post('/', async (req: any, res) => {
     const routine = await ClassRoutine.create(payload);
     const created = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
     res.status(201).json({ routine: created, message: headApprovalRoles.includes(req.user.role) ? 'Class routine created' : 'Class routine proposal submitted for approval' });
-  } catch (error) { res.status(500).json({ message: 'Failed to create class routine', error }); }
+  } catch (error: any) { res.status(500).json({ message: error?.message || 'Failed to create class routine', error }); }
 });
 
 router.put('/:id', async (req: any, res) => {
@@ -142,14 +154,14 @@ router.put('/:id', async (req: any, res) => {
     const userId = String(req.user._id || req.user.id);
     const ownerId = String(routine.createdBy || '');
     if (!headApprovalRoles.includes(req.user.role) && ownerId !== userId) return res.status(403).json({ message: 'Only the proposal owner or Head/Assistant Head can edit this routine.' });
-    const payload: any = { ...normalizeBody(req) };
+    const payload: any = { ...(await normalizeBody(req)) };
     Object.assign(routine, payload);
     if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') { routine.approvedBy = req.user._id; routine.approvedAt = new Date(); routine.isPublic = req.body.isPublic === true; }
     else if (!headApprovalRoles.includes(req.user.role)) { routine.status = 'proposed'; routine.isPublic = false; routine.approvedBy = undefined; routine.approvedAt = undefined; }
     await routine.save();
     const updated = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
     res.json({ routine: updated, message: headApprovalRoles.includes(req.user.role) ? 'Class routine updated' : 'Class routine proposal updated' });
-  } catch (error) { res.status(500).json({ message: 'Failed to update class routine', error }); }
+  } catch (error: any) { res.status(500).json({ message: error?.message || 'Failed to update class routine', error }); }
 });
 
 router.patch('/:id/approval', async (req: any, res) => {
