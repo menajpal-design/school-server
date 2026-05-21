@@ -4,6 +4,7 @@ import Staff from '../models/Staff';
 import User from '../models/User';
 import IDCard from '../models/IDCard';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -40,6 +41,24 @@ async function createStaffUser(req: any) {
   error.statusCode = 409;
   throw error;
 }
+
+const sendStaffLoginSms = async (req: any, user: any, username: string, loginCode: string) => {
+  const phone = String(req.body.phone || user.phone || '').trim();
+  if (!phone) return false;
+  try {
+    return await sendSMS({
+      to: phone,
+      message: `EASY SCHOOL staff login. Username: ${username}. Login code: ${loginCode}. Change it after login.`,
+      institutionId: req.user.institutionId,
+      recipientName: user.name || 'Staff',
+      recipientPhone: phone,
+      type: 'notification',
+    });
+  } catch (error) {
+    console.error('Staff login SMS failed:', error);
+    return false;
+  }
+};
 
 router.get('/', authenticate, (req, res) => {
   Staff.find({ institutionId: req.user.institutionId })
@@ -80,7 +99,8 @@ router.post('/', authenticate, async (req, res) => {
       institutionId: req.user.institutionId,
     });
     const idCard = req.body.autoIdCard !== false ? await createIdCard(staff._id, req, req.body.photo) : null;
-    res.status(201).json({ staff, user, idCard, credentials: { username, password } });
+    const smsSent = await sendStaffLoginSms(req, user, username, password);
+    res.status(201).json({ staff, user, idCard, credentials: { username, password }, smsSent });
   } catch (error: any) {
     res.status(error?.statusCode || (error?.name === 'ValidationError' ? 400 : 500)).json({ message: message(error), error: { name: error?.name, message: error?.message, code: error?.code } });
   }
