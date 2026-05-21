@@ -14,7 +14,7 @@ const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
 const canAdd = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role);
 const canManualRoll = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role);
 const active = (items: any[] = [], field: string) => String((items.find((x: any) => x?.isActive) || items[items.length - 1])?.[field] || '').trim();
-const errMsg = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.code === 11000 ? 'Duplicate username or roll number found.' : e?.message || 'Student API failed';
+const errMsg = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.code === 11000 ? 'Duplicate record found. If roll was provided, it may already exist.' : e?.message || 'Student API failed';
 
 const normalizeRoll = (value: any) => {
   const raw = String(value || '').trim();
@@ -48,27 +48,40 @@ async function ensureClass(req: any) {
   return { classId: cls._id, sectionId: sec._id };
 }
 
-async function resolveRoll(req: any, classId: any, sectionId: any) {
-  const requested = normalizeRoll(req.body.rollNumber);
-  if (requested) {
-    if (!canManualRoll(req.user.role)) {
-      const e: any = new Error('You are not allowed to set roll manually. Roll will be generated automatically.');
-      e.statusCode = 403;
-      throw e;
-    }
-    const exists = await Student.findOne({ institutionId: req.user.institutionId, classId, sectionId, rollNumber: requested }).lean();
-    if (exists) {
-      const e: any = new Error(`Roll ${requested} already exists in this class/section. Please use next available roll.`);
-      e.statusCode = 409;
-      throw e;
-    }
-    return requested;
-  }
+async function nextAvailableRoll(req: any, classId: any, sectionId: any) {
   const all = await Student.find({ institutionId: req.user.institutionId, classId, sectionId }).select('rollNumber').lean();
   const used = new Set(all.map((x: any) => Number(String(x.rollNumber || '').replace(/[^0-9]/g, ''))).filter((n: number) => Number.isFinite(n) && n > 0));
   let next = 1;
   while (used.has(next)) next += 1;
   return String(next).padStart(2, '0');
+}
+
+async function resolveRoll(req: any, classId: any, sectionId: any) {
+  const requested = normalizeRoll(req.body.rollNumber);
+  if (requested) {
+    if (!canManualRoll(req.user.role)) return nextAvailableRoll(req, classId, sectionId);
+    const exists = await Student.findOne({ institutionId: req.user.institutionId, classId, sectionId, rollNumber: requested }).lean();
+    if (!exists) return requested;
+  }
+  return nextAvailableRoll(req, classId, sectionId);
+}
+
+async function createPrimaryUser(input: any, name: string, prefix: string) {
+  const secret = generatePassword();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const username = await generateUsername(name, prefix);
+    try {
+      const user = await User.create({ ...input, username, password: await hashPassword(secret) });
+      return { user, username, secret };
+    } catch (e: any) {
+      const key = Object.keys(e?.keyPattern || e?.keyValue || {})[0] || '';
+      if (e?.code === 11000 && key.includes('username')) continue;
+      throw e;
+    }
+  }
+  const e: any = new Error('Could not generate a unique username. Please try again.');
+  e.statusCode = 409;
+  throw e;
 }
 
 router.get('/', authenticate, async (req: any, res) => {
@@ -85,15 +98,11 @@ router.post('/', authenticate, async (req: any, res) => {
     if (!canAdd(req.user.role)) return res.status(403).json({ message: 'Only school leadership/teachers can add students.' });
     if (!String(req.body.guardianPhone || '').trim()) return res.status(400).json({ message: 'Guardian phone is required.' });
 
-    const uname = await primaryDb(() => generateUsername(req.body.name, 'student'));
-    const secret = generatePassword();
-    const pUname = req.body.autoParentAccount === false ? undefined : await primaryDb(() => generateUsername(req.body.guardianName || 'guardian', 'parent'));
-    const pSecret = req.body.autoParentAccount === false ? undefined : generatePassword();
-
-    const { user, parentUser } = await primaryDb(async () => {
-      const studentUser = await User.create({ name: req.body.name, username: uname, password: await hashPassword(secret), role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId });
-      const guardianUser = req.body.autoParentAccount === false ? null : await User.create({ name: req.body.guardianName || 'Guardian', username: pUname, password: await hashPassword(pSecret as string), role: 'parent', phone: req.body.guardianPhone, institutionId: req.user.institutionId });
-      return { user: studentUser, parentUser: guardianUser };
+    const { user, parentUser, uname, secret, pUname, pSecret } = await primaryDb(async () => {
+      const studentCreated = await createPrimaryUser({ name: req.body.name, role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId }, req.body.name, 'student');
+      if (req.body.autoParentAccount === false) return { user: studentCreated.user, parentUser: null, uname: studentCreated.username, secret: studentCreated.secret, pUname: undefined, pSecret: undefined };
+      const parentCreated = await createPrimaryUser({ name: req.body.guardianName || 'Guardian', role: 'parent', phone: req.body.guardianPhone, institutionId: req.user.institutionId }, req.body.guardianName || 'Guardian', 'parent');
+      return { user: studentCreated.user, parentUser: parentCreated.user, uname: studentCreated.username, secret: studentCreated.secret, pUname: parentCreated.username, pSecret: parentCreated.secret };
     });
 
     const student = await schoolDb(req, async () => {
@@ -105,7 +114,7 @@ router.post('/', authenticate, async (req: any, res) => {
       return created;
     });
 
-    res.status(201).json({ student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: parentUser?.username, parentTemporary: pSecret } });
+    res.status(201).json({ student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: pUname, parentTemporary: pSecret } });
   } catch (e: any) {
     res.status(e?.statusCode || (e?.name === 'ValidationError' ? 400 : 500)).json({ message: errMsg(e), error: { name: e?.name, message: e?.message, code: e?.code } });
   }
