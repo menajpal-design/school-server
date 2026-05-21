@@ -74,11 +74,12 @@ async function createPrimaryUser(input: any, name: string, prefix: string) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const username = await generateUsername(name, prefix);
     try {
-      const user = await User.create({ ...input, username, password: await hashPassword(secret) });
+      const safeEmail = `${username}@${prefix}.internal.local`;
+      const user = await User.create({ ...input, username, email: safeEmail, password: await hashPassword(secret) });
       return { user, username, secret };
     } catch (e: any) {
       const key = Object.keys(e?.keyPattern || e?.keyValue || {})[0] || '';
-      if (e?.code === 11000 && key.includes('username')) continue;
+      if (e?.code === 11000 && (key.includes('username') || key.includes('email'))) continue;
       throw e;
     }
   }
@@ -144,7 +145,7 @@ router.post('/', authenticate, async (req: any, res) => {
 
     res.status(201).json({ student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: pUname, parentTemporary: pSecret } });
   } catch (e: any) {
-    res.status(e?.statusCode || (e?.name === 'ValidationError' ? 400 : 500)).json({ message: errMsg(e), error: { name: e?.name, message: e?.message, code: e?.code } });
+    res.status(e?.statusCode || (e?.name === 'ValidationError' ? 400 : 500)).json({ message: errMsg(e), error: { name: e?.name, message: e?.message, code: e?.code, keyValue: e?.keyValue } });
   }
 });
 
