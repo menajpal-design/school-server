@@ -58,10 +58,20 @@ router.get('/', async (req: any, res) => {
 router.post('/', async (req: any, res) => {
   try {
     const M = await models(req);
+    const student = req.body.studentId ? await M.Student.findOne({ _id: req.body.studentId, institutionId: req.user.institutionId }).lean() : null;
+    const classId = student?.classId;
     const fee = req.body.feeId
       ? await M.Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId })
-      : await M.Fee.findOne({ studentId: req.body.studentId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).sort({ dueDate: 1 });
-    if (!fee) return res.status(404).json({ message: 'No due fee found for payment' });
+      : await M.Fee.findOne({
+          institutionId: req.user.institutionId,
+          status: { $in: ['pending', 'overdue'] },
+          $or: [
+            { studentId: req.body.studentId },
+            { studentId: { $exists: false }, classId },
+            { studentId: null, classId },
+          ],
+        }).sort({ dueDate: 1 });
+    if (!fee) return res.status(404).json({ message: 'No due fee found for payment. Student-specific fee or class-wise fee not found for this student.' });
     const payableAmount = amount(fee.amount);
     const paidAmount = amount(req.body.amount);
     if (paidAmount <= 0) return res.status(400).json({ message: 'Enter a valid payment amount.' });
