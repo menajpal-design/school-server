@@ -345,21 +345,33 @@ router.post('/salary', authenticate, canManageFinance(), async (req, res) => {
   }
 });
 
-router.get('/my-fees', authenticate, (req, res) => {
-  const now = new Date();
-  const currentMonth = now.toLocaleString('en-US', { month: 'long' });
-  const currentYear = now.getFullYear();
-  Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId })
-    .then((parent) => {
-      if (req.user.role === 'student') {
-        return Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId })
-          .then((student) => student ? Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ dueDate: -1 }).then((fees) => ({ fees, children: [] })) : { fees: [], children: [] });
-      }
-      if (!parent) return { fees: [], children: [] };
-      return Promise.all(parent.children.map((childId) => Student.findById(childId).populate('userId', 'name avatar').then((student) => student ? Fee.find({ studentId: student._id, institutionId: req.user.institutionId, month: currentMonth, year: currentYear }).then((fees) => ({ student, fees })) : null))).then((items) => ({ fees: [], children: items.filter(Boolean) }));
-    })
-    .then((data) => res.json(data))
-    .catch((error) => res.status(500).json({ message: 'Failed to load fee data', error }));
+router.get('/my-fees', authenticate, async (req, res) => {
+  try {
+    const now = new Date();
+    const currentMonth = now.toLocaleString('en-US', { month: 'long' });
+    const currentYear = now.getFullYear();
+    if (req.user.role === 'student') {
+      const student = await Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
+      const fees = student ? await Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ dueDate: -1 }) : [];
+      return res.json({ fees, children: [] as any[] });
+    }
+    const parent = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
+    if (!parent) return res.json({ fees: [] as any[], children: [] as any[] });
+    const childrenRaw = await Promise.all(parent.children.map(async (childId) => {
+      const student = await Student.findById(childId).populate('userId', 'name avatar');
+      if (!student) return null;
+      const fees = await Fee.find({
+        studentId: student._id,
+        institutionId: req.user.institutionId,
+        year: currentYear,
+        $or: [{ month: currentMonth }, { month: 'All Months' }],
+      });
+      return { student, fees };
+    }));
+    res.json({ fees: [] as any[], children: childrenRaw.filter(Boolean) });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load fee data', error });
+  }
 });
 
 router.get('/reports', authenticate, canManageFinance(), async (req, res) => {
