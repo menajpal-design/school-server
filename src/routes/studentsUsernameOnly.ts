@@ -24,18 +24,21 @@ const normalizeRoll = (value: any) => {
   return String(Number(digits)).padStart(2, '0');
 };
 
-async function schoolDb<T>(req: any, fn: () => Promise<T>) {
-  let ctx = getTenantStorageContext();
-  if (!ctx?.mongoUri) {
-    const setting: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
-    const mongoUri = String(req.user?.institution?.settings?.mongodbUri || active(setting.mongodbUris, 'uri') || setting.mongodbUrl || '').trim();
-    if (!mongoUri) {
-      const e: any = new Error('School MongoDB URI missing. Save MongoDB URI in Settings before adding students.');
-      e.statusCode = 428;
-      throw e;
-    }
-    ctx = { institutionId: String(req.user.institutionId), mongoUri };
+async function resolveSchoolContext(req: any) {
+  const current = getTenantStorageContext();
+  const setting: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
+  const mongoUri = String(req.user?.institution?.settings?.mongodbUri || active(setting.mongodbUris, 'uri') || setting.mongodbUrl || current?.mongoUri || '').trim();
+  const imgbbApiKey = String(req.user?.institution?.settings?.imgbbApiKey || active(setting.imgbbKeys, 'apiKey') || setting.imgbbApiKey || current?.imgbbApiKey || '').trim();
+  if (!mongoUri) {
+    const e: any = new Error('School MongoDB URI missing. Save MongoDB URI in Settings before adding students.');
+    e.statusCode = 428;
+    throw e;
   }
+  return { institutionId: String(req.user.institutionId), mongoUri, imgbbApiKey: imgbbApiKey || undefined };
+}
+
+async function schoolDb<T>(req: any, fn: () => Promise<T>) {
+  const ctx = await resolveSchoolContext(req);
   return runWithTenantStorage(ctx, fn, req.user, req.user?.institution);
 }
 
@@ -112,7 +115,7 @@ router.get('/', authenticate, async (req: any, res) => {
     const merged = new Map<string, any>();
     [...tenantRows, ...primaryRows].forEach((item: any) => merged.set(String(item._id), item));
     const students = await enrichStudents(Array.from(merged.values()));
-    res.json({ students });
+    res.json({ students, debug: { tenantCount: tenantRows.length, primaryCount: primaryRows.length } });
   } catch (e: any) {
     res.status(e?.statusCode || 500).json({ message: errMsg(e), error: { name: e?.name, message: e?.message } });
   }
