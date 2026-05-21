@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import User from '../models/User';
 import Student from '../models/Student';
@@ -16,6 +17,7 @@ const canManualRoll = (role: string) => ['head', 'assistant_head', 'class_teache
 const active = (items: any[] = [], field: string) => String((items.find((x: any) => x?.isActive) || items[items.length - 1])?.[field] || '').trim();
 const errMsg = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.code === 11000 ? 'Duplicate record found. If roll was provided, it may already exist.' : e?.message || 'Student API failed';
 const validBloodGroups = new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
+const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
 
 const normalizeRoll = (value: any) => {
   const raw = String(value || '').trim();
@@ -38,11 +40,36 @@ async function resolveSchoolContext(req: any) {
   return { institutionId: String(req.user.institutionId), mongoUri, imgbbApiKey: imgbbApiKey || undefined };
 }
 async function schoolDb<T>(req: any, fn: () => Promise<T>) { return runWithTenantStorage(await resolveSchoolContext(req), fn, req.user, req.user?.institution); }
+
 async function ensureClass(req: any) {
+  const requestedClassId = String(req.body.classId || '').trim();
+  const requestedSectionId = String(req.body.sectionId || '').trim();
   const className = String(req.body.className || req.body.class || 'Class 1').trim();
   const sectionName = String(req.body.sectionName || req.body.section || 'A').trim();
-  const cls = await ClassModel.findOneAndUpdate({ institutionId: req.user.institutionId, name: className }, { $setOnInsert: { institutionId: req.user.institutionId, name: className, grade: className.match(/\d+/)?.[0] || className, academicYear: String(new Date().getFullYear()), shift: 'day' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
-  const sec = await Section.findOneAndUpdate({ institutionId: req.user.institutionId, classId: cls._id, name: sectionName }, { $setOnInsert: { institutionId: req.user.institutionId, classId: cls._id, name: sectionName, capacity: 30, currentStudents: 0 } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+
+  let cls: any = null;
+  if (isObjectId(requestedClassId)) {
+    cls = await ClassModel.findOne({ _id: requestedClassId, institutionId: req.user.institutionId });
+  }
+  if (!cls) {
+    cls = await ClassModel.findOneAndUpdate(
+      { institutionId: req.user.institutionId, name: className },
+      { $setOnInsert: { institutionId: req.user.institutionId, name: className, grade: className.match(/\d+/)?.[0] || className, academicYear: String(new Date().getFullYear()), shift: 'day' } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  let sec: any = null;
+  if (isObjectId(requestedSectionId)) {
+    sec = await Section.findOne({ _id: requestedSectionId, institutionId: req.user.institutionId, classId: cls._id });
+  }
+  if (!sec) {
+    sec = await Section.findOneAndUpdate(
+      { institutionId: req.user.institutionId, classId: cls._id, name: sectionName },
+      { $setOnInsert: { institutionId: req.user.institutionId, classId: cls._id, name: sectionName, capacity: 30, currentStudents: 0 } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
   await ClassModel.updateOne({ _id: cls._id }, { $addToSet: { sections: sec._id } });
   return { classId: cls._id, sectionId: sec._id };
 }
@@ -81,9 +108,10 @@ router.get('/', authenticate, async (req: any, res) => {
     const userIds = primaryStudentUsers.map((u: any) => u._id);
     const tenantRows = await schoolDb(req, () => Student.find({ $or: [{ institutionId: req.user.institutionId }, { userId: { $in: userIds } }] }).populate('classId', 'name grade').populate('sectionId', 'name').sort({ createdAt: -1 }).lean());
     const primaryRows = await primaryDb(() => Student.find({ $or: [{ institutionId: req.user.institutionId }, { userId: { $in: userIds } }] }).populate('classId', 'name grade').populate('sectionId', 'name').sort({ createdAt: -1 }).lean()).catch(() => [] as any[]);
-    const merged = new Map<string, any>(); [...tenantRows, ...primaryRows].forEach((item: any) => merged.set(String(item._id), item));
+    const merged = new Map<string, any>();
+    [...primaryRows, ...tenantRows].forEach((item: any) => merged.set(String(item.userId?._id || item.userId || item._id), item));
     const students = await enrichStudents(Array.from(merged.values()));
-    res.json({ students, debug: { tenantCount: tenantRows.length, primaryCount: primaryRows.length, userCount: userIds.length } });
+    res.json({ students, debug: { tenantCount: tenantRows.length, primaryCount: primaryRows.length, userCount: userIds.length, sourcePriority: 'tenant-over-primary' } });
   } catch (e: any) { res.status(e?.statusCode || 500).json({ message: errMsg(e), error: { name: e?.name, message: e?.message } }); }
 });
 
@@ -106,9 +134,10 @@ router.post('/', authenticate, async (req: any, res) => {
       const created = await Student.create({ userId: user._id, rollNumber, classId, sectionId, admissionDate: safeDate(req.body.admissionDate, new Date()), dateOfBirth: safeDate(req.body.dateOfBirth, new Date('2000-01-01')), bloodGroup, address, parentId: parentUser?._id, guardianName, guardianPhone, subjects: [], institutionId: req.user.institutionId });
       await Section.findByIdAndUpdate(sectionId, { $inc: { currentStudents: 1 } });
       if (parentUser) await Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address, emergencyContact: guardianName || parentUser.name, emergencyPhone: guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true });
-      return created;
+      return await Student.findById(created._id).populate('classId', 'name grade').populate('sectionId', 'name').lean();
     });
-    res.status(201).json({ student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: pUname, parentTemporary: pSecret } });
+    const [enrichedStudent] = await enrichStudents([student]);
+    res.status(201).json({ student: enrichedStudent, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: pUname, parentTemporary: pSecret } });
   } catch (e: any) { res.status(e?.statusCode || (e?.name === 'ValidationError' ? 400 : 500)).json({ message: errMsg(e), error: { name: e?.name, message: e?.message, code: e?.code, keyValue: e?.keyValue } }); }
 });
 
