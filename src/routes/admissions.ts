@@ -6,27 +6,65 @@ import Section from '../models/Section';
 import Student from '../models/Student';
 import User from '../models/User';
 import Parent from '../models/Parent';
+import SiteSetting from '../models/SiteSetting';
 import { authenticate } from '../middleware/auth';
+import { getTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
 import { sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
 const canAcceptAdmission = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher'].includes(role);
+const primaryDb = async <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
+
+const getActiveMongo = (value: any = {}) => {
+  const items = Array.isArray(value.mongodbUris) ? value.mongodbUris : [];
+  const active = items.find((item: any) => item?.isActive) || items[items.length - 1];
+  return String(active?.uri || value.mongodbUrl || '').trim();
+};
+
+const getActiveImgbb = (value: any = {}) => {
+  const items = Array.isArray(value.imgbbKeys) ? value.imgbbKeys : [];
+  const active = items.find((item: any) => item?.isActive) || items[items.length - 1];
+  return String(active?.apiKey || value.imgbbApiKey || '').trim();
+};
+
+const schoolDb = async <T>(req: any, fn: () => Promise<T>) => {
+  let context = getTenantStorageContext();
+  if (!context?.mongoUri) {
+    const siteConfig: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
+    const mongoUri = String(req.user?.institution?.settings?.mongodbUri || getActiveMongo(siteConfig)).trim();
+    const imgbbApiKey = String(req.user?.institution?.settings?.imgbbApiKey || getActiveImgbb(siteConfig)).trim();
+    if (!mongoUri) {
+      const error: any = new Error('School MongoDB URI missing. Save MongoDB URI in Settings before admitting students.');
+      error.statusCode = 428;
+      throw error;
+    }
+    context = { institutionId: String(req.user.institutionId), mongoUri, imgbbApiKey: imgbbApiKey || undefined };
+  }
+  return runWithTenantStorage(context, fn, req.user, req.user?.institution);
+};
 
 const ensureClassAndSection = async (institutionId: any, className: string, sectionName = 'A') => {
+  const safeClassName = String(className || 'Class 1').trim();
   const classItem = await ClassModel.findOneAndUpdate(
-    { institutionId, name: className },
-    { $setOnInsert: { institutionId, name: className, grade: className, academicYear: String(new Date().getFullYear()), shift: 'day' } },
+    { institutionId, name: safeClassName },
+    { $setOnInsert: { institutionId, name: safeClassName, grade: safeClassName.match(/\d+/)?.[0] || safeClassName, academicYear: String(new Date().getFullYear()), shift: 'day' } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   const section = await Section.findOneAndUpdate(
-    { institutionId, classId: classItem._id, name: sectionName },
-    { $setOnInsert: { institutionId, classId: classItem._id, name: sectionName, capacity: 30, currentStudents: 0 } },
+    { institutionId, classId: classItem._id, name: sectionName || 'A' },
+    { $setOnInsert: { institutionId, classId: classItem._id, name: sectionName || 'A', capacity: 30, currentStudents: 0 } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
-  await ClassModel.findByIdAndUpdate(classItem._id, { $addToSet: { sections: section._id } });
+  await ClassModel.updateOne({ _id: classItem._id, institutionId }, { $addToSet: { sections: section._id } });
   return { classId: classItem._id, sectionId: section._id };
+};
+
+const admissionError = (error: any) => {
+  if (error?.name === 'ValidationError') return Object.values(error.errors || {}).map((item: any) => item?.message).filter(Boolean).join(', ') || error.message;
+  if (error?.code === 11000) return 'Duplicate user/student information found. Please change username/email/roll number.';
+  return error?.message || 'Failed to process admission.';
 };
 
 router.get('/public/schools', async (req, res) => {
@@ -42,7 +80,7 @@ router.get('/public/schools', async (req, res) => {
 });
 
 router.post('/public/apply', async (req, res) => {
-  const application = await AdmissionApplication.create({
+  const application = await primaryDb(() => AdmissionApplication.create({
     institutionId: req.body.institutionId,
     studentName: req.body.studentName,
     guardianName: req.body.guardianName,
@@ -53,89 +91,103 @@ router.post('/public/apply', async (req, res) => {
     previousSchool: req.body.previousSchool,
     previousResult: req.body.previousResult,
     requestedClass: req.body.requestedClass,
-  });
+  }));
   res.status(201).json({ application, message: 'Admission application submitted' });
 });
 
 router.get('/', authenticate, async (req: any, res) => {
-  const applications = await AdmissionApplication.find({ institutionId: req.user.institutionId })
+  const applications = await primaryDb(() => AdmissionApplication.find({ institutionId: req.user.institutionId })
     .populate('institutionId', 'name')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 }));
   res.json({ applications });
 });
 
 router.post('/:id/accept', authenticate, async (req: any, res) => {
-  if (!canAcceptAdmission(req.user.role)) return res.status(403).json({ message: 'Teacher or school leadership can accept admission' });
-  const application = await AdmissionApplication.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
-  if (!application) return res.status(404).json({ message: 'Application not found' });
-  if (application.status !== 'pending') return res.status(400).json({ message: 'Application is already processed' });
+  try {
+    if (!canAcceptAdmission(req.user.role)) return res.status(403).json({ message: 'Teacher or school leadership can accept admission' });
+    const application = await primaryDb(() => AdmissionApplication.findOne({ _id: req.params.id, institutionId: req.user.institutionId }));
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    if (application.status !== 'pending') return res.status(400).json({ message: 'Application is already processed' });
 
-  const username = await generateUsername(application.studentName, 'student');
-  const password = generatePassword();
-  const parentUsername = await generateUsername(application.guardianName, 'parent');
-  const parentPassword = generatePassword();
-  const email = req.body.email || application.guardianEmail || `${username}@student.local`;
-  const { classId, sectionId } = await ensureClassAndSection(req.user.institutionId, req.body.className || application.requestedClass, req.body.sectionName || 'A');
+    const username = await primaryDb(() => generateUsername(application.studentName, 'student'));
+    const password = generatePassword();
+    const parentUsername = await primaryDb(() => generateUsername(application.guardianName, 'parent'));
+    const parentPassword = generatePassword();
+    const email = req.body.email || application.guardianEmail || `${username}@student.local`;
 
-  const user = await User.create({
-    name: application.studentName,
-    username,
-    email,
-    password: await hashPassword(password),
-    role: 'student',
-    phone: application.guardianPhone,
-    institutionId: req.user.institutionId,
-  });
-  const parent = await User.create({
-    name: application.guardianName,
-    username: parentUsername,
-    email: application.guardianEmail || `${parentUsername}@parent.local`,
-    password: await hashPassword(parentPassword),
-    role: 'parent',
-    phone: application.guardianPhone,
-    institutionId: req.user.institutionId,
-  });
-  const student = await Student.create({
-    userId: user._id,
-    rollNumber: req.body.rollNumber || `ADM-${Date.now()}`,
-    classId,
-    sectionId,
-    admissionDate: new Date(),
-    dateOfBirth: application.dateOfBirth || new Date('2000-01-01'),
-    address: application.address,
-    parentId: parent._id,
-    guardianName: application.guardianName,
-    guardianPhone: application.guardianPhone,
-    guardianEmail: application.guardianEmail,
-    subjects: [],
-    institutionId: req.user.institutionId,
-  });
-  await Parent.create({
-    userId: parent._id,
-    children: [student._id],
-    address: application.address,
-    emergencyContact: application.guardianName,
-    emergencyPhone: application.guardianPhone,
-    institutionId: req.user.institutionId,
-  });
-  await Section.findByIdAndUpdate(sectionId, { $inc: { currentStudents: 1 } });
-  application.status = 'accepted';
-  application.acceptedBy = req.user._id;
-  application.acceptedAt = new Date();
-  application.studentId = student._id as any;
-  await application.save();
+    const { user, parentUser } = await primaryDb(async () => {
+      const studentUser = await User.create({
+        name: application.studentName,
+        username,
+        email,
+        password: await hashPassword(password),
+        role: 'student',
+        phone: application.guardianPhone,
+        institutionId: req.user.institutionId,
+      });
+      const guardianUser = await User.create({
+        name: application.guardianName,
+        username: parentUsername,
+        email: application.guardianEmail || `${parentUsername}@parent.local`,
+        password: await hashPassword(parentPassword),
+        role: 'parent',
+        phone: application.guardianPhone,
+        institutionId: req.user.institutionId,
+      });
+      return { user: studentUser, parentUser: guardianUser };
+    });
 
-  await sendSMS({ to: application.guardianPhone, message: `Admission accepted. Student username ${username}, password ${password}. Parent username ${parentUsername}, password ${parentPassword}`, institutionId: req.user.institutionId });
-  res.json({ application, student, credentials: { username, password, parentUsername, parentPassword } });
+    const { student } = await schoolDb(req, async () => {
+      const { classId, sectionId } = await ensureClassAndSection(req.user.institutionId, req.body.className || application.requestedClass, req.body.sectionName || 'A');
+      const createdStudent = await Student.create({
+        userId: user._id,
+        rollNumber: req.body.rollNumber || `ADM-${Date.now()}`,
+        classId,
+        sectionId,
+        admissionDate: new Date(),
+        dateOfBirth: application.dateOfBirth || new Date('2000-01-01'),
+        address: application.address,
+        parentId: parentUser._id,
+        guardianName: application.guardianName,
+        guardianPhone: application.guardianPhone,
+        guardianEmail: application.guardianEmail,
+        subjects: [],
+        institutionId: req.user.institutionId,
+      });
+      await Parent.create({
+        userId: parentUser._id,
+        children: [createdStudent._id],
+        address: application.address,
+        emergencyContact: application.guardianName,
+        emergencyPhone: application.guardianPhone,
+        institutionId: req.user.institutionId,
+      });
+      await Section.findByIdAndUpdate(sectionId, { $inc: { currentStudents: 1 } });
+      return { student: createdStudent };
+    });
+
+    await primaryDb(async () => {
+      application.status = 'accepted';
+      application.acceptedBy = req.user._id;
+      application.acceptedAt = new Date();
+      application.studentId = student._id as any;
+      await application.save();
+    });
+
+    await sendSMS({ to: application.guardianPhone, message: `Admission accepted. Student username ${username}, password ${password}. Parent username ${parentUsername}, password ${parentPassword}`, institutionId: req.user.institutionId });
+    res.json({ application, student, credentials: { username, password, parentUsername, parentPassword } });
+  } catch (error: any) {
+    res.status(error?.statusCode || 500).json({ message: admissionError(error), error: { name: error?.name, message: error?.message, code: error?.code } });
+  }
 });
 
 router.post('/:id/reject', authenticate, async (req: any, res) => {
   if (!canAcceptAdmission(req.user.role)) return res.status(403).json({ message: 'Teacher or school leadership can reject admission' });
-  const application = await AdmissionApplication.findOneAndUpdate(
+  const application = await primaryDb(() => AdmissionApplication.findOneAndUpdate(
     { _id: req.params.id, institutionId: req.user.institutionId },
     { status: 'rejected' },
     { new: true }
-  );
+  ));
   if (!application) return res.status(404).json({ message: 'Application not found' });
   res.json({ application });
 });
