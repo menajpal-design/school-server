@@ -1,3 +1,3 @@
-import classesTenantRouter from './classesTenant';
+import router from './classesSafe';
 
-export default classesTenantRouter;
+export default router;
