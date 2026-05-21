@@ -118,7 +118,7 @@ router.post('/', authenticate, async (req: any, res) => {
     await M.Section.findByIdAndUpdate(resolved.sectionId, { $inc: { currentStudents: 1 } }).catch(() => undefined);
     if (parentUser) { step = 'parent_profile_save'; await M.Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address, emergencyContact: guardianName || parentUser.name, emergencyPhone: guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true }); }
     step = 'student_verify';
-    const saved = await M.Student.findById(created._id).populate('classId', 'name grade').populate('sectionId', 'name').lean();
+    const saved: any = await M.Student.findById(created._id).populate('classId', 'name grade').populate('sectionId', 'name').lean();
     if (!saved?.classId || !saved?.sectionId) throw diagnosticError('student_verify', 'Student saved but class/section was not linked on active Settings MongoDB.', 500, { studentId: String(created._id), classId: String(resolved.classId), sectionId: String(resolved.sectionId) });
     const [student] = await enrichStudents([saved]);
     step = 'completed';
