@@ -8,6 +8,11 @@ export interface IUser extends Document {
   role: 'admin' | 'super_admin' | 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'teacher' | 'finance_officer' | 'staff' | 'student' | 'parent' | 'committee_member';
   phone?: string;
   avatar?: string;
+  dateOfBirth?: Date;
+  fatherName?: string;
+  motherName?: string;
+  address?: string;
+  bloodGroup?: string;
   isActive: boolean;
   lastLogin?: Date;
   permissions: string[];
@@ -28,6 +33,11 @@ const UserSchema: Schema = new Schema({
   },
   phone: { type: String, trim: true },
   avatar: { type: String },
+  dateOfBirth: { type: Date },
+  fatherName: { type: String, trim: true },
+  motherName: { type: String, trim: true },
+  address: { type: String, trim: true },
+  bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   permissions: [{ type: String }],
