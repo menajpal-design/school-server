@@ -104,8 +104,11 @@ router.put('/:id', authenticate, async (req: any, res) => {
     if (req.body?.dateOfBirth) student.dateOfBirth = new Date(req.body.dateOfBirth);
     if (req.body?.bloodGroup !== undefined) student.bloodGroup = req.body.bloodGroup || undefined;
     if (req.body?.address !== undefined) student.address = String(req.body.address || '');
+    if (req.body?.fatherName !== undefined) student.fatherName = String(req.body.fatherName || '');
+    if (req.body?.motherName !== undefined) student.motherName = String(req.body.motherName || '');
     if (req.body?.guardianName !== undefined) student.guardianName = String(req.body.guardianName || '');
     if (req.body?.guardianPhone !== undefined) student.guardianPhone = String(req.body.guardianPhone || '');
+    if (req.body?.guardianEmail !== undefined) student.guardianEmail = String(req.body.guardianEmail || '').trim() || undefined;
     await student.save();
 
     if (student.parentId) {
