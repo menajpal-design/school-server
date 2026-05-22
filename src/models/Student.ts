@@ -10,6 +10,8 @@ export interface IStudent extends Document {
   bloodGroup?: string;
   address: string;
   parentId?: mongoose.Types.ObjectId;
+  fatherName?: string;
+  motherName?: string;
   guardianName: string;
   guardianPhone: string;
   guardianEmail?: string;
@@ -32,6 +34,8 @@ const StudentSchema: Schema = new Schema({
   bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
   address: { type: String, required: true },
   parentId: { type: Schema.Types.ObjectId, ref: 'User' },
+  fatherName: { type: String, trim: true },
+  motherName: { type: String, trim: true },
   guardianName: { type: String, required: true, trim: true },
   guardianPhone: { type: String, required: true, trim: true },
   guardianEmail: { type: String, lowercase: true, trim: true },
@@ -44,7 +48,6 @@ const StudentSchema: Schema = new Schema({
   timestamps: true
 });
 
-// Indexes
 StudentSchema.index({ rollNumber: 1, institutionId: 1 });
 StudentSchema.index({ classId: 1, sectionId: 1 });
 StudentSchema.index({ userId: 1 });
