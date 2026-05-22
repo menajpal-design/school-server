@@ -10,7 +10,7 @@ import demoResultRoutes from './routes/demoResults';
 import userRoutes from './routes/users';
 import studentRoutes from './routes/students';
 import teacherRoutes from './routes/teachers';
-import staffRoutes from './routes/staff';
+import staffRoutes from './routes/staffDirect';
 import academicRoutes from './routes/academic';
 import academicClassRoutes from './routes/academicClasses';
 import academicSubjectRoutes from './routes/subjectsSafe';
