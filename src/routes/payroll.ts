@@ -1,8 +1,10 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import Attendance from '../models/Attendance';
 import Salary from '../models/Salary';
 import Staff from '../models/Staff';
 import Teacher from '../models/Teacher';
+import User from '../models/User';
 import { authenticate, canManageFinance } from '../middleware/auth';
 import { writeAuditLog } from '../services/auditService';
 
@@ -30,15 +32,51 @@ const getMonthRange = (month: string, year: number) => {
 };
 
 const getEmployeeModel = (employeeType: string) => employeeType === 'staff' ? Staff : Teacher;
+const stripFallbackPrefix = (value: any) => String(value || '').replace(/^user-/, '');
+const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
+
+const findEmployee = async (institutionId: any, employeeId: any, employeeType: string) => {
+  const EmployeeModel: any = getEmployeeModel(employeeType);
+  const rawId = String(employeeId || '');
+  let employee: any = null;
+
+  if (rawId && !rawId.startsWith('user-') && isObjectId(rawId)) {
+    employee = await EmployeeModel.findOne({ _id: rawId, institutionId }).populate('userId', 'name email phone role salary employeeId designation department').lean();
+  }
+
+  const userId = stripFallbackPrefix(rawId);
+  if (!employee && isObjectId(userId)) {
+    employee = await EmployeeModel.findOne({ userId, institutionId }).populate('userId', 'name email phone role salary employeeId designation department').lean();
+  }
+
+  if (!employee && isObjectId(userId)) {
+    const roles = employeeType === 'staff' ? ['staff'] : ['teacher', 'subject_teacher', 'class_teacher'];
+    const user: any = await User.findOne({ _id: userId, institutionId, role: { $in: roles }, isActive: { $ne: false } }).select('name email phone role salary employeeId designation department createdAt').lean();
+    if (user) {
+      employee = {
+        _id: rawId.startsWith('user-') ? rawId : `user-${user._id}`,
+        userId: user,
+        employeeId: user.employeeId || (employeeType === 'staff' ? `S-${String(user._id).slice(-4)}` : `T-${String(user._id).slice(-4)}`),
+        designation: user.designation || (employeeType === 'staff' ? 'Staff' : user.role === 'class_teacher' ? 'Class Teacher' : user.role === 'subject_teacher' ? 'Subject Teacher' : 'Teacher'),
+        department: user.department || 'General',
+        salary: Number(user.salary || 0),
+        joiningDate: user.createdAt || new Date(),
+        institutionId,
+        fallbackFromUsers: true,
+      };
+    }
+  }
+
+  return employee;
+};
 
 const buildAttendanceSalary = async ({ institutionId, employeeId, employeeType, month, year, basicSalary, bonus = 0, manualDeduction = 0 }: any) => {
-  const EmployeeModel: any = getEmployeeModel(employeeType);
-  const employee = await EmployeeModel.findOne({ _id: employeeId, institutionId }).populate('userId', 'name email phone').lean();
+  const employee: any = await findEmployee(institutionId, employeeId, employeeType);
   if (!employee) throw new Error('Employee not found');
 
-  const salaryBase = Number(basicSalary ?? employee.salary ?? 0);
+  const salaryBase = Number(basicSalary ?? employee.salary ?? employee.userId?.salary ?? 0);
   const { start, end, daysInMonth, monthName } = getMonthRange(month, Number(year));
-  const userId = (employee as any).userId?._id || (employee as any).userId;
+  const userId = employee.userId?._id || employee.userId || stripFallbackPrefix(employeeId);
 
   const attendance = await Attendance.find({
     institutionId,
@@ -61,7 +99,7 @@ const buildAttendanceSalary = async ({ institutionId, employeeId, employeeType, 
 
   return {
     employee,
-    employeeId,
+    employeeId: employee._id,
     employeeType,
     month: monthName,
     year: Number(year),
