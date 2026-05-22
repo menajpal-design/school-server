@@ -9,7 +9,7 @@ import seedRoutes from './routes/seed';
 import demoResultRoutes from './routes/demoResults';
 import userRoutes from './routes/users';
 import studentRoutes from './routes/students';
-import teacherRoutes from './routes/teachers';
+import teacherRoutes from './routes/teachersDirect';
 import staffRoutes from './routes/staffDirect';
 import academicRoutes from './routes/academic';
 import academicClassRoutes from './routes/academicClasses';
