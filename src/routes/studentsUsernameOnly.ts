@@ -95,6 +95,8 @@ router.post('/', authenticate, async (req: any, res) => {
     step = 'validate_input';
     const guardianName = String(req.body.guardianName || 'Guardian').trim() || 'Guardian';
     const guardianPhone = String(req.body.guardianPhone || req.body.phone || 'N/A').trim() || 'N/A';
+    const fatherName = String(req.body.fatherName || '').trim();
+    const motherName = String(req.body.motherName || '').trim();
     const studentName = String(req.body.name || '').trim();
     if (!studentName) throw diagnosticError('validate_input', 'Student name missing.', 400);
     const address = String(req.body.address || 'Not provided').trim() || 'Not provided';
@@ -114,7 +116,7 @@ router.post('/', authenticate, async (req: any, res) => {
       return { user: studentCreated.user, parentUser: parentCreated.user, uname: studentCreated.username, secret: studentCreated.secret, pUname: parentCreated.username, pSecret: parentCreated.secret };
     });
     step = 'student_profile_save';
-    const created = await M.Student.create({ userId: user._id, rollNumber, classId: resolved.classId, sectionId: resolved.sectionId, admissionDate: safeDate(req.body.admissionDate, new Date()), dateOfBirth: safeDate(req.body.dateOfBirth, new Date('2000-01-01')), bloodGroup, address, parentId: parentUser?._id, guardianName, guardianPhone, subjects: [], institutionId: req.user.institutionId });
+    const created = await M.Student.create({ userId: user._id, rollNumber, classId: resolved.classId, sectionId: resolved.sectionId, admissionDate: safeDate(req.body.admissionDate, new Date()), dateOfBirth: safeDate(req.body.dateOfBirth, new Date('2000-01-01')), bloodGroup, address, parentId: parentUser?._id, fatherName, motherName, guardianName, guardianPhone, guardianEmail: req.body.guardianEmail, subjects: [], institutionId: req.user.institutionId });
     await M.Section.findByIdAndUpdate(resolved.sectionId, { $inc: { currentStudents: 1 } }).catch(() => undefined);
     if (parentUser) { step = 'parent_profile_save'; await M.Parent.findOneAndUpdate({ userId: parentUser._id, institutionId: req.user.institutionId }, { userId: parentUser._id, $addToSet: { children: created._id }, address, emergencyContact: guardianName || parentUser.name, emergencyPhone: guardianPhone || parentUser.phone || 'N/A', institutionId: req.user.institutionId }, { upsert: true, new: true, setDefaultsOnInsert: true }); }
     step = 'student_verify';
@@ -122,7 +124,7 @@ router.post('/', authenticate, async (req: any, res) => {
     if (!saved?.classId || !saved?.sectionId) throw diagnosticError('student_verify', 'Student saved but class/section was not linked on active Settings MongoDB.', 500, { studentId: String(created._id), classId: String(resolved.classId), sectionId: String(resolved.sectionId) });
     const [student] = await enrichStudents([saved]);
     step = 'completed';
-    res.status(201).json({ message: 'Student admitted successfully using active Settings MongoDB URI.', step, storageSource: 'settings-active-mongodb-direct', student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, parentUsername: pUname, parentTemporary: pSecret } });
+    res.status(201).json({ message: 'Student admitted successfully using active Settings MongoDB URI.', step, storageSource: 'settings-active-mongodb-direct', student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, password: secret, parentUsername: pUname, parentTemporary: pSecret, parentPassword: pSecret } });
   } catch (e: any) {
     if (rollbackUserIds.length && step !== 'completed') await primaryDb(() => User.deleteMany({ _id: { $in: rollbackUserIds } })).catch(() => undefined);
     res.status(e?.statusCode || (e?.name === 'ValidationError' ? 400 : 500)).json(errPayload(e, step));
