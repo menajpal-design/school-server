@@ -14,7 +14,6 @@ export interface IUser extends Document {
   motherName?: string;
   address?: string;
   bloodGroup?: string;
-  gender?: string;
   isActive: boolean;
   lastLogin?: Date;
   permissions: string[];

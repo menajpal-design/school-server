@@ -130,7 +130,7 @@ const mirrorPrimaryDocument = async (baseModel: any, doc: any, context: TenantSt
 };
 const schedulePrimaryMirror = (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
   if (Array.isArray(doc)) { doc.forEach((item) => schedulePrimaryMirror(baseModel, item, context)); return; }
-  mirrorPrimaryDocument(baseModel, doc, context).catch((error) => console.warn('Tenant primary mirror failed:', error?.message || error));
+  mirrorPrimaryDocument(baseModel, doc, context).catch((error) => console.warn('Tenant primary mirror failed:', (error as any)?.message || String(error)));
 };
 const mirrorContextReferences = async (context: TenantStorageContext | null | undefined, user?: any, institution?: any) => {
   if (!context?.mongoUri) return;
@@ -154,11 +154,11 @@ const mirrorToArchives = async (baseModel: any, doc: any, context: TenantStorage
         if (!model) continue;
         await model.collection.updateOne({ _id: payload._id }, { $set: payload }, { upsert: true });
       } catch (err) {
-        console.warn('Archive mirror failed for uri', uri, err?.message || err);
+        console.warn('Archive mirror failed for uri', uri, (err as any)?.message || String(err));
       }
     }
   } catch (err) {
-    console.warn('mirrorToArchives error:', err?.message || err);
+    console.warn('mirrorToArchives error:', (err as any)?.message || String(err));
   }
 };
 
@@ -172,10 +172,10 @@ const emitChangeWebhook = async (modelName: string, doc: any, context: TenantSto
     try {
       await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     } catch (err) {
-      console.warn('emitChangeWebhook failed:', err?.message || err);
+      console.warn('emitChangeWebhook failed:', (err as any)?.message || String(err));
     }
   } catch (err) {
-    console.warn('emitChangeWebhook error:', err?.message || err);
+    console.warn('emitChangeWebhook error:', (err as any)?.message || String(err));
   }
 };
 
@@ -185,10 +185,10 @@ const scheduleArchiveMirrorAndWebhook = (baseModel: any, doc: any, context: Tena
   void (async () => {
     try {
       await mirrorToArchives(baseModel, doc, context);
-    } catch (e) { console.warn('scheduleArchiveMirror error', e); }
+    } catch (e) { console.warn('scheduleArchiveMirror error', (e as any)?.message || String(e)); }
     try {
       await emitChangeWebhook(baseModel?.modelName || baseModel, doc, context);
-    } catch (e) { console.warn('scheduleWebhook error', e); }
+    } catch (e) { console.warn('scheduleWebhook error', (e as any)?.message || String(e)); }
   })();
 };
 
