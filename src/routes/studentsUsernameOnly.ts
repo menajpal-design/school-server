@@ -109,10 +109,10 @@ router.post('/', authenticate, async (req: any, res) => {
     const rollNumber = await resolveRoll(req, M, resolved.classId, resolved.sectionId);
     step = 'primary_user_create';
     const { user, parentUser, uname, secret, pUname, pSecret } = await primaryDb(async () => {
-      const studentCreated = await createPrimaryUser({ name: studentName, role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId }, studentName, 'student');
+      const studentCreated = await createPrimaryUser({ name: studentName, role: 'student', phone: req.body.phone, avatar: req.body.photo, gender: req.body.gender, institutionId: req.user.institutionId }, studentName, 'student');
       rollbackUserIds.push(studentCreated.user._id);
       if (req.body.autoParentAccount === false) return { user: studentCreated.user, parentUser: null, uname: studentCreated.username, secret: studentCreated.secret, pUname: undefined, pSecret: undefined };
-      const parentCreated = await createPrimaryUser({ name: guardianName, role: 'parent', phone: guardianPhone, institutionId: req.user.institutionId }, guardianName, 'parent');
+      const parentCreated = await createPrimaryUser({ name: guardianName, role: 'parent', phone: guardianPhone, gender: req.body.guardianGender || req.body.parentGender, institutionId: req.user.institutionId }, guardianName, 'parent');
       rollbackUserIds.push(parentCreated.user._id);
       return { user: studentCreated.user, parentUser: parentCreated.user, uname: studentCreated.username, secret: studentCreated.secret, pUname: parentCreated.username, pSecret: parentCreated.secret };
     });

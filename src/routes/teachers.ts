@@ -110,7 +110,7 @@ router.post('/', authenticate, async (req, res) => {
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
     const username = await generateUsername(req.body.name, 'teacher');
     const temporaryPassword = generatePassword();
-    const user = await User.create({ name: req.body.name, username, email, password: await hashPassword(temporaryPassword), role: 'subject_teacher', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId });
+    const user = await User.create({ name: req.body.name, username, email, password: await hashPassword(temporaryPassword), role: 'subject_teacher', phone: req.body.phone, avatar: req.body.photo, gender: req.body.gender, institutionId: req.user.institutionId });
     const classIds = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId);
     const teacher = await Teacher.create({ userId: user._id, employeeId: req.body.employeeId || `T-${Date.now()}`, designation: req.body.designation || 'Teacher', department: req.body.department || 'General', assignedClasses: classIds, subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, classIds), joiningDate: req.body.joiningDate || new Date(), qualification: req.body.qualification || 'Not specified', experience: Number(req.body.experience) || 0, salary: Number(req.body.salary) || 0, institutionId: req.user.institutionId });
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;

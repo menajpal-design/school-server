@@ -128,10 +128,10 @@ router.post('/', authenticate, async (req, res) => {
         error.statusCode = 409;
         throw error;
       }
-      const studentUser = await User.create({ name: req.body.name, username, email, password: await hashPassword(temporaryPassword), role: 'student', phone: req.body.phone, avatar: req.body.photo, institutionId: req.user.institutionId });
+      const studentUser = await User.create({ name: req.body.name, username, email, password: await hashPassword(temporaryPassword), role: 'student', phone: req.body.phone, avatar: req.body.photo, gender: req.body.gender, institutionId: req.user.institutionId });
       let guardianUser = await User.findOne({ email: parentEmail });
       if (req.body.autoParentAccount !== false && !guardianUser) {
-        guardianUser = await User.create({ name: req.body.guardianName, email: parentEmail, username: await generateUsername(req.body.guardianName, 'parent'), password: await hashPassword(parentPassword), role: 'parent', phone: req.body.guardianPhone, institutionId: req.user.institutionId });
+        guardianUser = await User.create({ name: req.body.guardianName, email: parentEmail, username: await generateUsername(req.body.guardianName, 'parent'), password: await hashPassword(parentPassword), role: 'parent', phone: req.body.guardianPhone, gender: req.body.guardianGender || req.body.parentGender, institutionId: req.user.institutionId });
       }
       return { user: studentUser, parentUser: guardianUser };
     });

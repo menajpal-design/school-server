@@ -123,6 +123,7 @@ router.post('/:id/accept', authenticate, async (req: any, res) => {
         password: await hashPassword(password),
         role: 'student',
         phone: application.guardianPhone,
+        gender: req.body.studentGender || req.body.gender,
         institutionId: req.user.institutionId,
       });
       const guardianUser = await User.create({
@@ -132,6 +133,7 @@ router.post('/:id/accept', authenticate, async (req: any, res) => {
         password: await hashPassword(parentPassword),
         role: 'parent',
         phone: application.guardianPhone,
+        gender: req.body.guardianGender || req.body.parentGender,
         institutionId: req.user.institutionId,
       });
       return { user: studentUser, parentUser: guardianUser };

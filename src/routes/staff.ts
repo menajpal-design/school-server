@@ -38,7 +38,7 @@ async function createStaffUser(req: any) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const username = await generateUsername(req.body.name || 'Staff', 'staff');
     try {
-      const user = await User.create({ name: String(req.body.name || 'Staff').trim() || 'Staff', username, email: safeEmail(username), password: await hashPassword(password), role: 'staff', phone: req.body.phone, avatar: req.body.photo, salary: Number(req.body.salary) || 0, employeeId: req.body.employeeId, designation: req.body.designation || 'Staff', department: req.body.department || 'General', institutionId: req.user.institutionId });
+      const user = await User.create({ name: String(req.body.name || 'Staff').trim() || 'Staff', username, email: safeEmail(username), password: await hashPassword(password), role: 'staff', phone: req.body.phone, avatar: req.body.photo, gender: req.body.gender, salary: Number(req.body.salary) || 0, employeeId: req.body.employeeId, designation: req.body.designation || 'Staff', department: req.body.department || 'General', institutionId: req.user.institutionId });
       return { user, username, password };
     } catch (error: any) {
       const key = Object.keys(error?.keyPattern || error?.keyValue || {})[0] || '';

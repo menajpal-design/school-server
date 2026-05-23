@@ -9,10 +9,12 @@ export interface IUser extends Document {
   phone?: string;
   avatar?: string;
   dateOfBirth?: Date;
+  gender?: 'male' | 'female' | 'other';
   fatherName?: string;
   motherName?: string;
   address?: string;
   bloodGroup?: string;
+  gender?: string;
   isActive: boolean;
   lastLogin?: Date;
   permissions: string[];
@@ -38,6 +40,7 @@ const UserSchema: Schema = new Schema({
   motherName: { type: String, trim: true },
   address: { type: String, trim: true },
   bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
+  gender: { type: String, enum: ['male', 'female', 'other'] },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   permissions: [{ type: String }],
