@@ -10,7 +10,7 @@ import Fee from '../models/Fee';
 import Teacher from '../models/Teacher';
 import SiteSetting from '../models/SiteSetting';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
-import { sendSMS } from '../utils/sms';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 import { getTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 const router = express.Router();
@@ -151,7 +151,7 @@ router.post('/', authenticate, async (req, res) => {
       return { student: createdStudent, idCard: card };
     });
 
-    await sendSMS({ to: req.body.guardianPhone, message: `Admission completed for ${req.body.name}. Student login: username ${username}, password ${temporaryPassword}. Parent login: username ${parentUser?.username || parentEmail}, password ${parentUser ? parentPassword : 'existing password'}.`, institutionId: req.user.institutionId });
+    await sendSMS({ to: req.body.guardianPhone, message: buildCredentialSmsMessage({ summary: `Admission completed for ${req.body.name}`, username, password: temporaryPassword, parentUsername: parentUser?.username || parentEmail, parentPassword: parentUser ? parentPassword : 'existing password' }), institutionId: req.user.institutionId });
     res.status(201).json({ student, user, parent: parentUser, idCard, credentials: { username, password: temporaryPassword, parentPassword: parentUser ? parentPassword : undefined } });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ message: readable(error), error: { name: error?.name, message: error?.message, code: error?.code } });

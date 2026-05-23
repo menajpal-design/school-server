@@ -4,7 +4,7 @@ import Staff from '../models/Staff';
 import User from '../models/User';
 import IDCard from '../models/IDCard';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
-import { sendSMS } from '../utils/sms';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -55,7 +55,7 @@ const sendStaffLoginSms = async (req: any, user: any, username: string, loginCod
   const phone = String(req.body.phone || user.phone || '').trim();
   if (!phone) return false;
   try {
-    return await sendSMS({ to: phone, message: `EASY SCHOOL staff login. Username: ${username}. Login code: ${loginCode}. Change it after login.`, institutionId: req.user.institutionId, recipientName: user.name || 'Staff', recipientPhone: phone, type: 'notification' });
+    return await sendSMS({ to: phone, message: buildCredentialSmsMessage({ summary: 'Staff account created', username, password: loginCode }), institutionId: req.user.institutionId, recipientName: user.name || 'Staff', recipientPhone: phone, type: 'notification' });
   } catch (error) {
     console.error('Staff login SMS failed:', error);
     return false;

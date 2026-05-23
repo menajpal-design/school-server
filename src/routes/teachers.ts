@@ -7,7 +7,7 @@ import Subject from '../models/Subject';
 import IDCard from '../models/IDCard';
 import Institution from '../models/Institution';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
-import { sendSMS } from '../utils/sms';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 import { sendEmail } from '../services/emailService';
 import { generateAppointmentLetter } from '../utils/appointmentLetter';
 
@@ -114,7 +114,7 @@ router.post('/', authenticate, async (req, res) => {
     const classIds = await findOrCreateClasses(normalizeNameList(req.body.assignedClasses), req.user.institutionId);
     const teacher = await Teacher.create({ userId: user._id, employeeId: req.body.employeeId || `T-${Date.now()}`, designation: req.body.designation || 'Teacher', department: req.body.department || 'General', assignedClasses: classIds, subjects: await findOrCreateSubjects(normalizeNameList(req.body.subjects), req.user.institutionId, classIds), joiningDate: req.body.joiningDate || new Date(), qualification: req.body.qualification || 'Not specified', experience: Number(req.body.experience) || 0, salary: Number(req.body.salary) || 0, institutionId: req.user.institutionId });
     const idCard = req.body.autoIdCard !== false ? await createIdCard(teacher._id, req, req.body.photo) : null;
-    if (req.body.phone) await sendSMS({ to: req.body.phone, message: `Your teacher account: username ${username}, password ${temporaryPassword}`, institutionId: req.user.institutionId, recipientName: req.body.name, recipientPhone: req.body.phone, type: 'notification' });
+    if (req.body.phone) await sendSMS({ to: req.body.phone, message: buildCredentialSmsMessage({ summary: 'Teacher account created', username, password: temporaryPassword }), institutionId: req.user.institutionId, recipientName: req.body.name, recipientPhone: req.body.phone, type: 'notification' });
     if (req.body.sendAppointmentLetter && req.body.email) {
       try {
         const institution = await Institution.findById(req.user.institutionId);

@@ -1,7 +1,7 @@
 import express from 'express';
 import User from '../models/User';
 import studentsManageRouter from './studentsManage';
-import { sendSMS } from '../utils/sms';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -34,7 +34,15 @@ router.use(async (req: any, res: any, next) => {
       const phone = String(req.body?.guardianPhone || req.body?.phone || '').trim();
       const c = body?.credentials || {};
       if (phone && c.username) {
-        const msg = `${appName} account created. Student: ${body?.user?.name || req.body?.name || ''}. Student username: ${c.username}. Parent username: ${c.parentUsername || 'N/A'}. Login: ${loginUrl}. Please change login security after first sign in.`.slice(0, 320);
+        const msg = buildCredentialSmsMessage({
+          appName,
+          summary: `Student ${body?.user?.name || req.body?.name || ''} account created`.trim(),
+          username: c.username,
+          password: c.password || c.temporary || 'N/A',
+          parentUsername: c.parentUsername,
+          parentPassword: c.parentPassword || c.parentTemporary,
+          loginUrl,
+        }).slice(0, 320);
         sendSMS({ to: phone, message: msg, institutionId: req.user?.institutionId, recipientName: req.body?.guardianName || 'Guardian', recipientPhone: phone, recipientId: body?.parent?._id, recipientType: 'guardian', type: 'credentials', purpose: 'student_parent_login', studentId: body?.student?._id, parentId: body?.parent?._id }).catch((error) => console.error('Student account SMS failed:', error));
       }
     }

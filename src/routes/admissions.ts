@@ -10,7 +10,7 @@ import SiteSetting from '../models/SiteSetting';
 import { authenticate } from '../middleware/auth';
 import { getTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
-import { sendSMS } from '../utils/sms';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -174,7 +174,7 @@ router.post('/:id/accept', authenticate, async (req: any, res) => {
       await application.save();
     });
 
-    await sendSMS({ to: application.guardianPhone, message: `Admission accepted. Student username ${username}, password ${password}. Parent username ${parentUsername}, password ${parentPassword}`, institutionId: req.user.institutionId });
+    await sendSMS({ to: application.guardianPhone, message: buildCredentialSmsMessage({ summary: 'Admission accepted', username, password, parentUsername, parentPassword }), institutionId: req.user.institutionId });
     res.json({ application, student, credentials: { username, password, parentUsername, parentPassword } });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ message: admissionError(error), error: { name: error?.name, message: error?.message, code: error?.code } });

@@ -15,6 +15,16 @@ interface SMSOptions {
   parentId?: any;
 }
 
+interface CredentialSmsOptions {
+  appName?: string;
+  loginUrl?: string;
+  summary: string;
+  username: string;
+  password: string;
+  parentUsername?: string;
+  parentPassword?: string;
+}
+
 const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
 const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
 const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '';
@@ -33,6 +43,24 @@ const ensureSmsQuota = async (options: SMSOptions) => {
 };
 const markSmsUsed = async (options: SMSOptions, count?: number) => {
   if (options.institutionId) await incrementSmsUsage(options.institutionId, count ?? recipientsFor(options.to).filter(Boolean).length);
+};
+
+export const buildCredentialSmsMessage = ({
+  appName = process.env.APP_NAME || 'EASY SCHOOL',
+  loginUrl = process.env.FRONTEND_URL || 'https://www.easyschool.live/login',
+  summary,
+  username,
+  password,
+  parentUsername,
+  parentPassword,
+}: CredentialSmsOptions) => {
+  const lines = [
+    `${appName} ${summary}.`,
+    `Username: ${username}. Password: ${password}.`,
+  ];
+  if (parentUsername) lines.push(`Parent username: ${parentUsername}. Parent password: ${parentPassword || 'N/A'}.`);
+  lines.push(`Login: ${loginUrl}.`, 'Please log in and change your password after the first sign in.');
+  return lines.join(' ');
 };
 
 const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'pending' | 'delivered', failureReason?: string, apiResponse?: string) => {
