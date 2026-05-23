@@ -8,6 +8,7 @@ import Section from '../models/Section';
 import Parent from '../models/Parent';
 import SiteSetting from '../models/SiteSetting';
 import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 import { runWithTenantStorage } from '../config/tenantStorage';
 
 const router = express.Router();
@@ -123,6 +124,29 @@ router.post('/', authenticate, async (req: any, res) => {
     const saved: any = await M.Student.findById(created._id).populate('classId', 'name grade').populate('sectionId', 'name').lean();
     if (!saved?.classId || !saved?.sectionId) throw diagnosticError('student_verify', 'Student saved but class/section was not linked on active Settings MongoDB.', 500, { studentId: String(created._id), classId: String(resolved.classId), sectionId: String(resolved.sectionId) });
     const [student] = await enrichStudents([saved]);
+    const smsPhone = String(guardianPhone || req.body.phone || '').trim();
+    if (smsPhone) {
+      const smsMessage = buildCredentialSmsMessage({
+        summary: `Student admitted for ${studentName}`,
+        username: uname,
+        password: secret,
+        parentUsername: pUname,
+        parentPassword: pSecret,
+      }).slice(0, 320);
+      sendSMS({
+        to: smsPhone,
+        message: smsMessage,
+        institutionId: req.user.institutionId,
+        recipientName: guardianName,
+        recipientPhone: smsPhone,
+        recipientId: parentUser?._id,
+        recipientType: 'guardian',
+        type: 'credentials',
+        purpose: 'student_parent_login',
+        studentId: user._id,
+        parentId: parentUser?._id,
+      }).catch((error) => console.error('Student admission SMS failed:', error));
+    }
     step = 'completed';
     res.status(201).json({ message: 'Student admitted successfully using active Settings MongoDB URI.', step, storageSource: 'settings-active-mongodb-direct', student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, password: secret, parentUsername: pUname, parentTemporary: pSecret, parentPassword: pSecret } });
   } catch (e: any) {
