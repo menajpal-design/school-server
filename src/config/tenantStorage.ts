@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import mongoose from 'mongoose';
+import SiteSetting from '../models/SiteSetting';
 
 export type TenantStorageContext = {
   institutionId: string;
@@ -139,6 +140,58 @@ const mirrorContextReferences = async (context: TenantStorageContext | null | un
   ]);
 };
 
+const mirrorToArchives = async (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
+  if (!context || !Array.isArray(context.archiveMongoUris) || !context.archiveMongoUris.length) return;
+  try {
+    const payload = getDocumentObject(doc);
+    for (const uri of context.archiveMongoUris) {
+      if (!uri) continue;
+      try {
+        const archiveContext = { ...context, mongoUri: uri } as TenantStorageContext;
+        const conn = await getTenantConnection(archiveContext);
+        if (!conn) continue;
+        const model = registerModel(conn, baseModel);
+        if (!model) continue;
+        await model.collection.updateOne({ _id: payload._id }, { $set: payload }, { upsert: true });
+      } catch (err) {
+        console.warn('Archive mirror failed for uri', uri, err?.message || err);
+      }
+    }
+  } catch (err) {
+    console.warn('mirrorToArchives error:', err?.message || err);
+  }
+};
+
+const emitChangeWebhook = async (modelName: string, doc: any, context: TenantStorageContext | null | undefined) => {
+  try {
+    const setting = await SiteSetting.findOne({ key: 'site_config' }).lean();
+    const cfg: any = setting?.value || {};
+    const url = String(cfg?.eventWebhookUrl || cfg?.webhookUrl || process.env.EVENT_WEBHOOK_URL || '').trim();
+    if (!url) return;
+    const body = { model: modelName, document: getDocumentObject(doc), institutionId: context?.institutionId, timestamp: new Date().toISOString() };
+    try {
+      await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (err) {
+      console.warn('emitChangeWebhook failed:', err?.message || err);
+    }
+  } catch (err) {
+    console.warn('emitChangeWebhook error:', err?.message || err);
+  }
+};
+
+const scheduleArchiveMirrorAndWebhook = (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
+  if (!doc) return;
+  // run in background
+  void (async () => {
+    try {
+      await mirrorToArchives(baseModel, doc, context);
+    } catch (e) { console.warn('scheduleArchiveMirror error', e); }
+    try {
+      await emitChangeWebhook(baseModel?.modelName || baseModel, doc, context);
+    } catch (e) { console.warn('scheduleWebhook error', e); }
+  })();
+};
+
 export const getTenantStorageContext = () => tenantStorage.getStore() || null;
 export const runWithTenantStorage = <T>(context: TenantStorageContext | null, callback: () => T, user?: any, institution?: any) => tenantStorage.run(context, () => {
   if (context?.mongoUri && String(process.env.TENANT_MONGO_MIRROR_ENABLED || '').toLowerCase() === 'true') {
@@ -208,7 +261,15 @@ export const installTenantStoragePatches = () => {
     }
     if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.model?.modelName || 'SchoolData', `Tenant model connection failed after ${tenantConnectionHardTimeoutMs}ms`);
     const result = await originalQueryExec.apply(this, args as any);
-    if (!tenantModel && context?.mongoUri && this.model?.db === mongoose.connection && this.model?.modelName && primaryMirrorModels.has(this.model.modelName)) schedulePrimaryMirror(this.model, result, context);
+    // If primary DB result and tenant context exists, handle mirroring and webhook
+    if (!tenantModel && context?.mongoUri && this.model?.db === mongoose.connection && this.model?.modelName) {
+      if (primaryMirrorModels.has(this.model.modelName)) schedulePrimaryMirror(this.model, result, context);
+      // detect write ops to schedule archive mirror (for historical storage) and webhook
+      const writeOps = ['update', 'updateone', 'updatemany', 'findoneandupdate', 'findoneandreplace', 'findoneanddelete', 'findoneandremove', 'remove', 'deleteone', 'deletemany', 'insertmany', 'insert'];
+      const opName = String(this.op || '').toLowerCase();
+      const isWrite = writeOps.some((w) => opName.includes(w));
+      if (isWrite && schoolDataModels.has(this.model.modelName)) scheduleArchiveMirrorAndWebhook(this.model, result, context);
+    }
     return result;
   };
 
@@ -249,7 +310,10 @@ export const installTenantStoragePatches = () => {
     }
     if (shouldUseTenant && tenantStrictStorage) throw storageUnavailableError(this.constructor?.modelName || 'SchoolData', `Tenant model connection failed after ${tenantConnectionHardTimeoutMs}ms`);
     const saved = await originalSave.apply(this, args as any);
-    if (context?.mongoUri && this.constructor?.db === mongoose.connection && primaryMirrorModels.has(this.constructor?.modelName)) schedulePrimaryMirror(this.constructor, saved, context);
+    if (context?.mongoUri && this.constructor?.db === mongoose.connection) {
+      if (primaryMirrorModels.has(this.constructor?.modelName)) schedulePrimaryMirror(this.constructor, saved, context);
+      if (schoolDataModels.has(this.constructor?.modelName)) scheduleArchiveMirrorAndWebhook(this.constructor, saved, context);
+    }
     return saved;
   };
 };
