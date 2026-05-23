@@ -135,6 +135,9 @@ const sanitizeConfigForSave = (body: any = {}, current: any = {}) => {
     imgbbApiKey: activeImgbb?.apiKey || current.imgbbApiKey || '',
     mongodbUsedMb: Number(body.mongodbUsedMb ?? activeMongo?.usedMb ?? current.mongodbUsedMb ?? 0),
     imgbbUsedMb: Number(body.imgbbUsedMb ?? activeImgbb?.usedMb ?? current.imgbbUsedMb ?? 0),
+    // allow personal Mongo fallback when central storage billing not available
+    allowPersonalMongo: body.allowPersonalMongo ?? current.allowPersonalMongo ?? false,
+    allowPersonalStorage: body.allowPersonalStorage ?? current.allowPersonalStorage ?? false,
   };
 };
 
