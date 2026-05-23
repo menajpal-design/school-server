@@ -22,8 +22,12 @@ export const activateBilling = (billing: any, at = new Date()) => ({
 });
 
 export const isSubscriptionExpired = (institution: any) => {
-  const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
-  return institution?.isActive === true && expiresAt && new Date(expiresAt).getTime() < Date.now();
+  const billing = institution?.billing || {};
+  const expiresAt = billing?.subscriptionExpiresAt || billing?.expiresAt;
+  // Treat institution as expired if explicit billing status is not 'active'
+  if (billing?.billingStatus && billing.billingStatus !== 'active') return true;
+  if (!institution?.isActive) return false;
+  return Boolean(expiresAt && new Date(expiresAt).getTime() < Date.now());
 };
 
 export const expireInstitutionIfNeeded = async (institution: any) => {

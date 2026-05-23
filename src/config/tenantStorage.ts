@@ -3,7 +3,10 @@ import mongoose from 'mongoose';
 
 export type TenantStorageContext = {
   institutionId: string;
+  // primary running MongoDB URI for tenant (read/write)
   mongoUri?: string;
+  // optional array of archive/previous MongoDB URIs (read-only fallback)
+  archiveMongoUris?: string[];
   imgbbApiKey?: string;
 };
 
@@ -93,12 +96,25 @@ const getTenantConnection = async (context: TenantStorageContext) => {
   if (!connection) return null;
   return connection;
 };
-const getTenantModel = async (baseModel: any, context: TenantStorageContext | null | undefined) => {
-  if (!context?.mongoUri || !baseModel?.modelName || !schoolDataModels.has(baseModel.modelName)) return null;
+const getTenantModel = async (baseModel: any, context: TenantStorageContext | null | undefined, forRead = false) => {
+  if (!context || !baseModel?.modelName || !schoolDataModels.has(baseModel.modelName)) return null;
   if (baseModel.db !== mongoose.connection) return null;
-  const connection = await getTenantConnection(context);
-  if (!connection) return null;
-  return registerModel(connection, baseModel);
+  // Prefer primary running mongoUri for read/write
+  if (context.mongoUri) {
+    const primaryContext = { ...context, mongoUri: context.mongoUri } as TenantStorageContext;
+    const primaryConnection = await getTenantConnection(primaryContext);
+    if (primaryConnection) return registerModel(primaryConnection, baseModel);
+  }
+  // If this is a read operation, try archive URIs (allow reading historical data)
+  if (forRead && Array.isArray(context.archiveMongoUris)) {
+    for (const uri of context.archiveMongoUris) {
+      if (!uri) continue;
+      const archiveContext = { ...context, mongoUri: uri } as TenantStorageContext;
+      const archiveConnection = await getTenantConnection(archiveContext);
+      if (archiveConnection) return registerModel(archiveConnection, baseModel);
+    }
+  }
+  return null;
 };
 
 const mirrorPrimaryDocument = async (baseModel: any, doc: any, context: TenantStorageContext | null | undefined) => {
@@ -136,10 +152,32 @@ export const resolveTenantStorageContext = (institution: any): TenantStorageCont
   const settings = institution?.settings || {};
   const activeAcademicYear = Array.isArray(settings.academicYears) ? settings.academicYears.find((item: any) => item?.isActive || item?.year === settings.activeAcademicYear) : null;
   const usesEasySchoolStorage = billing.useEasySchoolStorage !== false;
-  const mongoUri = !usesEasySchoolStorage ? String(activeAcademicYear?.mongodbUri || settings.mongodbUri || '').trim() : '';
-  const imgbbApiKey = !usesEasySchoolStorage ? String(activeAcademicYear?.imgbbApiKey || settings.imgbbApiKey || '').trim() : '';
-  if (!mongoUri && !imgbbApiKey) return null;
-  return { institutionId: String(institution?._id || institution?.id || ''), mongoUri: mongoUri || undefined, imgbbApiKey: imgbbApiKey || undefined };
+  // Collect configured MongoDB URIs (site settings may contain multiple URIs in history)
+  const mongoItems = Array.isArray(settings.mongodbUris) ? settings.mongodbUris : [];
+  const normalized = mongoItems.map((it: any) => String(it?.uri || it?.mongodbUrl || '').trim()).filter(Boolean);
+  if (settings.mongodbUrl && !normalized.includes(String(settings.mongodbUrl).trim())) normalized.push(String(settings.mongodbUrl).trim());
+  // pick active primary from settings (site controls ensure one is active), else use first
+  const activeItem = (Array.isArray(settings.mongodbUris) ? settings.mongodbUris.find((i: any) => i?.isActive) : null) || mongoItems[0];
+  const activeUri = activeItem ? String(activeItem.uri || activeItem.mongodbUrl || '').trim() : (settings.mongodbUrl || activeAcademicYear?.mongodbUri || '').trim();
+
+  // If the school is configured to use central EasySchool storage and has active billing/storage, don't set tenant mongo by default
+  let primaryUri = '';
+  const allowPersonalWhenNoStorage = Boolean(settings.allowPersonalMongo === true || settings.allowPersonalStorage === true);
+  const hasPersonalConfigured = Boolean(activeUri || normalized.length);
+  const billingAllowsStorage = billing && billing.billingStatus === 'active' && (Number(billing.storageAmount || 0) > 0);
+
+  if (!usesEasySchoolStorage) {
+    // school chose to use personal storage explicitly
+    primaryUri = activeUri || (normalized.length ? normalized[0] : '');
+  } else if (usesEasySchoolStorage && !billingAllowsStorage && hasPersonalConfigured && allowPersonalWhenNoStorage) {
+    // school uses central storage by default, but billing doesn't allow storage; allow personal fallback if configured and permitted
+    primaryUri = activeUri || (normalized.length ? normalized[0] : '');
+  }
+
+  const archiveUris = normalized.filter((u: string) => u && u !== primaryUri);
+  const imgbbApiKey = activeAcademicYear?.imgbbApiKey || settings.imgbbApiKey || '';
+  if (!primaryUri && !imgbbApiKey) return null;
+  return { institutionId: String(institution?._id || institution?.id || ''), mongoUri: primaryUri || undefined, archiveMongoUris: archiveUris.length ? archiveUris : undefined, imgbbApiKey: imgbbApiKey || undefined };
 };
 
 export const installTenantStoragePatches = () => {
@@ -150,8 +188,11 @@ export const installTenantStoragePatches = () => {
   mongoose.Query.prototype.exec = async function patchedTenantQueryExec(this: any, ...args: any[]) {
     const context = getTenantStorageContext();
     const primaryQuery = typeof this.clone === 'function' ? this.clone() : null;
-    const shouldUseTenant = Boolean(context?.mongoUri && isPrimarySchoolModel(this.model));
-    const tenantModel = await getTenantModel(this.model, context);
+      const shouldUseTenant = Boolean(context?.mongoUri && isPrimarySchoolModel(this.model));
+      const op = String(this.op || '').toLowerCase();
+      const readOps = ['find', 'findone', 'count', 'estimateddocumentcount', 'distinct', 'aggregate', 'countdocuments'];
+      const forRead = readOps.some((o) => op.startsWith(o) || String(this.op).toLowerCase() === o) || this.op == null;
+      const tenantModel = await getTenantModel(this.model, context, forRead);
     if (tenantModel) {
       this.model = tenantModel;
       this.mongooseCollection = tenantModel.collection;
@@ -176,7 +217,8 @@ export const installTenantStoragePatches = () => {
     const context = getTenantStorageContext();
     const primaryAggregate = typeof this.model === 'function' && this._model ? this._model.aggregate(this.pipeline()) : null;
     const shouldUseTenant = Boolean(context?.mongoUri && isPrimarySchoolModel(this._model));
-    const tenantModel = await getTenantModel(this._model, context);
+    const forRead = true; // aggregates are read-only by nature
+    const tenantModel = await getTenantModel(this._model, context, forRead);
     if (tenantModel) {
       this._model = tenantModel;
       this.option({ maxTimeMS: tenantQueryMaxTimeMs });
