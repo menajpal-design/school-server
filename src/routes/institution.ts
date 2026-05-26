@@ -1,4 +1,5 @@
 import express from 'express';
+import Stripe from 'stripe';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
@@ -6,6 +7,16 @@ import { activateBilling } from '../services/billingService';
 import { verifyGatewayPayment } from '../services/paymentGateway';
 
 const router = express.Router();
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
+const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
+const stripeCurrency = process.env.STRIPE_CURRENCY || 'usd';
+const getFrontendBaseUrl = () => String(process.env.FRONTEND_URL || process.env.MOBILE_URL || 'http://localhost:3000').replace(/\/$/, '');
+const getStripeClient = () => {
+  if (!stripeSecretKey) return null;
+  return new Stripe(stripeSecretKey, { apiVersion: '2026-04-22.dahlia' });
+};
+
+type StripeCheckoutSession = any;
 
 const buildBilling = (input: any = {}, current: any = {}) => {
   const planCode = input.planCode || current.planCode || 'students_100';
@@ -97,6 +108,136 @@ const isPopupVerifiedPayment = (input: any = {}, dueAmount = 0) => {
   const amountMatches = Number(dueAmount || 0) > 0 && amount === Number(dueAmount);
   return hasVerifiedStatus && hasRequiredRefs && amountMatches;
 };
+
+const buildStripeCheckoutBilling = (institution: any, session: StripeCheckoutSession, metadata: Record<string, any> = {}) => {
+  const planCode = metadata.planCode || institution?.billing?.planCode || 'students_100';
+  const billingCycle = metadata.billingCycle || institution?.billing?.billingCycle || 'monthly';
+  const useEasySchoolStorage = metadata.useEasySchoolStorage === undefined
+    ? institution?.billing?.useEasySchoolStorage !== false
+    : metadata.useEasySchoolStorage === true || metadata.useEasySchoolStorage === 'true';
+  const { total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage);
+  const currentBilling = (institution?.billing?.toObject?.() || institution?.billing || {});
+  return buildBilling({
+    planCode,
+    billingCycle,
+    useEasySchoolStorage,
+    paymentGateway: 'stripe',
+    paymentOrderId: session.id,
+    paymentTime: new Date().toISOString(),
+    paymentTrxId: typeof session.payment_intent === 'string' ? session.payment_intent : '',
+    paymentVerificationResponse: session,
+    receivedAmount: total,
+    isPaymentReceived: true,
+    billingStatus: 'pending',
+  }, currentBilling);
+};
+
+router.post('/billing/stripe/checkout', authenticate, async (req, res) => {
+  try {
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    const stripe = getStripeClient();
+    if (!stripe) {
+      return res.status(503).json({ message: 'Stripe is not configured. Add STRIPE_SECRET_KEY to enable Stripe checkout.' });
+    }
+
+    const planCode = String(req.body?.planCode || institution.billing?.planCode || 'students_100');
+    const billingCycle = req.body?.billingCycle === 'yearly' ? 'yearly' : 'monthly';
+    const useEasySchoolStorage = req.body?.useEasySchoolStorage !== undefined
+      ? Boolean(req.body.useEasySchoolStorage)
+      : institution.billing?.useEasySchoolStorage !== false;
+
+    const { plan, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage);
+    const frontendUrl = getFrontendBaseUrl();
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      customer_email: institution.email,
+      line_items: [{
+        price_data: {
+          currency: stripeCurrency,
+          product_data: {
+            name: `${plan.name} subscription`,
+          },
+          unit_amount: Math.round(total * 100),
+        },
+        quantity: 1,
+      }],
+      success_url: `${frontendUrl}/billing?payment=stripe&status=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${frontendUrl}/billing?payment=stripe&status=cancelled`,
+      client_reference_id: String(institution._id),
+      metadata: {
+        institutionId: String(institution._id),
+        planCode,
+        billingCycle,
+        useEasySchoolStorage: String(useEasySchoolStorage),
+        amount: String(total),
+      },
+    });
+
+    res.json({
+      sessionId: session.id,
+      url: session.url,
+      paymentGateway: 'stripe',
+      paymentOrderId: session.id,
+      amount: total,
+      planCode,
+      billingCycle,
+      useEasySchoolStorage,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create Stripe checkout session', error });
+  }
+});
+
+router.post('/billing/stripe/webhook', async (req, res) => {
+  try {
+    const stripe = getStripeClient();
+    const signature = req.header('stripe-signature');
+    if (!stripe || !signature || !stripeWebhookSecret) {
+      return res.status(400).json({ message: 'Stripe webhook is not configured.' });
+    }
+
+    const event = stripe.webhooks.constructEvent(req.body, signature, stripeWebhookSecret);
+    if (event.type !== 'checkout.session.completed') {
+      return res.json({ received: true, type: event.type });
+    }
+
+    const session = event.data.object as StripeCheckoutSession;
+    if (session.payment_status !== 'paid') {
+      return res.json({ received: true, type: event.type, status: session.payment_status });
+    }
+
+    const institutionId = String(session.client_reference_id || session.metadata?.institutionId || '');
+    if (!institutionId) {
+      return res.status(400).json({ message: 'Stripe session is missing institution metadata.' });
+    }
+
+    const institution = await Institution.findById(institutionId);
+    if (!institution) {
+      return res.status(404).json({ message: 'Institution not found' });
+    }
+
+    const metadata = typeof session.metadata === 'object' && session.metadata ? session.metadata : {};
+    const currentBilling = (institution as any).billing?.toObject?.() || (institution as any).billing || {};
+    const billing = buildStripeCheckoutBilling(institution, session, metadata);
+    billing.paymentVerifyStatus = 'verified';
+    billing.paymentVerifiedAt = new Date();
+    (institution as any).billing = activateBilling(billing, new Date()) as any;
+    institution.isActive = true;
+    await institution.save();
+
+    res.json({
+      received: true,
+      institutionId,
+      sessionId: session.id,
+      paymentIntent: typeof session.payment_intent === 'string' ? session.payment_intent : undefined,
+    });
+  } catch (error) {
+    res.status(400).json({ message: 'Stripe webhook verification failed', error });
+  }
+});
 
 router.get('/plans', (req, res) => {
   res.json({

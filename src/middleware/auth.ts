@@ -4,6 +4,29 @@ import User from '../models/User';
 import Institution from '../models/Institution';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
+const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
+  if (!tenantContext || !user?._id) return;
+
+  const plainUser = typeof user.toObject === 'function' ? user.toObject({ depopulate: true, versionKey: false }) : user;
+  const payload = {
+    ...plainUser,
+    _id: plainUser._id,
+    institutionId: plainUser.institutionId?._id || plainUser.institutionId,
+  };
+
+  try {
+    await runWithTenantStorage(tenantContext, async () => {
+      await User.findOneAndUpdate(
+        { _id: payload._id },
+        { $set: payload },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).maxTimeMS(5000).exec();
+    });
+  } catch (error) {
+    console.warn('Tenant auth sync failed:', (error as any)?.message || error);
+  }
+};
+
 interface AuthRequest extends Request {
   user: any;
 }
@@ -30,6 +53,10 @@ const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T
 };
 
 const expireInstitutionSnapshotIfNeeded = (institution: any) => {
+  if (!institution) {
+    return institution;
+  }
+
   const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
   if (!expiresAt || institution.billing.billingStatus === 'expired') {
     return institution;
@@ -62,23 +89,53 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const user = await withAuthTimeout(
+    const selectedInstitutionId = req.header('x-institution-id');
+    const tokenInstitutionId = decoded.institutionId ? String(decoded.institutionId) : '';
+
+    let institution = tokenInstitutionId
+      ? await withAuthTimeout(
+        Institution.findById(tokenInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
+        'Auth institution lookup'
+      )
+      : null;
+
+    let tenantContext = resolveTenantStorageContext(institution);
+
+    const findUser = async () => withAuthTimeout(
       User.findById(decoded.id).select('-password').lean().maxTimeMS(authQueryMaxTimeMs).exec(),
       'Auth user lookup'
     );
+
+    let user = tenantContext
+      ? await (async () => {
+          try {
+            return await runWithTenantStorage(tenantContext, findUser);
+          } catch (error) {
+            console.warn('Tenant auth lookup failed, falling back to central DB:', (error as any)?.message || error);
+            return null;
+          }
+        })()
+      : await findUser();
+
+    if (!user && tenantContext) {
+      user = await findUser();
+    }
+
+    if (tenantContext && user) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or user inactive.' });
     }
 
-    let institution = user.institutionId
-      ? await withAuthTimeout(
+    if (!institution && user.institutionId) {
+      institution = await withAuthTimeout(
         Institution.findById(user.institutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
         'Auth institution lookup'
-      )
-      : null;
+      );
+    }
 
-    const selectedInstitutionId = req.header('x-institution-id');
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
       const selectedInstitution = await withAuthTimeout(
         Institution.findById(selectedInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
@@ -89,10 +146,11 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       }
     }
 
+    tenantContext = resolveTenantStorageContext(institution);
     institution = expireInstitutionSnapshotIfNeeded(institution);
     const platformAdmin = isPlatformAdminRole(user.role);
     const schoolActive = institution?.isActive !== false;
-    const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/plans'];
+    const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/billing/stripe/checkout', '/api/institution/plans'];
     const isDevelopment = (process.env.NODE_ENV || 'development') !== 'production';
     if (!isDevelopment && !platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
       const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
@@ -106,7 +164,6 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     req.user = requestUser;
     (req as any).institution = institution;
-    const tenantContext = resolveTenantStorageContext(institution);
     runWithTenantStorage(tenantContext, () => next(), requestUser, institution);
   } catch (error: any) {
     const message = error?.name === 'JsonWebTokenError' || error?.name === 'TokenExpiredError'

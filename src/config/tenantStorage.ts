@@ -12,7 +12,7 @@ export type TenantStorageContext = {
 };
 
 const schoolDataModels = new Set([
-  'AdmissionApplication', 'Attendance', 'AuditLog', 'BackupConfig', 'Class', 'Committee', 'Document', 'Exam', 'Fee', 'IDCard', 'Message', 'Notice', 'Notification', 'Parent', 'Payment', 'Result', 'Salary', 'Section', 'SmsLog', 'Staff', 'Student', 'Subject', 'Teacher',
+  'AdmissionApplication', 'Attendance', 'AuditLog', 'BackupConfig', 'Class', 'Committee', 'Document', 'Exam', 'Fee', 'IDCard', 'Message', 'Notice', 'Notification', 'Parent', 'Payment', 'Result', 'Salary', 'Section', 'SmsLog', 'Staff', 'Student', 'Subject', 'Teacher', 'User',
 ]);
 const primaryMirrorModels = new Set(['User', 'Institution']);
 const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
@@ -205,13 +205,16 @@ export const resolveTenantStorageContext = (institution: any): TenantStorageCont
   const settings = institution?.settings || {};
   const activeAcademicYear = Array.isArray(settings.academicYears) ? settings.academicYears.find((item: any) => item?.isActive || item?.year === settings.activeAcademicYear) : null;
   const usesEasySchoolStorage = billing.useEasySchoolStorage !== false;
+  const directMongoUri = String(settings.mongodbUri || '').trim();
+  const legacyMongoUrl = String(settings.mongodbUrl || '').trim();
   // Collect configured MongoDB URIs (site settings may contain multiple URIs in history)
   const mongoItems = Array.isArray(settings.mongodbUris) ? settings.mongodbUris : [];
   const normalized = mongoItems.map((it: any) => String(it?.uri || it?.mongodbUrl || '').trim()).filter(Boolean);
-  if (settings.mongodbUrl && !normalized.includes(String(settings.mongodbUrl).trim())) normalized.push(String(settings.mongodbUrl).trim());
+  if (directMongoUri && !normalized.includes(directMongoUri)) normalized.push(directMongoUri);
+  if (legacyMongoUrl && !normalized.includes(legacyMongoUrl)) normalized.push(legacyMongoUrl);
   // pick active primary from settings (site controls ensure one is active), else use first
   const activeItem = (Array.isArray(settings.mongodbUris) ? settings.mongodbUris.find((i: any) => i?.isActive) : null) || mongoItems[0];
-  const activeUri = activeItem ? String(activeItem.uri || activeItem.mongodbUrl || '').trim() : (settings.mongodbUrl || activeAcademicYear?.mongodbUri || '').trim();
+  const activeUri = activeItem ? String(activeItem.uri || activeItem.mongodbUrl || '').trim() : (directMongoUri || legacyMongoUrl || activeAcademicYear?.mongodbUri || '').trim();
 
   // If the school is configured to use central EasySchool storage and has active billing/storage, don't set tenant mongo by default
   let primaryUri = '';

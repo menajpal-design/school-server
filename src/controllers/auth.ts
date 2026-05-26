@@ -8,6 +8,7 @@ import Student from '../models/Student';
 import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
+import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
 
@@ -40,6 +41,37 @@ const serializeInstitution = (institution: any) => {
   };
 };
 
+const resolveInstitutionId = (value: any) => {
+  if (!value) return undefined;
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (value instanceof mongoose.Types.ObjectId) return String(value);
+  if (value._id) return String(value._id);
+  return undefined;
+};
+
+const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
+  if (!tenantContext || !user?._id) return;
+
+  const plainUser = typeof user.toObject === 'function' ? user.toObject({ depopulate: true, versionKey: false }) : user;
+  const payload = {
+    ...plainUser,
+    _id: plainUser._id,
+    institutionId: resolveInstitutionId(plainUser.institutionId),
+  };
+
+  try {
+    await runWithTenantStorage(tenantContext, async () => {
+      await User.findOneAndUpdate(
+        { _id: payload._id },
+        { $set: payload },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).maxTimeMS(5000).exec();
+    });
+  } catch (error) {
+    console.warn('Tenant user sync failed:', (error as any)?.message || error);
+  }
+};
+
 export const register = async (req: Request, res: Response) => {
   try {
     if (!(await ensureDatabaseReady())) {
@@ -51,8 +83,17 @@ export const register = async (req: Request, res: Response) => {
     const role = 'head';
     let institutionId = req.body.institutionId;
 
+    let institution: any = null;
+    if (institutionId && mongoose.Types.ObjectId.isValid(String(institutionId))) {
+      institution = await Institution.findById(institutionId).lean();
+      if (!institution) {
+        return res.status(404).json({ message: 'Institution not found' });
+      }
+    }
+
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const storageContext = institution ? resolveTenantStorageContext(institution) : null;
+    const existingUser = await runWithTenantStorage(storageContext, async () => User.findOne({ email }));
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -66,7 +107,7 @@ export const register = async (req: Request, res: Response) => {
       const billingCycle = req.body.billingCycle === 'yearly' ? 'yearly' : 'monthly';
       const selected = calculatePlanDue(req.body.planCode, billingCycle, true);
       const paymentAmount = Number(req.body.receivedAmount || 0);
-      const institution = await Institution.create({
+      institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
         type: 'school',
         address: 'Not provided',
@@ -104,6 +145,8 @@ export const register = async (req: Request, res: Response) => {
       institutionId = institution._id;
     }
 
+    const tenantContext = institution ? resolveTenantStorageContext(institution) : null;
+
     // Create user
     const user = new User({
       _id: userId,
@@ -116,11 +159,13 @@ export const register = async (req: Request, res: Response) => {
       institutionId
     });
 
-    await user.save();
-    const populatedUser = await User.findById(user._id).populate('institutionId');
+    await runWithTenantStorage(tenantContext, async () => {
+      await user.save();
+    });
+    const populatedUser = await runWithTenantStorage(tenantContext, async () => User.findById(user._id).populate('institutionId'));
 
     // Generate token
-    const token = jwt.sign({ id: user._id }, jwtSecret(), {
+    const token = jwt.sign({ id: user._id, institutionId }, jwtSecret(), {
       expiresIn: '7d'
     });
 
@@ -167,43 +212,66 @@ export const login = async (req: Request, res: Response) => {
 
     const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || '');
     const institutionScope = mongoose.Types.ObjectId.isValid(institutionId) ? { institutionId } : {};
+    let tenantInstitution: any = null;
+    let tenantContext = null;
 
-    // Find user
+    if (mongoose.Types.ObjectId.isValid(institutionId)) {
+      tenantInstitution = await Institution.findById(institutionId).lean().maxTimeMS(5000);
+      tenantContext = resolveTenantStorageContext(tenantInstitution);
+    }
+
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
     console.log('Login attempt:', { identifier, emailQuery, hasInstitutionScope: !!institutionScope.institutionId });
-    
-    let user = await User.findOne({
-      ...institutionScope,
-      $or: [
-        { email: emailQuery },
-        { username: emailQuery.toLowerCase() },
-        { phone: identifier },
-      ],
-    }).populate('institutionId').maxTimeMS(5000);
 
-    console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
-
-    let isMatch = user ? await bcrypt.compare(password, user.password) : false;
-
-    if (!isMatch) {
-      const student = await Student.findOne({
+    const loginLookup = async () => {
+      let user = await User.findOne({
         ...institutionScope,
         $or: [
-          { rollNumber: identifier },
-          { guardianPhone: identifier },
-          { guardianEmail: emailQuery },
+          { email: emailQuery },
+          { username: emailQuery.toLowerCase() },
+          { phone: identifier },
         ],
-        isActive: true,
-      }).select('userId').maxTimeMS(5000);
+      }).populate('institutionId').maxTimeMS(5000);
 
-      console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
+      console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
 
-      if (student?.userId) {
-        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId').maxTimeMS(5000);
-        console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
-        isMatch = user ? await bcrypt.compare(password, user.password) : false;
+      let isMatch = user ? await bcrypt.compare(password, user.password) : false;
+
+      if (!isMatch) {
+        const student = await Student.findOne({
+          ...institutionScope,
+          $or: [
+            { rollNumber: identifier },
+            { guardianPhone: identifier },
+            { guardianEmail: emailQuery },
+          ],
+          isActive: true,
+        }).select('userId').maxTimeMS(5000);
+
+        console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
+
+        if (student?.userId) {
+          user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId').maxTimeMS(5000);
+          console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
+          isMatch = user ? await bcrypt.compare(password, user.password) : false;
+        }
       }
-    }
+
+      return { user, isMatch };
+    };
+
+    const tenantResult = tenantContext
+      ? await (async () => {
+          try {
+            return await runWithTenantStorage(tenantContext, loginLookup);
+          } catch (error) {
+            console.warn('Tenant login lookup failed, falling back to central DB:', (error as any)?.message || error);
+            return null;
+          }
+        })()
+      : null;
+    const loginResult = tenantResult || (await loginLookup());
+    const { user, isMatch } = tenantContext && !loginResult?.user ? await loginLookup() : loginResult;
 
     if (!user || !isMatch) {
       const errorMsg = user ? 'Incorrect password' : 'User not found';
@@ -215,12 +283,18 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Update last login
-    User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } }).maxTimeMS(3000).exec().catch((error) => {
+    void runWithTenantStorage(tenantContext, async () => {
+      await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } }).maxTimeMS(3000).exec();
+    }).catch((error) => {
       console.warn('Last login update failed:', error?.message || error);
     });
 
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
+
     // Generate token
-    const token = jwt.sign({ id: user._id }, jwtSecret(), {
+    const token = jwt.sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId }, jwtSecret(), {
       expiresIn: '7d'
     });
 

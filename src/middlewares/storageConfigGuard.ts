@@ -11,6 +11,7 @@ const allowedPaths = [
   '/api/health',
   '/api/institution/profile',
   '/api/institution/billing/payment',
+  '/api/institution/billing/stripe/checkout',
   '/api/institution/plans',
   '/api/site-settings/site-config',
   '/api/site-settings/app-controls',
@@ -25,15 +26,26 @@ const getActiveAcademicYearStorage = (settings: any = {}) => {
 
 const needsStorageConfig = (institution: any) => {
   if (!institution) return false;
+
   const billing = institution.billing || {};
   const settings = institution.settings || {};
   const activeAcademicYear = getActiveAcademicYearStorage(settings);
   const usesEasySchoolStorage = billing.useEasySchoolStorage !== false;
+
   if (usesEasySchoolStorage) return false;
 
   const mongoUri = String(activeAcademicYear.mongodbUri || settings.mongodbUri || '').trim();
   const imgbbApiKey = String(activeAcademicYear.imgbbApiKey || settings.imgbbApiKey || '').trim();
   return !mongoUri || !imgbbApiKey;
+};
+
+const resolveInstitutionId = (decoded: any) => {
+  if (!decoded) return '';
+  if (typeof decoded.institutionId === 'string') return decoded.institutionId;
+  if (decoded.institutionId && typeof decoded.institutionId === 'object' && decoded.institutionId._id) {
+    return String(decoded.institutionId._id);
+  }
+  return '';
 };
 
 export const storageConfigGuard = async (req: Request, res: Response, next: NextFunction) => {
@@ -45,17 +57,31 @@ export const storageConfigGuard = async (req: Request, res: Response, next: Next
     if (!token) return next();
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const user = await User.findById(decoded.id).select('role institutionId isActive').lean().maxTimeMS(2500);
-    if (!user || !user.isActive || platformAdminRoles.includes(user.role) || !user.institutionId) return next();
+    const institutionId = resolveInstitutionId(decoded);
 
-    const institution = await Institution.findById(user.institutionId).select('billing settings').lean().maxTimeMS(2500);
-    if (!needsStorageConfig(institution)) return next();
+    if (!institutionId) return next();
 
-    return res.status(428).json({
-      code: 'STORAGE_CONFIG_REQUIRED',
-      redirectTo: '/settings',
-      message: 'দয়া করে MongoDB URL এবং ImgBB API Key সেট করুন। EasySchool storage ব্যবহার না করলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে প্রয়োজনীয় storage configuration দিতে হবে।',
-    });
+    const institution = await Institution.findById(institutionId).select('billing settings').lean().maxTimeMS(2500);
+    if (!institution) return next();
+
+    let user: any = null;
+    if (decoded.id) {
+      user = await User.findById(decoded.id).select('role institutionId isActive').lean().maxTimeMS(2500);
+    }
+
+    if (user && (user.isActive === false || platformAdminRoles.includes(user.role) || !user.institutionId)) {
+      return next();
+    }
+
+    if (needsStorageConfig(institution)) {
+      return res.status(428).json({
+        code: 'STORAGE_CONFIG_REQUIRED',
+        redirectTo: '/settings',
+        message: 'দয়া করে MongoDB URL এবং ImgBB API Key সেট করুন। EasySchool storage ব্যবহার না করলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে প্রয়োজনীয় storage configuration দিতে হবে।',
+      });
+    }
+
+    return next();
   } catch (error) {
     return next();
   }
