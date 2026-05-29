@@ -17,7 +17,8 @@ router.use(authorize('admin', 'super_admin'));
 const buildBilling = (input: any = {}, current: any = {}) => {
   const billingCycle = input.billingCycle || current.billingCycle || 'monthly';
   const useEasySchoolStorage = input.useEasySchoolStorage ?? current.useEasySchoolStorage ?? true;
-  const { plan, storageAmount, total } = calculatePlanDue(input.planCode || current.planCode, billingCycle, useEasySchoolStorage);
+  const smsChargeAmount = Number(input.smsChargeAmount ?? current.smsChargeAmount ?? 0);
+  const { plan, baseAmount, storageAmount, total } = calculatePlanDue(input.planCode || current.planCode, billingCycle, useEasySchoolStorage, smsChargeAmount);
   const receivedAmount = Number(input.receivedAmount ?? current.receivedAmount ?? 0);
   const isPaymentReceived = input.isPaymentReceived ?? current.isPaymentReceived ?? receivedAmount > 0;
   const billingStatus = input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : current.billingStatus || 'pending');
@@ -34,7 +35,12 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     billingCycle,
     useEasySchoolStorage,
     storageMonthlyPrice: EASY_SCHOOL_STORAGE_MONTHLY_PRICE,
+    baseDueAmount: baseAmount + storageAmount,
     storageAmount,
+    smsChargeAmount,
+    smsChargeBreakdown: input.smsChargeBreakdown ?? current.smsChargeBreakdown ?? {},
+    smsChargePeriodStart: input.smsChargePeriodStart ?? current.smsChargePeriodStart,
+    smsChargePeriodEnd: input.smsChargePeriodEnd ?? current.smsChargePeriodEnd,
     dueAmount: total,
     billingStatus,
     isPaymentReceived,
@@ -267,7 +273,6 @@ router.get('/users', async (req, res) => {
       .populate('institutionId', 'name type eiin')
       .select('name username email role phone isActive permissions institutionId createdAt lastLogin')
       .sort({ createdAt: -1 })
-      .limit(500)
       .lean();
     res.json({ users });
   } catch (error) {
