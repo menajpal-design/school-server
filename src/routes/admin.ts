@@ -14,6 +14,12 @@ const router = express.Router();
 router.use(authenticate);
 router.use(authorize('admin', 'super_admin'));
 
+const roleHierarchy = ['super_admin', 'admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+const getManagedRoles = (role?: string) => {
+  const index = roleHierarchy.indexOf(role || '');
+  return index >= 0 ? roleHierarchy.slice(index + 1) : [];
+};
+
 const buildBilling = (input: any = {}, current: any = {}) => {
   const billingCycle = input.billingCycle || current.billingCycle || 'monthly';
   const useEasySchoolStorage = input.useEasySchoolStorage ?? current.useEasySchoolStorage ?? true;
@@ -263,9 +269,18 @@ router.get('/schools/:id/select', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   try {
+    const managedRoles = getManagedRoles(req.user?.role);
+    if (!managedRoles.length) return res.json({ users: [] });
+
     const query: any = {};
     if (req.query.institutionId) query.institutionId = req.query.institutionId;
-    if (req.query.role) query.role = req.query.role;
+    if (req.query.role) {
+      const requestedRole = String(req.query.role);
+      if (!managedRoles.includes(requestedRole)) return res.json({ users: [] });
+      query.role = requestedRole;
+    } else {
+      query.role = { $in: managedRoles };
+    }
     if (req.query.search) {
       const pattern = new RegExp(String(req.query.search), 'i');
       query.$or = [{ name: pattern }, { email: pattern }, { phone: pattern }, { username: pattern }];

@@ -7,8 +7,13 @@ const router = express.Router();
 const platformAdminRoles = ['admin', 'super_admin'];
 const validRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
 const schoolManagedRoles = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+const roleHierarchy = ['super_admin', 'admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
 
 const isPlatformAdmin = (role?: string) => platformAdminRoles.includes(role || '');
+const getManagedRoles = (role?: string) => {
+  const index = roleHierarchy.indexOf(role || '');
+  return index >= 0 ? roleHierarchy.slice(index + 1) : [];
+};
 
 const scopedUserQuery = (req: any) => isPlatformAdmin(req.user?.role) ? {} : { institutionId: req.user.institutionId };
 
@@ -16,7 +21,10 @@ router.use(authenticate);
 router.use(authorize('head', 'admin', 'super_admin'));
 
 router.get('/', (req, res) => {
-  User.find(scopedUserQuery(req))
+  const managedRoles = getManagedRoles(req.user?.role);
+  if (!managedRoles.length) return res.json({ users: [] });
+
+  User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } })
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
@@ -24,7 +32,10 @@ router.get('/', (req, res) => {
 });
 
 router.get('/all', (req, res) => {
-  User.find(scopedUserQuery(req))
+  const managedRoles = getManagedRoles(req.user?.role);
+  if (!managedRoles.length) return res.json({ users: [] });
+
+  User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } })
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
@@ -32,7 +43,10 @@ router.get('/all', (req, res) => {
 });
 
 router.get('/permissions', (req, res) => {
-  User.find(scopedUserQuery(req))
+  const managedRoles = getManagedRoles(req.user?.role);
+  if (!managedRoles.length) return res.json({ roles: [], matrix: {}, permissions: [] });
+
+  User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } })
     .select('role permissions')
     .then((users) => {
       const roles = [...new Set(users.map((user) => user.role))];
@@ -47,8 +61,9 @@ router.get('/permissions', (req, res) => {
 
 router.patch('/:id/status', async (req, res) => {
   try {
+    const managedRoles = getManagedRoles(req.user?.role);
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, ...scopedUserQuery(req) },
+      { _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } },
       { isActive: req.body.isActive },
       { new: true }
     ).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt');
@@ -62,14 +77,15 @@ router.patch('/:id/status', async (req, res) => {
 router.patch('/:id/role', async (req, res) => {
   try {
     const nextRole = String(req.body.role || '');
+    const managedRoles = getManagedRoles(req.user?.role);
     if (!validRoles.includes(nextRole)) {
       return res.status(400).json({ message: 'Invalid role' });
     }
-    if (!isPlatformAdmin(req.user.role) && !schoolManagedRoles.includes(nextRole)) {
-      return res.status(403).json({ message: 'Head can assign only institution roles below Head' });
+    if (!managedRoles.includes(nextRole)) {
+      return res.status(403).json({ message: 'You can only assign lower roles.' });
     }
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, ...scopedUserQuery(req), ...(isPlatformAdmin(req.user.role) ? {} : { role: { $nin: platformAdminRoles.concat('head') } }) },
+      { _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } },
       { role: nextRole },
       { new: true }
     ).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt');
@@ -82,8 +98,9 @@ router.patch('/:id/role', async (req, res) => {
 
 router.post('/:id/reset-password', async (req, res) => {
   try {
+    const managedRoles = getManagedRoles(req.user?.role);
     const password = String(req.body.password || 'User@123');
-    const user = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req) });
+    const user = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } });
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.password = await bcrypt.hash(password, 10);
     await user.save();
