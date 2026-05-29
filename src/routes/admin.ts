@@ -269,17 +269,27 @@ router.get('/schools/:id/select', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   try {
+    // Admin routes: super_admin sees all, admin sees all except super_admin, others see only lower roles
     const managedRoles = getManagedRoles(req.user?.role);
-    if (!managedRoles.length) return res.json({ users: [] });
+    let allowedRoles: string[] = [];
+    if (req.user?.role === 'super_admin') {
+      allowedRoles = roleHierarchy.slice(); // all roles
+    } else if (req.user?.role === 'admin') {
+      allowedRoles = roleHierarchy.filter(r => r !== 'super_admin'); // admin sees all except super_admin
+    } else {
+      allowedRoles = managedRoles;
+    }
+
+    if (!allowedRoles.length) return res.json({ users: [] });
 
     const query: any = {};
     if (req.query.institutionId) query.institutionId = req.query.institutionId;
     if (req.query.role) {
       const requestedRole = String(req.query.role);
-      if (!managedRoles.includes(requestedRole)) return res.json({ users: [] });
+      if (!allowedRoles.includes(requestedRole)) return res.json({ users: [] });
       query.role = requestedRole;
     } else {
-      query.role = { $in: managedRoles };
+      query.role = { $in: allowedRoles };
     }
     if (req.query.search) {
       const pattern = new RegExp(String(req.query.search), 'i');
@@ -293,6 +303,32 @@ router.get('/users', async (req, res) => {
     res.json({ users });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load users', error });
+  }
+});
+
+// Create a new admin (only super_admin can create platform admins)
+router.post('/users', async (req, res) => {
+  try {
+    if (req.user?.role !== 'super_admin') return res.status(403).json({ message: 'Only super_admin can create platform admin users' });
+    const { name, email, password, role = 'admin', institutionId } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ message: 'name, email and password are required' });
+    if (!['admin', 'super_admin'].includes(role)) return res.status(400).json({ message: 'Invalid role for platform user' });
+
+    // ensure institutionId provided (User schema requires it)
+    if (!institutionId) return res.status(400).json({ message: 'institutionId is required for new user' });
+
+    // Check existing
+    const existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ message: 'User with this email already exists' });
+
+    const bcrypt = await import('bcryptjs');
+    const hashed = await bcrypt.hash(password, 10);
+    const user = new User({ name, email, password: hashed, role, institutionId });
+    await user.save();
+    const created = await User.findById(user._id).select('name email role phone isActive institutionId createdAt');
+    res.status(201).json({ user: created });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create admin user', error });
   }
 });
 

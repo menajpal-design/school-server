@@ -22,9 +22,12 @@ router.use(authorize('head', 'admin', 'super_admin'));
 
 router.get('/', (req, res) => {
   const managedRoles = getManagedRoles(req.user?.role);
-  if (!managedRoles.length) return res.json({ users: [] });
+  // Allow seeing own user even if there are no managed roles
+  const baseQuery: any = { ...scopedUserQuery(req) };
+  const roleCondition = managedRoles.length ? { role: { $in: managedRoles } } : null;
+  const query: any = roleCondition ? { ...baseQuery, $or: [roleCondition, { _id: req.user._id }] } : { ...baseQuery, _id: req.user._id };
 
-  User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } })
+  User.find(query)
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
@@ -33,9 +36,11 @@ router.get('/', (req, res) => {
 
 router.get('/all', (req, res) => {
   const managedRoles = getManagedRoles(req.user?.role);
-  if (!managedRoles.length) return res.json({ users: [] });
+  const baseQuery: any = { ...scopedUserQuery(req) };
+  const roleCondition = managedRoles.length ? { role: { $in: managedRoles } } : null;
+  const query: any = roleCondition ? { ...baseQuery, $or: [roleCondition, { _id: req.user._id }] } : { ...baseQuery, _id: req.user._id };
 
-  User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } })
+  User.find(query)
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
     .sort({ createdAt: -1 })
     .then((users) => res.json({ users }))
@@ -150,7 +155,9 @@ router.get('/subordinates/list', async (req, res) => {
       return res.json({ users: [] });
     }
 
-    const query: any = { role: { $in: visibleRoles } };
+    const query: any = {};
+    // include subordinates as well as the requesting user
+    query.$or = [{ role: { $in: visibleRoles } }, { _id: userId }];
     if (!isPlatformAdmin(userRole)) {
       query.institutionId = institutionId;
     }
