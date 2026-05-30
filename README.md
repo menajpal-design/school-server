@@ -19,7 +19,7 @@ The easy school backend provides a comprehensive REST API for school management 
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 24+ (production supported)
 - MongoDB 5+ (local or Atlas)
 - npm or yarn
 

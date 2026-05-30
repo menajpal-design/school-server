@@ -410,7 +410,7 @@ school_n/
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | Database | MongoDB | 5.0+ |
-| Backend | Node.js | 18+ |
+| Backend | Node.js | 24+ |
 | Backend Framework | Express | 4.x |
 | Frontend (Web) | Next.js | 14.x |
 | Frontend (Mobile) | React Native | 0.71.14 |
