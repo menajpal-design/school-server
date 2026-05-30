@@ -3,6 +3,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import SmsLog from '../models/SmsLog';
 import Parent from '../models/Parent';
 import Institution from '../models/Institution';
+import getTenantIdFromReq from '../utils/tenant';
 
 const router = Router();
 
@@ -12,13 +13,11 @@ router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'h
     const { status, parentId, studentId, type, startDate, endDate } = req.query;
     const userId = (req as any).user?.id;
     
-    // Get user's institution
-    const user = (req as any).user;
-    if (!user?.institutionId) {
-      return res.status(400).json({ error: 'Institution not found' });
-    }
+    // Resolve tenant/institution id
+    const tenantId = getTenantIdFromReq(req);
+    if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
 
-    const filter: any = { institutionId: user.institutionId };
+    const filter: any = { institutionId: tenantId };
 
     if (status) {
       filter.status = status;
@@ -74,6 +73,7 @@ router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'h
 router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
   try {
     const { parentId } = req.params;
+    const tenantId = getTenantIdFromReq(req);
     const user = (req as any).user;
 
     const parent = await Parent.findById(parentId);
@@ -82,7 +82,7 @@ router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 
     }
 
     const smsLogs = await SmsLog.find({
-      institutionId: user.institutionId,
+      institutionId: tenantId,
       parentId,
     })
       .populate('studentId', 'name')
@@ -117,15 +117,14 @@ router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 
 router.get('/sms-monitoring/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
   try {
     const { days = 30 } = req.query;
-    const user = (req as any).user;
-
+    const tenantId = getTenantIdFromReq(req);
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days as string));
 
     const stats = await SmsLog.aggregate([
       {
         $match: {
-          institutionId: user.institutionId,
+          institutionId: tenantId,
           sentAt: { $gte: startDate },
         },
       },
@@ -140,7 +139,7 @@ router.get('/sms-monitoring/stats', authenticate, authorize('admin', 'super_admi
     const typeBreakdown = await SmsLog.aggregate([
       {
         $match: {
-          institutionId: user.institutionId,
+          institutionId: tenantId,
           sentAt: { $gte: startDate },
         },
       },
@@ -153,7 +152,7 @@ router.get('/sms-monitoring/stats', authenticate, authorize('admin', 'super_admi
     ]);
 
     const totalSent = await SmsLog.countDocuments({
-      institutionId: user.institutionId,
+      institutionId: tenantId,
       sentAt: { $gte: startDate },
     });
 

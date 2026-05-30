@@ -99,12 +99,13 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const selectedInstitutionId = req.header('x-institution-id');
     const tokenInstitutionId = decoded.institutionId ? String(decoded.institutionId) : '';
 
-    let institution = tokenInstitutionId
+    // Prefer subdomain-resolved institution (set by tenant middleware) when available
+    let institution = (req as any).institution || (tokenInstitutionId
       ? await withAuthTimeout(
         Institution.findById(tokenInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
         'Auth institution lookup'
       )
-      : null;
+      : null);
 
     let tenantContext = resolveTenantStorageContext(institution);
 

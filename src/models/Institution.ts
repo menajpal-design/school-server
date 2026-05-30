@@ -9,6 +9,7 @@ export interface IInstitution extends Document {
   email: string;
   website?: string;
   domains?: string[];
+  subdomain?: string;
   logo?: string;
   seal?: string;
   headSignature?: string;
@@ -87,6 +88,7 @@ const InstitutionSchema: Schema = new Schema({
   email: { type: String, required: true, lowercase: true, trim: true },
   website: { type: String, trim: true },
   domains: [{ type: String, lowercase: true, trim: true }],
+  subdomain: { type: String, lowercase: true, trim: true, index: true, unique: true, sparse: true },
   logo: { type: String },
   seal: { type: String },
   headSignature: { type: String },

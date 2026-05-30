@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
 import Notification from '../models/Notification';
+import getTenantIdFromReq from '../utils/tenant';
 
 export const getNotifications = async (req: Request, res: Response) => {
   try {
-    const institutionId = req.user.institutionId;
+    const institutionId = getTenantIdFromReq(req);
     const recipientId = req.user._id;
 
     // Fetch both personal and broadcast (recipientId null) notifications
@@ -24,7 +25,7 @@ export const getNotifications = async (req: Request, res: Response) => {
 export const markAsRead = async (req: Request, res: Response) => {
   try {
     const id = req.params.id || req.body.id;
-    const institutionId = req.user.institutionId;
+    const institutionId = getTenantIdFromReq(req);
     if (!id) return res.status(400).json({ message: 'Notification id required' });
 
     const n = await Notification.findOneAndUpdate({ _id: id, institutionId }, { isRead: true }, { new: true });
@@ -37,7 +38,7 @@ export const markAsRead = async (req: Request, res: Response) => {
 
 export const markAllRead = async (req: Request, res: Response) => {
   try {
-    const institutionId = req.user.institutionId;
+    const institutionId = getTenantIdFromReq(req);
     const recipientId = req.user._id;
     await Notification.updateMany({ institutionId, $or: [{ recipientId }, { recipientId: null }], isRead: false }, { isRead: true });
     res.json({ success: true });
@@ -49,7 +50,7 @@ export const markAllRead = async (req: Request, res: Response) => {
 export const createNotification = async (req: Request, res: Response) => {
   try {
     const { title, body, link, type, recipientId } = req.body;
-    const institutionId = req.user.institutionId;
+    const institutionId = getTenantIdFromReq(req);
     if (!title) return res.status(400).json({ message: 'title required' });
 
     const n = await Notification.create({ title, body, link, type, recipientId: recipientId || null, institutionId });

@@ -52,6 +52,7 @@ import SmsLog from './models/SmsLog';
 import { config } from './config/config';
 import './config/tenantStorage';
 import storageConfigGuard from './middlewares/storageConfigGuard';
+import resolveTenant from './middleware/tenant';
 import csrfRoutes from './routes/csrf';
 import { csrfProtection } from './middlewares/csrf';
 import { sanitizeRequest } from './middlewares/sanitize';
@@ -92,6 +93,8 @@ app.use('/api/institution/billing/stripe/webhook', express.raw({ type: 'applicat
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '50mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.RATE_LIMIT_MAX || 300), standardHeaders: true, legacyHeaders: false }));
+// Resolve tenant (subdomain -> institution) before other guards and auth
+app.use(resolveTenant);
 app.use(storageConfigGuard);
 app.use(attachRequestId);
 app.use(requestLogger as any);
@@ -152,6 +155,7 @@ app.use('/api/dev', devTestRoutes);
 app.get('/api/library/test', (req, res) => res.json({ success: true, message: 'library route test OK' }));
 app.use('/uploads', express.static('uploads'));
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
+app.get('/api', (req, res) => res.json({ status: 'OK', message: 'easy school API is available', version: '1.0.0' }));
 app.get('/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
 app.get('/', (req, res) => res.json({ message: 'easy school School Management System API', version: '1.0.0', status: 'running' }));
 app.use((err: any, req: Request, res: Response, next: NextFunction) => { setCorsHeaders(req, res); logger.error('Unhandled middleware error', { err: err?.message || err, path: req?.originalUrl }); next(err); });

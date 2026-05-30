@@ -54,6 +54,8 @@ export interface Config {
   androidUrl: string;
   staticServerUrl: string;
   allowedOrigins: string;
+  mainDomain: string;
+  cookieDomain: string;
 }
 
 /**
@@ -111,6 +113,8 @@ export const getConfig = (): Config => {
     androidUrl: process.env.ANDROID_URL || 'http://localhost:8082',
     staticServerUrl: process.env.SERVER_URL || 'https://school-server-b264c1a1fac6.herokuapp.com',
     allowedOrigins: process.env.ALLOWED_ORIGINS || '',
+    mainDomain: process.env.MAIN_DOMAIN || '',
+    cookieDomain: process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN || '',
   };
 
   // Validate critical configuration
@@ -163,6 +167,14 @@ export const validateConfig = (config: Config): void => {
     if (!config.smsTwilioPhoneNumber) {
       warnings.push('SMS_PHONE_NUMBER is required when SMS_ENABLED is true');
     }
+  }
+
+  if (config.nodeEnv === 'production' && !config.mainDomain) {
+    warnings.push('MAIN_DOMAIN is recommended in production for subdomain tenant resolution and cookie domain support');
+  }
+
+  if (config.nodeEnv === 'production' && !config.cookieDomain) {
+    warnings.push('COOKIE_DOMAIN or MAIN_DOMAIN is recommended in production to allow cookies across subdomains');
   }
 
   if (warnings.length > 0) {

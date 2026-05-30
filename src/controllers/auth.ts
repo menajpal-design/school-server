@@ -27,6 +27,12 @@ const cookieOptions = (days = 7) => {
     maxAge: days * 24 * 60 * 60 * 1000,
   };
   opts.sameSite = isProduction ? 'none' : 'lax';
+  // Set cookie domain to allow cross-subdomain cookies when configured
+  const cookieDomain = process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN;
+  if (cookieDomain) {
+    // ensure leading dot for cross-subdomain cookies
+    opts.domain = cookieDomain.startsWith('.') ? cookieDomain : `.${cookieDomain}`;
+  }
   return opts;
 };
 

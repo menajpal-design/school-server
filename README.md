@@ -222,6 +222,76 @@ npm run build
 npm start
 ```
 
+## Wildcard Subdomain Deployment (Heroku + DNS)
+For production, the server supports tenant resolution using subdomains like `school1.example.com` and `school2.example.com`.
+
+1. Set environment variables in Heroku:
+   - `MAIN_DOMAIN=example.com`
+   - `COOKIE_DOMAIN=.example.com`
+   - `FRONTEND_URL=https://app.example.com`
+   - `NEXT_PUBLIC_API_URL=https://api.example.com`
+   - `AUTH_COOKIE_NAME=es_token`
+   - `REFRESH_COOKIE_NAME=es_refresh`
+   - `JWT_SECRET=<strong-secret>`
+
+2. Register custom domains in Heroku:
+   - `example.com`
+   - `www.example.com`
+   - `*.example.com`
+
+3. Configure DNS using Cloudflare or your DNS provider:
+   - Add `CNAME *` pointing to your Heroku app hostname (e.g. `your-app.herokuapp.com`).
+   - Add `CNAME www` pointing to the same Heroku hostname.
+   - If you need the root domain (`example.com`) to work, enable CNAME flattening or ALIAS/ANAME for the apex domain.
+   - Use DNS-only mode (grey cloud) for Heroku-managed SSL to avoid proxying conflicts.
+
+4. SSL / certificate configuration:
+   - Heroku automatically issues TLS certificates for verified custom domains.
+   - For wildcard domains, Heroku will manage `*.example.com` once the wildcard domain is added and verified.
+   - If Cloudflare is used, set SSL/TLS to `Full` or `Full (Strict)` and keep the Cloudflare proxy disabled.
+
+5. Cookie and tenant behavior:
+   - `MAIN_DOMAIN` is used to detect subdomains and resolve the correct institution.
+   - `COOKIE_DOMAIN` should be set to `.example.com` so auth cookies are valid across all subdomains.
+   - If you use a separate API host, update `NEXT_PUBLIC_API_URL` to point to that API service.
+
+6. Example traffic flow:
+   - `school1.example.com` → resolves tenant `school1` and loads that institution's data.
+   - `school2.example.com` → resolves tenant `school2`.
+   - `api.example.com` can be used for backend API requests if you prefer a dedicated API domain.
+
+### Subdomain migration
+After you add `*.example.com` to Heroku and verify DNS, run the migration script to assign every existing institution a unique subdomain:
+```bash
+cd school-server
+npm run migrate:subdomains
+```
+This will also add the institution `website` hostname to `domains` when missing, so legacy host-based resolution still works.
+
+### Staging and smoke testing
+Before production rollout, verify the staging build and server endpoints using the smoke test script:
+```bash
+cd school-server
+npm run smoke
+```
+For local development without building:
+```bash
+cd school-server
+npm run smoke:dev
+```
+Use `SMOKE_TEST_URL` and `SMOKE_TEST_HOST` to target a specific host or proxy setup:
+```bash
+SMOKE_TEST_URL=https://staging.example.com SMOKE_TEST_HOST=school1.example.com npm run smoke:dev
+```
+
+> Status: Staging validation and rollback planning have been implemented. The smoke test script and deployment checklist are ready for production rollout.
+
+### Notes
+- `MAIN_DOMAIN` is strongly recommended in production for subdomain tenant resolution and cookie support.
+- If your project uses the same domain for both frontend and backend, you can also use relative `/api` paths from the browser.
+
+For a full staging, rollout, monitoring, and rollback checklist, see `DEPLOYMENT_PLAN.md`.
+
 ### Database Seeding
 
 First, ensure MongoDB is running. Then seed the database:

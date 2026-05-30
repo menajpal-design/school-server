@@ -1,6 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { authenticate, authorize } from '../middleware/auth';
+import getTenantIdFromReq from '../utils/tenant';
 import User from '../models/User';
 
 const router = express.Router();
@@ -15,7 +16,11 @@ const getManagedRoles = (role?: string) => {
   return index >= 0 ? roleHierarchy.slice(index + 1) : [];
 };
 
-const scopedUserQuery = (req: any) => isPlatformAdmin(req.user?.role) ? {} : { institutionId: req.user.institutionId };
+const scopedUserQuery = (req: any) => {
+  if (isPlatformAdmin(req.user?.role)) return {};
+  const tenantId = getTenantIdFromReq(req);
+  return tenantId ? { institutionId: tenantId } : {};
+};
 
 const buildUserListQuery = (req: any) => {
   const baseQuery: any = { ...scopedUserQuery(req) };
@@ -164,7 +169,7 @@ router.get('/subordinates/list', async (req, res) => {
   try {
     const userRole = req.user?.role;
     const userId = req.user?.id;
-    const institutionId = req.user?.institutionId;
+    const institutionId = getTenantIdFromReq(req);
 
     // Define role hierarchy - who can see whom
     const roleHierarchy: Record<string, string[]> = {
@@ -186,7 +191,7 @@ router.get('/subordinates/list', async (req, res) => {
     const query: any = {};
     // include subordinates as well as the requesting user
     query.$or = [{ role: { $in: visibleRoles } }, { _id: userId }];
-    if (!isPlatformAdmin(userRole)) {
+    if (!isPlatformAdmin(userRole) && institutionId) {
       query.institutionId = institutionId;
     }
 
@@ -208,7 +213,7 @@ router.get('/view-credentials/:id', async (req, res) => {
     const targetUserId = req.params.id;
     const requestingUserId = req.user?.id;
     const userRole = req.user?.role;
-    const institutionId = req.user?.institutionId;
+    const institutionId = getTenantIdFromReq(req);
 
     // Check if requesting user has permission
     const targetUser = await User.findById(targetUserId);
@@ -228,7 +233,7 @@ router.get('/view-credentials/:id', async (req, res) => {
     };
 
     const canSee = roleHierarchy[userRole]?.includes(targetUser.role);
-    if (!canSee || (!isPlatformAdmin(userRole) && targetUser.institutionId.toString() !== institutionId.toString())) {
+    if (!canSee || (!isPlatformAdmin(userRole) && targetUser.institutionId.toString() !== String(institutionId))) {
       return res.status(403).json({ message: 'You do not have permission to view this user credentials' });
     }
 
