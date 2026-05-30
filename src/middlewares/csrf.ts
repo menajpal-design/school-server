@@ -32,12 +32,15 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
 export function setCsrfCookie(res: Response, token: string) {
   try {
     const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+    const cookieDomain = process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN || undefined;
+    const domainOpt = cookieDomain ? { domain: cookieDomain.startsWith('.') ? cookieDomain : `.${cookieDomain}` } : {};
     res.cookie(CSRF_COOKIE_NAME, token, {
       httpOnly: false,
       secure: isProd,
       sameSite: isProd ? 'none' : 'lax',
       path: '/',
       maxAge: 24 * 60 * 60 * 1000,
+      ...domainOpt,
     });
   } catch (e) {
     // ignore set-cookie errors

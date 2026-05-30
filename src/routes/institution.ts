@@ -352,7 +352,8 @@ router.put('/profile', authenticate, async (req, res) => {
 });
 
 // Check subdomain availability
-router.get('/subdomain/check', authenticate, async (req, res) => {
+// Public endpoint: check subdomain availability without authentication
+router.get('/subdomain/check', async (req, res) => {
   try {
     const subdomain = String(req.query.subdomain || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40);
     if (!subdomain) return res.status(400).json({ available: false, message: 'subdomain is required' });
