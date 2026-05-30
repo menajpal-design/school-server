@@ -129,9 +129,11 @@ router.patch('/:id/role', async (req, res) => {
 
 router.post('/:id/reset-password', async (req, res) => {
   try {
-    const managedRoles = getManagedRoles(req.user?.role);
     const password = String(req.body.password || 'User@123');
-    const user = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } });
+    const query = isPlatformAdmin(req.user?.role)
+      ? { _id: req.params.id }
+      : { _id: req.params.id, ...scopedUserQuery(req), role: { $in: getManagedRoles(req.user?.role) } };
+    const user = await User.findOne(query);
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.password = await bcrypt.hash(password, 10);
     await user.save();
