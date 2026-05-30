@@ -17,15 +17,44 @@ const getManagedRoles = (role?: string) => {
 
 const scopedUserQuery = (req: any) => isPlatformAdmin(req.user?.role) ? {} : { institutionId: req.user.institutionId };
 
+const buildUserListQuery = (req: any) => {
+  const baseQuery: any = { ...scopedUserQuery(req) };
+
+  if (req.query?.institutionId && req.query.institutionId !== 'all') {
+    baseQuery.institutionId = req.query.institutionId;
+  }
+
+  if (req.query?.role && req.query.role !== 'all') {
+    baseQuery.role = req.query.role;
+  }
+
+  if (req.query?.search) {
+    const pattern = new RegExp(String(req.query.search), 'i');
+    baseQuery.$or = [
+      { name: pattern },
+      { username: pattern },
+      { email: pattern },
+      { phone: pattern },
+    ];
+  }
+
+  if (isPlatformAdmin(req.user?.role)) {
+    return baseQuery;
+  }
+
+  const managedRoles = getManagedRoles(req.user?.role);
+  const roleCondition = managedRoles.length ? { role: { $in: managedRoles } } : null;
+
+  return roleCondition
+    ? { ...baseQuery, $or: baseQuery.$or ? [...baseQuery.$or, roleCondition, { _id: req.user._id }] : [roleCondition, { _id: req.user._id }] }
+    : { ...baseQuery, _id: req.user._id };
+};
+
 router.use(authenticate);
 router.use(authorize('head', 'admin', 'super_admin'));
 
 router.get('/', (req, res) => {
-  const managedRoles = getManagedRoles(req.user?.role);
-  // Allow seeing own user even if there are no managed roles
-  const baseQuery: any = { ...scopedUserQuery(req) };
-  const roleCondition = managedRoles.length ? { role: { $in: managedRoles } } : null;
-  const query: any = roleCondition ? { ...baseQuery, $or: [roleCondition, { _id: req.user._id }] } : { ...baseQuery, _id: req.user._id };
+  const query = buildUserListQuery(req);
 
   User.find(query)
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
@@ -35,10 +64,7 @@ router.get('/', (req, res) => {
 });
 
 router.get('/all', (req, res) => {
-  const managedRoles = getManagedRoles(req.user?.role);
-  const baseQuery: any = { ...scopedUserQuery(req) };
-  const roleCondition = managedRoles.length ? { role: { $in: managedRoles } } : null;
-  const query: any = roleCondition ? { ...baseQuery, $or: [roleCondition, { _id: req.user._id }] } : { ...baseQuery, _id: req.user._id };
+  const query = buildUserListQuery(req);
 
   User.find(query)
     .select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt')
