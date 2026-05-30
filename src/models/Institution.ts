@@ -19,6 +19,7 @@ export interface IInstitution extends Document {
     studentLimit?: number;
     monthlyPrice?: number;
     yearlyPrice?: number;
+    baseDueAmount?: number;
     monthlySmsLimit?: number;
     yearlyDiscountPercent?: number;
     billingCycle?: 'monthly' | 'yearly';
@@ -45,6 +46,10 @@ export interface IInstitution extends Document {
     paymentVerifyStatus?: 'pending' | 'verified' | 'failed';
     paymentVerifiedAt?: Date;
     smsUsed?: number;
+    smsChargeAmount?: number;
+    smsChargeBreakdown?: Record<string, any>;
+    smsChargePeriodStart?: Date;
+    smsChargePeriodEnd?: Date;
     smsPeriodStart?: Date;
     smsPeriodEnd?: Date;
   };
@@ -92,6 +97,7 @@ const InstitutionSchema: Schema = new Schema({
     studentLimit: { type: Number, default: 100 },
     monthlyPrice: { type: Number, default: 300 },
     yearlyPrice: { type: Number, default: 3000 },
+    baseDueAmount: { type: Number, default: 400 },
     monthlySmsLimit: { type: Number, default: 100 },
     yearlyDiscountPercent: { type: Number, default: 17 },
     billingCycle: { type: String, enum: ['monthly', 'yearly'], default: 'monthly' },
@@ -118,6 +124,11 @@ const InstitutionSchema: Schema = new Schema({
     paymentVerifyStatus: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' },
     paymentVerifiedAt: { type: Date },
     smsUsed: { type: Number, default: 0 },
+    smsChargeAmount: { type: Number, default: 0 },
+    smsChargeBreakdown: { type: Schema.Types.Mixed, default: {} },
+    smsChargePeriodStart: { type: Date },
+    smsChargePeriodEnd: { type: Date },
+    smsBalance: { type: Number, default: 0 },
     smsPeriodStart: { type: Date },
     smsPeriodEnd: { type: Date },
   },

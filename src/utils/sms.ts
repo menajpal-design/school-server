@@ -1,4 +1,4 @@
-import { canUseSms, incrementSmsUsage } from '../services/billingService';
+import { canUseSms, incrementSmsUsage, getSmsChargeAmount, getSmsChargeRate, recordSmsCharge } from '../services/billingService';
 import SmsLog from '../models/SmsLog';
 
 interface SMSOptions {
@@ -13,6 +13,8 @@ interface SMSOptions {
   purpose?: string;
   studentId?: any;
   parentId?: any;
+  smsChargeRate?: number;
+  smsChargeAmount?: number;
 }
 
 interface CredentialSmsOptions {
@@ -45,6 +47,12 @@ const markSmsUsed = async (options: SMSOptions, count?: number) => {
   if (options.institutionId) await incrementSmsUsage(options.institutionId, count ?? recipientsFor(options.to).filter(Boolean).length);
 };
 
+const buildChargeMeta = (options: SMSOptions, count = 1) => {
+  const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose);
+  const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose);
+  return { smsChargeRate, smsChargeAmount };
+};
+
 export const buildCredentialSmsMessage = ({
   appName = process.env.APP_NAME || 'EASY SCHOOL',
   loginUrl = process.env.FRONTEND_URL || 'https://www.easyschool.live/login',
@@ -67,6 +75,7 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
   if (!options.institutionId) return;
   const phoneNumbers = recipientsFor(options.recipientPhone || options.to).map(normalizePhone).filter(Boolean);
   const names = options.recipientName ? recipientsFor(options.recipientName) : phoneNumbers;
+  const { smsChargeRate, smsChargeAmount } = buildChargeMeta(options, phoneNumbers.length || 1);
   for (let i = 0; i < phoneNumbers.length; i += 1) {
     const phoneNumber = phoneNumbers[i];
     try {
@@ -81,6 +90,8 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
         type: options.type || 'notification',
         purpose: options.purpose || options.type || 'notification',
         provider: SMS_PROVIDER,
+        unitCharge: smsChargeRate,
+        chargeAmount: smsChargeAmount / Math.max(phoneNumbers.length, 1),
         status,
         studentId: options.studentId,
         parentId: options.parentId,
@@ -108,6 +119,12 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
   let successCount = 0;
   for (let i = 0; i < recipients.length; i += 1) {
     const phoneNumber = recipients[i];
+    // Reserve monetary SMS balance before sending
+    const chargeResult = await recordSmsCharge(options.institutionId, 1, options.type, options.purpose);
+    if (chargeResult && (chargeResult as any).insufficient) {
+      await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', 'Insufficient SMS balance');
+      continue;
+    }
     try {
       const url = new URL(SMS_API_URL);
       url.searchParams.set('key', SMS_API_KEY);
@@ -116,12 +133,22 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
       const response = await fetch(url.toString(), { method: 'GET' });
       const responseText = await response.text();
       if (!response.ok || isFailureResponse(responseText)) await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', `HTTP ${response.status}`, responseText);
-      else { successCount += 1; await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'sent', undefined, responseText); }
+      else {
+        successCount += 1;
+        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'sent', undefined, responseText);
+        // charge already applied before send
+      }
     } catch (error) {
+      // Attempt to refund the charge when send fails
+      try {
+        const chargeMeta = buildChargeMeta(options, 1);
+        await (await import('../services/billingService')).refundSmsCharge(options.institutionId, 1, chargeMeta.smsChargeAmount, options.type, options.purpose);
+      } catch (e) {
+        console.error('Failed to refund SMS charge after send error:', e);
+      }
       await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', String(error));
     }
   }
-  if (successCount > 0) await markSmsUsed(options, successCount);
   return successCount === recipients.length;
 };
 
@@ -142,5 +169,8 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
 
 export const sendBulkSMS = async (recipients: string[], message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: recipients, message, institutionId, type: 'notification', purpose: 'bulk' });
 export const sendAttendanceReminderSMS = async (phoneNumber: string, studentName: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: `Dear Parent, ${studentName} was marked absent today. Please contact the school if this is an error.`, institutionId, type: 'attendance', purpose: 'attendance_absent', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
+export const sendAttendanceDailySMS = async (phoneNumber: string, studentName: string, status: 'present' | 'absent' | 'late' | 'leave', institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: `Dear Parent, ${studentName} was marked ${status} today.`, institutionId, type: 'attendance', purpose: 'attendance_daily', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
+export const sendResultSMS = async (phoneNumber: string, studentName: string, summary: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: `Dear Parent, result update for ${studentName}: ${summary}`.substring(0, 160), institutionId, type: 'notification', purpose: 'result_published', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
 export const sendFeeDueSMS = async (phoneNumber: string, studentName: string, dueAmount: number, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: `Dear Parent, fee of ${dueAmount} is due for ${studentName}. Please pay within 7 days.`, institutionId, type: 'fee', purpose: 'fee_due', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
+export const sendMonthlyParentSummarySMS = async (phoneNumber: string, studentName: string, message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: message.substring(0, 160), institutionId, type: 'monthly_parent', purpose: 'monthly_parent', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
 export const sendNotificationSMS = async (phoneNumber: string, message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: message.substring(0, 160), institutionId, type: 'notification', purpose: 'notification' });

@@ -1,7 +1,7 @@
 import Attendance from '../models/Attendance';
 import Result from '../models/Result';
 import Student from '../models/Student';
-import { sendNotificationSMS } from '../utils/sms';
+import { sendMonthlyParentSummarySMS } from '../utils/sms';
 
 export interface MonthlySummaryOptions {
   institutionId: string;
@@ -163,7 +163,7 @@ export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptio
       continue;
     }
 
-    const smsSent = await sendNotificationSMS(student.guardianPhone, message, options.institutionId);
+    const smsSent = await sendMonthlyParentSummarySMS(student.guardianPhone, studentName, message, options.institutionId);
     if (smsSent) {
       sent += 1;
     } else {

@@ -11,6 +11,8 @@ export interface ISmsLog extends Document {
   type: 'attendance' | 'fee' | 'notice' | 'notification' | 'admission' | 'credentials' | 'monthly_parent' | 'other';
   purpose?: string;
   provider?: string;
+  unitCharge?: number;
+  chargeAmount?: number;
   status: 'sent' | 'failed' | 'pending' | 'delivered';
   studentId?: mongoose.Types.ObjectId;
   parentId?: mongoose.Types.ObjectId;
@@ -36,6 +38,8 @@ const SmsLogSchema = new Schema<ISmsLog>(
     type: { type: String, enum: ['attendance', 'fee', 'notice', 'notification', 'admission', 'credentials', 'monthly_parent', 'other'], default: 'notification' },
     purpose: { type: String },
     provider: { type: String },
+    unitCharge: { type: Number, default: 0 },
+    chargeAmount: { type: Number, default: 0 },
     status: { type: String, enum: ['sent', 'failed', 'pending', 'delivered'], default: 'pending' },
     studentId: { type: Schema.Types.ObjectId, ref: 'Student' },
     parentId: { type: Schema.Types.ObjectId, ref: 'Parent' },

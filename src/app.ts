@@ -52,7 +52,12 @@ import SmsLog from './models/SmsLog';
 import { config } from './config/config';
 import './config/tenantStorage';
 import storageConfigGuard from './middlewares/storageConfigGuard';
+import csrfRoutes from './routes/csrf';
+import { csrfProtection } from './middlewares/csrf';
+import { sanitizeRequest } from './middlewares/sanitize';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
+import { requestLogger, attachRequestId } from './middlewares/requestLogger';
+import logger from './utils/logger';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -60,7 +65,8 @@ const cfg = config();
 const splitOrigins = (value?: string | null): string[] => (value || '').split(',').map((origin) => origin.trim()).filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
 const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true' || process.env.ALLOWED_ORIGINS === '*';
 const envOrigins = new Set<string>([cfg.frontendUrl, cfg.mobileUrl, cfg.androidUrl, cfg.staticServerUrl, ...splitOrigins(process.env.ALLOWED_ORIGINS), ...splitOrigins(process.env.FRONTEND_URL), ...splitOrigins(process.env.MOBILE_URL), ...splitOrigins(process.env.ANDROID_URL)].filter(Boolean));
-const allowedHeaders = new Set<string>(['Content-Type', 'Authorization', 'x-institution-id', 'X-Institution-Id', 'x-school-id', 'X-School-Id', 'Origin', 'X-Requested-With', 'Accept', 'x-access-token', 'X-Access-Token', ...splitOrigins(process.env.CORS_ALLOWED_HEADERS)].filter(Boolean));
+const CSRF_HEADER = (process.env.CSRF_HEADER_NAME || 'x-csrf-token');
+const allowedHeaders = new Set<string>(['Content-Type', 'Authorization', CSRF_HEADER, 'x-institution-id', 'X-Institution-Id', 'x-school-id', 'X-School-Id', 'Origin', 'X-Requested-With', 'Accept', 'x-access-token', 'X-Access-Token', ...splitOrigins(process.env.CORS_ALLOWED_HEADERS)].filter(Boolean));
 const isAllowedOrigin = (origin?: string): boolean => {
   if (!origin || allowAllOrigins) return true;
   const normalized = origin.replace(/\/$/, '');
@@ -87,6 +93,17 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '50mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.RATE_LIMIT_MAX || 300), standardHeaders: true, legacyHeaders: false }));
 app.use(storageConfigGuard);
+app.use(attachRequestId);
+app.use(requestLogger as any);
+app.use(sanitizeRequest);
+// CSRF token endpoint (no auth required). Enable CSRF protection only in production.
+app.use('/api/csrf', csrfRoutes);
+if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
+  app.use(csrfProtection);
+} else {
+  // In development disable CSRF middleware to simplify local testing (tokens still issued)
+  console.log('⚠️ CSRF protection disabled in development mode');
+}
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/seed', seedRoutes);
@@ -137,7 +154,7 @@ app.use('/uploads', express.static('uploads'));
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
 app.get('/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
 app.get('/', (req, res) => res.json({ message: 'easy school School Management System API', version: '1.0.0', status: 'running' }));
-app.use((err: any, req: Request, res: Response, next: NextFunction) => { setCorsHeaders(req, res); next(err); });
+app.use((err: any, req: Request, res: Response, next: NextFunction) => { setCorsHeaders(req, res); logger.error('Unhandled middleware error', { err: err?.message || err, path: req?.originalUrl }); next(err); });
 app.use(notFoundHandler);
 app.use(errorHandler);
 const SMS_RETENTION_DAYS = Number(process.env.SMS_RETENTION_DAYS || 30);

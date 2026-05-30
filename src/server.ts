@@ -1,8 +1,15 @@
 import dotenv from 'dotenv';
 import connectDB from './config/database';
 import app from './app';
+import * as Sentry from '@sentry/node';
+import logger from './utils/logger';
 
 dotenv.config();
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN });
+  logger.info('Sentry initialized');
+}
 
 const PORT = process.env.PORT || 5000;
 
@@ -31,7 +38,7 @@ const server = app.listen(PORT, () => {
 
 // Handle server errors
 server.on('error', (err: any) => {
-  console.error('❌ Server error:', err);
+  logger.error('❌ Server error:', err);
 });
 
 export default app;

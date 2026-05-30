@@ -3,7 +3,8 @@ import Stripe from 'stripe';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
-import { activateBilling } from '../services/billingService';
+import { activateBilling, getCurrentSmsBillingSummary } from '../services/billingService';
+import SmsTopup from '../models/SmsTopup';
 import { verifyGatewayPayment } from '../services/paymentGateway';
 
 const router = express.Router();
@@ -22,7 +23,8 @@ const buildBilling = (input: any = {}, current: any = {}) => {
   const planCode = input.planCode || current.planCode || 'students_100';
   const billingCycle = input.billingCycle || current.billingCycle || 'monthly';
   const useEasySchoolStorage = input.useEasySchoolStorage ?? current.useEasySchoolStorage ?? true;
-  const { plan, storageAmount, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage);
+  const smsChargeAmount = Number(input.smsChargeAmount ?? current.smsChargeAmount ?? 0);
+  const { plan, baseAmount, storageAmount, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage, smsChargeAmount);
   const isPaymentReceived = input.isPaymentReceived ?? current.isPaymentReceived ?? false;
   const receivedAmount = Number(input.receivedAmount ?? current.receivedAmount ?? 0);
   const billingStatus = input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : 'pending');
@@ -39,7 +41,12 @@ const buildBilling = (input: any = {}, current: any = {}) => {
     billingCycle,
     useEasySchoolStorage,
     storageMonthlyPrice: EASY_SCHOOL_STORAGE_MONTHLY_PRICE,
+    baseDueAmount: baseAmount + storageAmount,
     storageAmount,
+    smsChargeAmount,
+    smsChargeBreakdown: input.smsChargeBreakdown ?? current.smsChargeBreakdown ?? {},
+    smsChargePeriodStart: input.smsChargePeriodStart ?? current.smsChargePeriodStart,
+    smsChargePeriodEnd: input.smsChargePeriodEnd ?? current.smsChargePeriodEnd,
     dueAmount: total,
     billingStatus,
     isPaymentReceived,
@@ -115,12 +122,15 @@ const buildStripeCheckoutBilling = (institution: any, session: StripeCheckoutSes
   const useEasySchoolStorage = metadata.useEasySchoolStorage === undefined
     ? institution?.billing?.useEasySchoolStorage !== false
     : metadata.useEasySchoolStorage === true || metadata.useEasySchoolStorage === 'true';
-  const { total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage);
   const currentBilling = (institution?.billing?.toObject?.() || institution?.billing || {});
+  const smsChargeAmount = Number(metadata.smsChargeAmount ?? currentBilling.smsChargeAmount ?? 0);
+  const { total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage, smsChargeAmount);
   return buildBilling({
     planCode,
     billingCycle,
     useEasySchoolStorage,
+    smsChargeAmount,
+    smsChargeBreakdown: currentBilling.smsChargeBreakdown || {},
     paymentGateway: 'stripe',
     paymentOrderId: session.id,
     paymentTime: new Date().toISOString(),
@@ -147,8 +157,8 @@ router.post('/billing/stripe/checkout', authenticate, async (req, res) => {
     const useEasySchoolStorage = req.body?.useEasySchoolStorage !== undefined
       ? Boolean(req.body.useEasySchoolStorage)
       : institution.billing?.useEasySchoolStorage !== false;
-
-    const { plan, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage);
+    const smsChargeAmount = Number(institution.billing?.smsChargeAmount || 0);
+    const { plan, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage, smsChargeAmount);
     const frontendUrl = getFrontendBaseUrl();
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -172,6 +182,7 @@ router.post('/billing/stripe/checkout', authenticate, async (req, res) => {
         planCode,
         billingCycle,
         useEasySchoolStorage: String(useEasySchoolStorage),
+          smsChargeAmount: String(smsChargeAmount),
         amount: String(total),
       },
     });
@@ -257,7 +268,26 @@ router.get('/profile', authenticate, async (req, res) => {
   try {
     const institution = (req as any).institution || await Institution.findById(req.user.institutionId).lean().maxTimeMS(3000);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
-    res.json({ institution });
+    const smsBilling = await getCurrentSmsBillingSummary(req.user.institutionId).catch(() => null);
+    const currentBilling = (institution as any).billing || {};
+    const smsChargeAmount = Number(smsBilling?.totalAmount ?? currentBilling.smsChargeAmount ?? 0);
+    const baseDueAmount = Number(currentBilling.baseDueAmount ?? Math.max(Number(currentBilling.dueAmount || 0) - Number(currentBilling.smsChargeAmount || 0), 0));
+    const billing = {
+      ...currentBilling,
+      baseDueAmount,
+      smsChargeAmount,
+      smsChargeBreakdown: smsBilling?.breakdown || currentBilling.smsChargeBreakdown || {},
+      smsChargePeriodStart: smsBilling?.periodStart || currentBilling.smsChargePeriodStart,
+      smsChargePeriodEnd: smsBilling?.periodEnd || currentBilling.smsChargePeriodEnd,
+      dueAmount: Number(baseDueAmount + smsChargeAmount),
+      monthlyBillAmount: Number(baseDueAmount + smsChargeAmount),
+      smsMonthlySummary: smsBilling ? {
+        totalCount: smsBilling.totalCount,
+        totalAmount: smsBilling.totalAmount,
+        breakdown: smsBilling.breakdown,
+      } : currentBilling.smsMonthlySummary,
+    };
+    res.json({ institution: { ...institution, billing } });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load institution profile', error });
   }
@@ -367,6 +397,114 @@ router.post('/billing/payment', authenticate, async (req, res) => {
     res.json({ institution, verification: finalVerification, message: finalVerification.verified ? 'Payment verified and school activated.' : 'Payment submitted. Admin will verify and activate the school.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save payment', error });
+  }
+});
+
+// Top-up SMS monetary balance for the current institution
+router.post('/sms/topup', authenticate, async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount || 0);
+    const method = String(req.body?.method || 'manual');
+    const meta = req.body?.meta || {};
+    if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid top-up amount' });
+
+    // Only privileged roles can top-up: admin, super_admin, finance_officer, head
+    const allowedRoles = ['admin', 'super_admin', 'finance_officer', 'head'];
+    if (!allowedRoles.includes((req.user as any).role)) return res.status(403).json({ message: 'Permission denied' });
+
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    // Record the top-up transaction
+    const topup = await SmsTopup.create({ institutionId: institution._id, amount: Number(amount), method, meta, createdBy: req.user._id });
+
+    // Atomically increment smsBalance
+    const updated = await Institution.findByIdAndUpdate(institution._id, { $inc: { 'billing.smsBalance': Number(amount) } }, { new: true });
+
+    res.json({ message: 'SMS balance topped up', topup, billing: (updated as any).billing });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to top-up SMS balance', error });
+  }
+});
+
+router.get('/sms/topup/history', authenticate, async (req, res) => {
+  try {
+    const allowedRoles = ['admin', 'super_admin', 'finance_officer', 'head'];
+    if (!allowedRoles.includes((req.user as any).role)) return res.status(403).json({ message: 'Permission denied' });
+
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+    const history = await SmsTopup.find({ institutionId: req.user.institutionId })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('createdBy', 'name username role')
+      .lean();
+
+    res.json({ history });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load SMS top-up history', error });
+  }
+});
+
+router.post('/sms/topup/payment', authenticate, async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount || 0);
+    const paymentGateway = String(req.body?.paymentGateway || 'popup');
+    const paymentOrderId = String(req.body?.paymentOrderId || '');
+    const paymentTrxId = String(req.body?.paymentTrxId || '');
+    const paymentSenderNumber = String(req.body?.paymentSenderNumber || '');
+    const paymentTime = req.body?.paymentTime ? String(req.body.paymentTime) : new Date().toISOString();
+    const popupPaymentResponse = req.body?.popupPaymentResponse || {};
+    const popupVerification = req.body?.popupVerification || {};
+
+    if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid top-up amount' });
+
+    const allowedRoles = ['admin', 'super_admin', 'finance_officer', 'head'];
+    if (!allowedRoles.includes((req.user as any).role)) return res.status(403).json({ message: 'Permission denied' });
+
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    const verification = await verifyGatewayPayment({
+      trxId: paymentTrxId,
+      amount,
+      senderNumber: paymentSenderNumber,
+      gateway: paymentGateway,
+      orderId: paymentOrderId,
+      paymentTime,
+      domain: process.env.PAYMENT_GATEWAY_DOMAIN,
+    });
+
+    const popupVerified = Boolean(
+      popupPaymentResponse?.status === 'verified' ||
+      popupPaymentResponse?.data?.status === 'verified' ||
+      popupVerification?.status === 'verified'
+    );
+
+    if (!verification.verified && !popupVerified) {
+      return res.status(400).json({ message: verification.message || 'SMS top-up payment verification failed', verification });
+    }
+
+    const topup = await SmsTopup.create({
+      institutionId: institution._id,
+      amount,
+      method: paymentGateway,
+      meta: {
+        verification: verification.data || {},
+        popupPaymentResponse,
+        popupVerification,
+      },
+      createdBy: req.user._id,
+    });
+
+    const updated = await Institution.findByIdAndUpdate(
+      institution._id,
+      { $inc: { 'billing.smsBalance': amount } },
+      { new: true }
+    );
+
+    res.json({ message: 'SMS balance topped up successfully', topup, billing: (updated as any)?.billing, verification });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to process SMS top-up payment', error });
   }
 });
 

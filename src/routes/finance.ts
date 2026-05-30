@@ -157,6 +157,15 @@ router.get('/', authenticate, canManageFinance(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load finance data', error }));
 });
 
+router.get('/dashboard', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const summary = await buildSummary(req.user.institutionId);
+    res.json({ summary });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load finance dashboard', error });
+  }
+});
+
 router.get('/payments', authenticate, canManageFinance(), (req, res) => {
   populatePayment()
     .where({ institutionId: req.user.institutionId })

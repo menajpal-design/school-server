@@ -8,6 +8,7 @@ import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
+import { sendAttendanceDailySMS, sendAttendanceReminderSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -157,6 +158,17 @@ const canMarkAttendanceRecords = async (req: any, records: any[]) => {
   return true;
 };
 
+const notifyStudentAttendance = async (studentId: any, status: 'present' | 'absent' | 'late' | 'leave', institutionId: any) => {
+  const student = await Student.findById(studentId).populate('userId', 'name').lean();
+  if (!student || !student.guardianPhone) return;
+  const studentName = (student as any).userId?.name || student.guardianName || 'Student';
+  if (status === 'absent') {
+    await sendAttendanceReminderSMS(student.guardianPhone, studentName, institutionId);
+    return;
+  }
+  await sendAttendanceDailySMS(student.guardianPhone, studentName, status, institutionId);
+};
+
 const normalizeScanCode = (value: any) => String(value || '').trim();
 
 const findStudentByScanCode = async (institutionId: any, code: string) => {
@@ -247,6 +259,9 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       saved.push(attendance);
+      if (userType === 'student' && record.studentId) {
+        await notifyStudentAttendance(record.studentId, finalStatus, req.user.institutionId);
+      }
     }
 
     res.status(201).json({ attendance: saved });
@@ -295,6 +310,8 @@ router.post('/scan-present', authenticate, canScanIDCard(), async (req, res) => 
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
+    await notifyStudentAttendance(record.studentId, 'present', req.user.institutionId);
 
     res.status(201).json({
       attendance,

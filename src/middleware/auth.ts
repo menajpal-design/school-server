@@ -82,7 +82,14 @@ const expireInstitutionSnapshotIfNeeded = (institution: any) => {
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
+    let token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+      // Fallback: read from cookie named in env or default
+      const authCookieName = process.env.AUTH_COOKIE_NAME || 'es_token';
+      const cookieHeader = req.headers.cookie || '';
+      const match = cookieHeader.split(';').map(s => s.trim()).find((c) => c.startsWith(`${authCookieName}=`));
+      if (match) token = decodeURIComponent(match.split('=')[1] || '');
+    }
 
     if (!token) {
       return res.status(401).json({ message: 'Access denied. No token provided.' });

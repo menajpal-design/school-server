@@ -1,5 +1,6 @@
 import express from 'express';
-import { register, login, getProfile, updateProfile, changePassword } from '../controllers/auth';
+import { register, login, getProfile, updateProfile, changePassword, logout } from '../controllers/auth';
+import { refreshToken } from '../controllers/auth';
 import { authenticate } from '../middleware/auth';
 import { validateBody } from '../validators/common';
 import { changePasswordSchema, forgotPasswordSchema, loginSchema, registerSchema } from '../validators/auth';
@@ -12,6 +13,8 @@ const router = express.Router();
 
 router.post('/register', validateBody(registerSchema), register);
 router.post('/login', validateBody(loginSchema), login);
+router.post('/logout', logout);
+router.post('/refresh', refreshToken);
 router.get('/profile', authenticate, getProfile);
 router.put('/profile', authenticate, updateProfile);
 router.put('/change-password', authenticate, validateBody(changePasswordSchema), changePassword);

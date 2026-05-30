@@ -48,6 +48,15 @@ const UserSchema: Schema = new Schema({
   timestamps: true
 });
 
+// Store refresh tokens for session management (hashed)
+UserSchema.add({
+  refreshTokens: [{
+    tokenHash: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date }
+  }]
+});
+
 // Index for better query performance
 UserSchema.index({ email: 1, institutionId: 1 }, { sparse: true });
 UserSchema.index({ username: 1, institutionId: 1 });

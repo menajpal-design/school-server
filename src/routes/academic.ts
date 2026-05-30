@@ -10,6 +10,7 @@ import Teacher from '../models/Teacher';
 import Attendance from '../models/Attendance';
 import IDCard from '../models/IDCard';
 import Institution from '../models/Institution';
+import { sendResultSMS } from '../utils/sms';
 
 const router = express.Router();
 
@@ -638,6 +639,18 @@ router.post('/results/publish', authenticate, canManageAcademic(), async (req, r
     }
 
     await updateResultWorkflow(req, 'published');
+    const studentIds = Array.from(new Set((data.rows || []).map((row: any) => String(row.studentId)).filter(Boolean)));
+    const students = await Student.find({ _id: { $in: studentIds }, institutionId: req.user.institutionId })
+      .populate('userId', 'name')
+      .lean();
+    const studentMap = new Map(students.map((student: any) => [String(student._id), student]));
+    for (const row of data.rows || []) {
+      const student = studentMap.get(String(row.studentId));
+      if (!student?.guardianPhone) continue;
+      const studentName = row.studentName || (student as any).userId?.name || student.guardianName || 'Student';
+      const summary = `${row.grade || 'N/A'} grade published${row.marksObtained !== undefined && row.marksObtained !== null ? `, marks ${row.marksObtained}` : ''}`;
+      await sendResultSMS(student.guardianPhone, studentName, summary, req.user.institutionId);
+    }
     res.json({ message: 'Results published' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to publish results', error });

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import User from '../models/User';
 import Institution from '../models/Institution';
 import Student from '../models/Student';
@@ -11,6 +12,31 @@ import { ensureDatabaseReady } from '../config/database';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
+
+const isProduction = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+const authCookieName = process.env.AUTH_COOKIE_NAME || 'es_token';
+const refreshCookieName = process.env.REFRESH_COOKIE_NAME || 'es_refresh';
+const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRES || '15m';
+const refreshTokenDays = Number(process.env.REFRESH_TOKEN_DAYS || 7);
+
+const cookieOptions = (days = 7) => {
+  const opts: any = {
+    httpOnly: true,
+    secure: isProduction,
+    path: '/',
+    maxAge: days * 24 * 60 * 60 * 1000,
+  };
+  opts.sameSite = isProduction ? 'none' : 'lax';
+  return opts;
+};
+
+function generateRefreshToken() {
+  return crypto.randomBytes(64).toString('hex');
+}
+
+function hashToken(token: string) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 const buildAuthPayload = (message: string, token: string, user: any) => ({
   success: true,
@@ -105,7 +131,7 @@ export const register = async (req: Request, res: Response) => {
 
     if (!institutionId) {
       const billingCycle = req.body.billingCycle === 'yearly' ? 'yearly' : 'monthly';
-      const selected = calculatePlanDue(req.body.planCode, billingCycle, true);
+      const selected = calculatePlanDue(req.body.planCode, billingCycle, true, 0);
       const paymentAmount = Number(req.body.receivedAmount || 0);
       institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
@@ -125,6 +151,7 @@ export const register = async (req: Request, res: Response) => {
           billingCycle,
           useEasySchoolStorage: true,
           storageMonthlyPrice: 100,
+          baseDueAmount: selected.baseAmount + selected.storageAmount,
           storageAmount: selected.storageAmount,
           dueAmount: selected.total,
           billingStatus: 'pending',
@@ -133,6 +160,9 @@ export const register = async (req: Request, res: Response) => {
           paymentGateway: req.body.paymentGateway || 'bkash',
           paymentTrxId: req.body.paymentTrxId,
           paymentSenderNumber: req.body.paymentSenderNumber,
+              smsChargeAmount: 0,
+              smsChargeBreakdown: {},
+              smsBalance: 0,
         },
         settings: {
           backupSettings: {
@@ -164,10 +194,18 @@ export const register = async (req: Request, res: Response) => {
     });
     const populatedUser = await runWithTenantStorage(tenantContext, async () => User.findById(user._id).populate('institutionId'));
 
-    // Generate token
-    const token = jwt.sign({ id: user._id, institutionId }, jwtSecret(), {
-      expiresIn: '7d'
-    });
+    // Generate access token (short-lived) and refresh token (rotating)
+    const token = (jwt as any).sign({ id: user._id, institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
+    const refreshToken = generateRefreshToken();
+    const refreshHash = hashToken(refreshToken);
+    const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
+
+    // Save refresh token hash to user
+    try {
+      await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec();
+    } catch (e) {
+      console.warn('Failed to save refresh token:', e);
+    }
 
     const responseUser = {
         id: user._id,
@@ -181,6 +219,14 @@ export const register = async (req: Request, res: Response) => {
         institutionId,
         institution: serializeInstitution(populatedUser?.institutionId) || institutionId
     };
+
+    // Set authentication and refresh cookies
+    try {
+      res.cookie(authCookieName, token, cookieOptions(0)); // access token cookie short-lived (browser session)
+      res.cookie(refreshCookieName, refreshToken, cookieOptions(refreshTokenDays));
+    } catch (e) {
+      // ignore cookie errors
+    }
 
     res.status(201).json(buildAuthPayload('User registered successfully', token, responseUser));
   } catch (error) {
@@ -293,10 +339,14 @@ export const login = async (req: Request, res: Response) => {
       await syncUserToTenantStorage(tenantContext, user);
     }
 
-    // Generate token
-    const token = jwt.sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId }, jwtSecret(), {
-      expiresIn: '7d'
-    });
+    // Generate access token and refresh token
+    const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
+    const refreshToken = generateRefreshToken();
+    const refreshHash = hashToken(refreshToken);
+    const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
+    try {
+      await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec();
+    } catch (e) { console.warn('Failed to save refresh token:', (e as any)?.message || e); }
 
     const responseUser = {
         id: user._id,
@@ -310,6 +360,11 @@ export const login = async (req: Request, res: Response) => {
         institutionId: (user.institutionId as any)?._id || user.institutionId,
         institution: serializeInstitution(user.institutionId)
     };
+
+    try {
+      res.cookie(authCookieName, token, cookieOptions(0));
+      res.cookie(refreshCookieName, refreshToken, cookieOptions(refreshTokenDays));
+    } catch (e) {}
 
     res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) {
@@ -396,5 +451,70 @@ export const changePassword = async (req: Request, res: Response) => {
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error });
+  }
+};
+
+export const logout = async (req: Request, res: Response) => {
+  try {
+    // Clear auth and refresh cookies
+    try {
+      (res as any).clearCookie(authCookieName, cookieOptions());
+      (res as any).clearCookie(refreshCookieName, cookieOptions());
+    } catch (e) {}
+
+    // If refresh token provided, remove it from DB
+    try {
+      const provided = req.cookies?.[refreshCookieName] || req.body.refreshToken || '';
+      if (provided) {
+        const hash = hashToken(provided);
+        await User.updateOne({ 'refreshTokens.tokenHash': hash }, { $pull: { refreshTokens: { tokenHash: hash } } }).exec();
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    res.json({ success: true, message: 'Logged out' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to logout', error: String(error) });
+  }
+};
+
+export const refreshToken = async (req: Request, res: Response) => {
+  try {
+    const provided = req.cookies?.[refreshCookieName] || req.body.refreshToken || req.header('x-refresh-token') || '';
+    if (!provided) return res.status(400).json({ message: 'No refresh token provided' });
+    const hash = hashToken(provided);
+
+    // Find user with this refresh token
+    const user = await User.findOne({ 'refreshTokens.tokenHash': hash }).exec();
+    if (!user) return res.status(401).json({ message: 'Invalid refresh token' });
+
+    // Find the saved token and check expiry
+    const tokenEntry = (user as any).refreshTokens?.find((t: any) => t.tokenHash === hash);
+    if (!tokenEntry) return res.status(401).json({ message: 'Invalid refresh token' });
+    if (tokenEntry.expiresAt && new Date(tokenEntry.expiresAt) <= new Date()) {
+      // remove expired token
+      await User.updateOne({ _id: user._id }, { $pull: { refreshTokens: { tokenHash: hash } } }).exec();
+      return res.status(401).json({ message: 'Refresh token expired' });
+    }
+
+    // Rotate: issue new refresh token and remove the old one
+    const newRefresh = generateRefreshToken();
+    const newHash = hashToken(newRefresh);
+    const newExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
+
+    await User.updateOne({ _id: user._id, 'refreshTokens.tokenHash': hash }, { $set: { 'refreshTokens.$.tokenHash': newHash, 'refreshTokens.$.expiresAt': newExpiresAt } }).exec();
+
+    // Issue new access token
+    const access = (jwt as any).sign({ id: user._id, institutionId: (user as any).institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
+
+    try {
+      res.cookie(authCookieName, access, cookieOptions(0));
+      res.cookie(refreshCookieName, newRefresh, cookieOptions(refreshTokenDays));
+    } catch (e) {}
+
+    res.json(buildAuthPayload('Token refreshed', access, { id: user._id, name: user.name, email: user.email }));
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to refresh token', error: String(error) });
   }
 };
