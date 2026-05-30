@@ -295,7 +295,7 @@ router.get('/profile', authenticate, async (req, res) => {
 
 router.put('/profile', authenticate, async (req, res) => {
   try {
-    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'domains', 'logo', 'seal', 'headSignature'];
+    const allowed = ['name', 'eiin', 'type', 'address', 'phone', 'email', 'website', 'domains', 'logo', 'seal', 'headSignature', 'subdomain'];
     const update = allowed.reduce((acc: any, key) => {
       if (req.body[key] !== undefined) acc[key] = req.body[key];
       return acc;
@@ -328,11 +328,21 @@ router.put('/profile', authenticate, async (req, res) => {
       update.billing.billingStatus = (currentBilling as any)?.billingStatus || 'pending';
     }
 
-    const institution = await Institution.findOneAndUpdate(
-      { _id: req.user.institutionId },
-      update,
-      { new: true, runValidators: true }
-    );
+    let institution: any = null;
+    try {
+      institution = await Institution.findOneAndUpdate(
+        { _id: req.user.institutionId },
+        // normalize subdomain if provided
+        (update.subdomain ? { ...update, subdomain: String(update.subdomain).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40) } : update),
+        { new: true, runValidators: true }
+      );
+    } catch (err: any) {
+      // handle duplicate key (unique subdomain) gracefully
+      if (err && (err.code === 11000 || (err?.message || '').toLowerCase().includes('duplicate'))) {
+        return res.status(409).json({ message: 'Subdomain already in use. Please choose a different subdomain.' });
+      }
+      throw err;
+    }
 
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
     res.json({ institution, message: 'Institution profile updated' });
