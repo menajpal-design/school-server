@@ -205,7 +205,7 @@ const testMongoConnection = async (mongodbUrl?: string) => {
 
 router.use(authenticate);
 
-router.get('/site-config', authorize('head'), async (req: any, res) => {
+router.get('/site-config', authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const setting = await SiteSetting.findOne({ key: SITE_CONFIG_KEY }).lean();
     const value = setting?.value || {};
@@ -220,7 +220,7 @@ router.get('/site-config', authorize('head'), async (req: any, res) => {
   }
 });
 
-router.get('/storage-status', authorize('head'), async (req: any, res) => {
+router.get('/storage-status', authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const setting = await SiteSetting.findOne({ key: SITE_CONFIG_KEY }).lean();
     const value = setting?.value || {};
@@ -279,7 +279,7 @@ router.get('/storage-status', authorize('head'), async (req: any, res) => {
   }
 });
 
-router.put('/site-config', authorize('head'), async (req: any, res) => {
+router.put('/site-config', authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const existing = await SiteSetting.findOne({ key: SITE_CONFIG_KEY });
     const current = existing?.value || {};
@@ -302,7 +302,7 @@ router.put('/site-config', authorize('head'), async (req: any, res) => {
   }
 });
 
-router.get('/app-controls', authorize('head'), async (req: any, res) => {
+router.get('/app-controls', authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const setting = await SiteSetting.findOne({ key: APP_CONTROL_KEY }).lean();
     res.json({ settings: setting?.value || {} });
@@ -311,7 +311,7 @@ router.get('/app-controls', authorize('head'), async (req: any, res) => {
   }
 });
 
-router.put('/app-controls', authorize('head'), async (req: any, res) => {
+router.put('/app-controls', authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const setting = await SiteSetting.findOneAndUpdate(
       { key: APP_CONTROL_KEY },

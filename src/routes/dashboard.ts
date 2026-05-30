@@ -116,7 +116,7 @@ router.get('/attendance-overview', authenticate, async (req, res) => {
 });
 
 // Get fee collection overview
-router.get('/fee-overview', authenticate, authorize('head', 'finance_officer'), async (req, res) => {
+router.get('/fee-overview', authenticate, authorize('admin', 'super_admin', 'head', 'finance_officer'), async (req, res) => {
   try {
     const institutionId = req.user.institutionId;
 

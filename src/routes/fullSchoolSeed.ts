@@ -65,7 +65,7 @@ async function upsertClass(name: string, grade: string, institutionId: any, teac
   return { klass, section };
 }
 
-router.post('/full-school', authenticate, authorize('head'), async (req: any, res) => {
+router.post('/full-school', authenticate, authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const institutionId = req.user.institutionId;
     const initialSecret = String(req.body.initialPassword || '').trim();

@@ -13,7 +13,7 @@ const normalizeMongoItems = (config: any = {}) => {
   return items;
 };
 
-router.post('/test-archive', authenticate, authorize('head'), async (req: any, res) => {
+router.post('/test-archive', authenticate, authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const { webhookUrl, checkArchives } = req.body || {};
     if (webhookUrl) process.env.EVENT_WEBHOOK_URL = String(webhookUrl).trim();

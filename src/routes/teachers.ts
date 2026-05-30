@@ -104,7 +104,7 @@ const createIdCard = async (teacherId: any, req: any, photoUrl?: string) => {
 
 router.post('/', authenticate, async (req, res) => {
   try {
-    if (req.user.role !== 'head') return res.status(403).json({ message: 'Only school head can assign teachers' });
+    if (!['admin', 'super_admin', 'head'].includes(req.user.role)) return res.status(403).json({ message: 'Only school head or admin can assign teachers' });
     const email = String(req.body.email || `${String(req.body.employeeId || Date.now()).toLowerCase()}@teacher.local`);
     const existing = await User.findOne({ email });
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });

@@ -13,6 +13,6 @@ router.post('/mark-read', markAsRead);
 router.post('/mark-all', markAllRead);
 
 // Admin/create route
-router.post('/', authorize('head', 'assistant_head', 'staff'), createNotification);
+router.post('/', authorize('admin', 'super_admin', 'head', 'assistant_head', 'staff'), createNotification);
 
 export default router;

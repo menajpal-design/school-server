@@ -61,7 +61,7 @@ const syncUsersToTenant = async (institutionId: string, tenantContext: any) => {
   return migrated;
 };
 
-router.post('/apply-to-institution', authenticate, authorize('head'), async (req: any, res) => {
+router.post('/apply-to-institution', authenticate, authorize('admin', 'super_admin', 'head'), async (req: any, res) => {
   try {
     const setting: any = await SiteSetting.findOne({ key: 'site_config' }).lean();
     const value = setting?.value || {};

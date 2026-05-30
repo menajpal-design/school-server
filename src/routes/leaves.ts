@@ -142,7 +142,7 @@ router.post('/', async (req: any, res) => {
   }
 });
 
-router.patch('/:id/review', authorize('head', 'assistant_head'), async (req: any, res) => {
+router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant_head'), async (req: any, res) => {
   try {
     const status = req.body.status;
     if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ message: 'Invalid leave status.' });
