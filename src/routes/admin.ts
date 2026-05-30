@@ -317,16 +317,18 @@ router.get('/users', async (req, res) => {
         : row.institutionId,
     }));
 
-    const fetchCentralUsers = async () => {
+    const fetchPrimaryUsers = async () => runWithTenantStorage(null, async () => {
       const users = await User.find(query)
         .populate('institutionId', 'name type eiin')
         .select(selectFields)
         .sort({ createdAt: -1 })
         .lean();
       return populateInstitution(users as any[]);
-    };
+    });
 
-    const institutionList = await Institution.find({}).select('_id settings billing').lean();
+    const fetchPrimaryInstitutions = async () => runWithTenantStorage(null, async () => Institution.find({}).select('_id settings billing').lean());
+
+    const institutionList = await fetchPrimaryInstitutions();
     const tenantUsers = await Promise.all(institutionList.map(async (institution: any) => {
       const tenantContext = resolveTenantStorageContext(institution);
       if (!tenantContext?.mongoUri) return [];
@@ -344,7 +346,7 @@ router.get('/users', async (req, res) => {
       }
     }));
 
-    const merged = [...(await fetchCentralUsers()), ...tenantUsers.flat()];
+    const merged = [...(await fetchPrimaryUsers()), ...tenantUsers.flat()];
     const deduped = Array.from(new Map(merged.map((user: any) => [String(user._id), user])).values())
       .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
