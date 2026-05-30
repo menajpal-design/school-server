@@ -24,12 +24,22 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
 
   // If header is present, require match with cookie (double-submit)
   if (header) {
-    if (!cookie || cookie !== header) return res.status(403).json({ message: 'Invalid CSRF token' });
+    if (!cookie || cookie !== header) {
+      const origin = String(req.headers.origin || '').toLowerCase();
+      const referer = String(req.headers.referer || '').toLowerCase();
+      console.warn('CSRF validation failed (header mismatch)', { cookie: cookie ? `${cookie.slice(0,6)}...` : null, header: header ? `${header.slice(0,6)}...` : null, origin, referer });
+      return res.status(403).json({ message: 'Invalid CSRF token', cookie: cookie || null, header: header || null, origin: req.headers.origin || null, referer: req.headers.referer || null });
+    }
     return next();
   }
 
   // No header provided: allow only when cookie exists and request is same-origin
-  if (!cookie) return res.status(403).json({ message: 'Invalid CSRF token' });
+  if (!cookie) {
+    const origin = String(req.headers.origin || '').toLowerCase();
+    const referer = String(req.headers.referer || '').toLowerCase();
+    console.warn('CSRF validation failed (no cookie)', { cookie: null, header: null, origin, referer });
+    return res.status(403).json({ message: 'Invalid CSRF token', cookie: null, header: null, origin: req.headers.origin || null, referer: req.headers.referer || null });
+  }
   try {
     const mainDomain = (process.env.MAIN_DOMAIN || '').toLowerCase();
     const origin = String(req.headers.origin || '').toLowerCase();
@@ -39,7 +49,10 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
   } catch (e) {
     // fallthrough to forbidden
   }
-  return res.status(403).json({ message: 'Invalid CSRF token' });
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  console.warn('CSRF validation failed (origin mismatch)', { cookie: cookie ? `${cookie.slice(0,6)}...` : null, header: null, origin, referer });
+  return res.status(403).json({ message: 'Invalid CSRF token', cookie: cookie || null, header: null, origin: req.headers.origin || null, referer: req.headers.referer || null });
 }
 
 // Helper to set csrf cookie on responses
