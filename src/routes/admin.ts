@@ -8,6 +8,21 @@ import { authenticate, authorize } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
 import { activateBilling } from '../services/billingService';
 import { verifyGatewayPayment } from '../services/paymentGateway';
+import Student from '../models/Student';
+import Teacher from '../models/Teacher';
+import Staff from '../models/Staff';
+import Attendance from '../models/Attendance';
+import Fee from '../models/Fee';
+import Document from '../models/Document';
+import IDCard from '../models/IDCard';
+import Notice from '../models/Notice';
+import Class from '../models/Class';
+import Section from '../models/Section';
+import Parent from '../models/Parent';
+import Subject from '../models/Subject';
+import Exam from '../models/Exam';
+import Result from '../models/Result';
+import ClassRoutine from '../models/ClassRoutine';
 
 const router = express.Router();
 
@@ -333,3 +348,77 @@ router.post('/users', async (req, res) => {
 });
 
 export default router;
+
+// Admin-level backup/export and import (super_admin only)
+router.get('/backup/export-all', async (req: any, res) => {
+  try {
+    if (req.user?.role !== 'super_admin') return res.status(403).json({ message: 'Forbidden' });
+    const collections: any = {};
+    const institutionList = await Institution.find().lean();
+    collections.institutions = institutionList;
+    collections.users = await User.find().lean();
+    collections.students = await Student.find().lean();
+    collections.teachers = await Teacher.find().lean();
+    collections.staff = await Staff.find().lean();
+    collections.attendance = await Attendance.find().lean();
+    collections.fees = await Fee.find().lean();
+    collections.documents = await Document.find().lean();
+    collections.idcards = await IDCard.find().lean();
+    collections.notices = await Notice.find().lean();
+    collections.classes = await Class.find().lean();
+    collections.sections = await Section.find().lean();
+    collections.subjects = await Subject.find().lean();
+    collections.exams = await Exam.find().lean();
+    collections.results = await Result.find().lean();
+    collections.classroutines = await ClassRoutine.find().lean();
+
+    const payload = { exportedAt: new Date().toISOString(), collections };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="easy-school-full-backup-${Date.now()}.json"`);
+    return res.send(JSON.stringify(payload, null, 2));
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to export all data', error });
+  }
+});
+
+router.post('/backup/import-all', async (req: any, res) => {
+  try {
+    if (req.user?.role !== 'super_admin') return res.status(403).json({ message: 'Forbidden' });
+    const data = req.body?.collections || req.body;
+    if (!data || typeof data !== 'object') return res.status(400).json({ message: 'Invalid import payload' });
+
+    // Helper to insert ignoring _id to let Mongo generate new ids
+    const insertManySafe = async (Model: any, items: any[]) => {
+      if (!Array.isArray(items) || items.length === 0) return { inserted: 0 };
+      const docs = items.map((it: any) => {
+        const copy = { ...it };
+        delete copy._id;
+        return copy;
+      });
+      const result = await Model.insertMany(docs, { ordered: false }).catch(() => []);
+      return { inserted: Array.isArray(result) ? result.length : 0 };
+    };
+
+    const results: any = {};
+    if (data.institutions) results.institutions = await insertManySafe(Institution, data.institutions);
+    if (data.users) results.users = await insertManySafe(User, data.users);
+    if (data.students) results.students = await insertManySafe(Student, data.students);
+    if (data.teachers) results.teachers = await insertManySafe(Teacher, data.teachers);
+    if (data.staff) results.staff = await insertManySafe(Staff, data.staff);
+    if (data.attendance) results.attendance = await insertManySafe(Attendance, data.attendance);
+    if (data.fees) results.fees = await insertManySafe(Fee, data.fees);
+    if (data.documents) results.documents = await insertManySafe(Document, data.documents);
+    if (data.idcards) results.idcards = await insertManySafe(IDCard, data.idcards);
+    if (data.notices) results.notices = await insertManySafe(Notice, data.notices);
+    if (data.classes) results.classes = await insertManySafe(Class, data.classes);
+    if (data.sections) results.sections = await insertManySafe(Section, data.sections);
+    if (data.subjects) results.subjects = await insertManySafe(Subject, data.subjects);
+    if (data.exams) results.exams = await insertManySafe(Exam, data.exams);
+    if (data.results) results.results = await insertManySafe(Result, data.results);
+    if (data.classroutines) results.classroutines = await insertManySafe(ClassRoutine, data.classroutines);
+
+    return res.json({ message: 'Import completed', results });
+  } catch (error) {
+    return res.status(500).json({ message: 'Import failed', error });
+  }
+});
