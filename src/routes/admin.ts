@@ -20,6 +20,7 @@ import Subject from '../models/Subject';
 import Exam from '../models/Exam';
 import Result from '../models/Result';
 import ClassRoutine from '../models/ClassRoutine';
+import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
 const router = express.Router();
 
@@ -307,12 +308,47 @@ router.get('/users', async (req, res) => {
       const pattern = new RegExp(String(req.query.search), 'i');
       query.$or = [{ name: pattern }, { email: pattern }, { phone: pattern }, { username: pattern }];
     }
-    const users = await User.find(query)
-      .populate('institutionId', 'name type eiin')
-      .select('name username email role phone isActive permissions institutionId createdAt lastLogin')
-      .sort({ createdAt: -1 })
-      .lean();
-    res.json({ users });
+
+    const selectFields = 'name username email role phone isActive permissions institutionId createdAt lastLogin';
+    const populateInstitution = (rows: any[]) => rows.map((row: any) => ({
+      ...row,
+      institutionId: row.institutionId && typeof row.institutionId === 'object'
+        ? row.institutionId
+        : row.institutionId,
+    }));
+
+    const fetchCentralUsers = async () => {
+      const users = await User.find(query)
+        .populate('institutionId', 'name type eiin')
+        .select(selectFields)
+        .sort({ createdAt: -1 })
+        .lean();
+      return populateInstitution(users as any[]);
+    };
+
+    const institutionList = await Institution.find({}).select('_id settings billing').lean();
+    const tenantUsers = await Promise.all(institutionList.map(async (institution: any) => {
+      const tenantContext = resolveTenantStorageContext(institution);
+      if (!tenantContext?.mongoUri) return [];
+      try {
+        return await runWithTenantStorage(tenantContext, async () => {
+          const users = await User.find(query)
+            .populate('institutionId', 'name type eiin')
+            .select(selectFields)
+            .sort({ createdAt: -1 })
+            .lean();
+          return populateInstitution(users as any[]);
+        });
+      } catch {
+        return [];
+      }
+    }));
+
+    const merged = [...(await fetchCentralUsers()), ...tenantUsers.flat()];
+    const deduped = Array.from(new Map(merged.map((user: any) => [String(user._id), user])).values())
+      .sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+    res.json({ users: deduped });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load users', error });
   }
