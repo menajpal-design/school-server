@@ -13,6 +13,12 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
   const method = req.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
 
+  const path = req.originalUrl.split('?')[0];
+  // Public auth endpoints should remain usable without a CSRF token.
+  if (path.startsWith('/api/auth/register') || path.startsWith('/api/auth/login') || path.startsWith('/api/auth/forgot-password')) {
+    return next();
+  }
+
   const cookie = req.cookies?.[CSRF_COOKIE_NAME] || '';
   const header = (req.headers[CSRF_HEADER_NAME] as string) || '';
 
