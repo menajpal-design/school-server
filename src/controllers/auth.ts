@@ -269,6 +269,20 @@ export const login = async (req: Request, res: Response) => {
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
     console.log('Login attempt:', { identifier, emailQuery, hasInstitutionScope: !!institutionScope.institutionId });
 
+    const resolveInstitutionFromIdentifier = async () => {
+      if (tenantInstitution || mongoose.Types.ObjectId.isValid(institutionId)) return tenantInstitution;
+      try {
+        return await Institution.findOne({
+          $or: [
+            { email: emailQuery },
+            { phone: identifier },
+          ],
+        }).lean().maxTimeMS(5000);
+      } catch {
+        return null;
+      }
+    };
+
     const loginLookup = async () => {
       let user = await User.findOne({
         ...institutionScope,
@@ -317,6 +331,54 @@ export const login = async (req: Request, res: Response) => {
         })()
       : null;
     const loginResult = tenantResult || (await loginLookup());
+
+    // If no user was found and no explicit institution context was provided,
+    // try to infer the institution from the login identifier and retry inside tenant storage.
+    if ((!loginResult?.user || !loginResult?.isMatch) && !mongoose.Types.ObjectId.isValid(institutionId)) {
+      const inferredInstitution = await resolveInstitutionFromIdentifier();
+      if (inferredInstitution) {
+        tenantInstitution = inferredInstitution;
+        tenantContext = resolveTenantStorageContext(inferredInstitution);
+        if (tenantContext) {
+          try {
+            const inferredResult = await runWithTenantStorage(tenantContext, loginLookup);
+            if (inferredResult?.user && inferredResult?.isMatch) {
+              const { user, isMatch } = inferredResult;
+              const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
+              const refreshToken = generateRefreshToken();
+              const refreshHash = hashToken(refreshToken);
+              const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
+              try {
+                await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec();
+              } catch (e) { console.warn('Failed to save refresh token:', (e as any)?.message || e); }
+
+              const responseUser = {
+                id: user._id,
+                name: user.name,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                phone: user.phone,
+                isActive: user.isActive,
+                permissions: user.permissions || [],
+                institutionId: (user.institutionId as any)?._id || user.institutionId,
+                institution: serializeInstitution(user.institutionId)
+              };
+
+              try {
+                res.cookie(authCookieName, token, cookieOptions(0));
+                res.cookie(refreshCookieName, refreshToken, cookieOptions(refreshTokenDays));
+              } catch (e) {}
+
+              return res.json(buildAuthPayload('Login successful', token, responseUser));
+            }
+          } catch (error) {
+            console.warn('Inferred institution login lookup failed:', (error as any)?.message || error);
+          }
+        }
+      }
+    }
+
     const { user, isMatch } = tenantContext && !loginResult?.user ? await loginLookup() : loginResult;
 
     if (!user || !isMatch) {
