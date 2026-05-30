@@ -351,6 +351,20 @@ router.put('/profile', authenticate, async (req, res) => {
   }
 });
 
+// Check subdomain availability
+router.get('/subdomain/check', authenticate, async (req, res) => {
+  try {
+    const subdomain = String(req.query.subdomain || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40);
+    if (!subdomain) return res.status(400).json({ available: false, message: 'subdomain is required' });
+    const existing = await Institution.findOne({ subdomain });
+    if (!existing) return res.json({ available: true });
+    if (String(existing._id) === String(req.user.institutionId)) return res.json({ available: true });
+    return res.json({ available: false });
+  } catch (err) {
+    return res.status(500).json({ available: false, message: 'Failed to check subdomain' });
+  }
+});
+
 router.post('/billing/payment', authenticate, async (req, res) => {
   try {
     const institution = await Institution.findById(req.user.institutionId);
