@@ -273,6 +273,14 @@ const resolvePublicInstitution = async (req: any) => {
 
 router.get('/public/results/schools', async (req, res) => {
   try {
+    const tenantInstitution = (req as any).institution;
+    if (tenantInstitution) {
+      const school = await Institution.findOne({ _id: tenantInstitution._id, isActive: true })
+        .select('name type eiin address website domains subdomain')
+        .lean();
+      return res.json({ schools: school ? [school] : [] });
+    }
+
     const search = String(req.query.search || '').trim();
     const query: any = { isActive: true };
     if (search) {
@@ -283,7 +291,7 @@ router.get('/public/results/schools', async (req, res) => {
       ];
     }
     const schools = await Institution.find(query)
-      .select('name type eiin address website domains')
+      .select('name type eiin address website domains subdomain')
       .sort({ name: 1 })
       .limit(100)
       .lean();

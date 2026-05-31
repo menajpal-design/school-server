@@ -262,7 +262,7 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
-    const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || '');
+    const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || (req as any).institutionId || '');
     const institutionScope = mongoose.Types.ObjectId.isValid(institutionId) ? { institutionId } : {};
     let tenantInstitution: any = null;
     let tenantContext = null;

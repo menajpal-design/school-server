@@ -69,13 +69,21 @@ const admissionError = (error: any) => {
 
 router.get('/public/schools', async (req, res) => {
   const search = String(req.query.search || '').trim();
+  const tenantInstitution = (req as any).institution;
+
+  if (tenantInstitution) {
+    const school = await Institution.findOne({ _id: tenantInstitution._id, isActive: true })
+      .select('name type eiin address phone email website subdomain');
+    return res.json({ schools: school ? [school] : [] });
+  }
+
   const query: any = { isActive: true };
   if (search) query.$or = [
     { name: new RegExp(search, 'i') },
     { address: new RegExp(search, 'i') },
     { eiin: new RegExp(search, 'i') },
   ];
-  const schools = await Institution.find(query).select('name type eiin address phone email website').sort({ name: 1 }).limit(100);
+  const schools = await Institution.find(query).select('name type eiin address phone email website subdomain').sort({ name: 1 }).limit(100);
   res.json({ schools });
 });
 
