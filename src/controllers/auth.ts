@@ -11,6 +11,33 @@ import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
+const getRequestSubdomain = (req: Request) => {
+  const headerHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0] || '';
+  const mainDomain = (process.env.MAIN_DOMAIN || '').toLowerCase();
+  const hostParts = headerHost.split('.').filter(Boolean);
+  let subdomain = '';
+
+  if (mainDomain && headerHost.endsWith(mainDomain)) {
+    const suffix = mainDomain.split('.').length;
+    if (hostParts.length > suffix) {
+      subdomain = hostParts.slice(0, hostParts.length - suffix).join('.');
+    }
+  } else if (headerHost.endsWith('localhost') || headerHost.endsWith('127.0.0.1')) {
+    if (hostParts.length > 1) {
+      subdomain = hostParts.slice(0, hostParts.length - 1).join('.');
+    }
+  } else {
+    if (hostParts.length >= 3) subdomain = hostParts.slice(0, hostParts.length - 2).join('.');
+  }
+  
+  if (subdomain) {
+    const norm = subdomain.toLowerCase();
+    if (['www', 'app', 'api', 'admin'].includes(norm)) return '';
+    return norm;
+  }
+  return '';
+};
+
 const jwtSecret = () => process.env.JWT_SECRET || 'your_super_secret_key_with_at_least_32_characters_1234567890';
 
 const isProduction = (process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -108,6 +135,11 @@ export const register = async (req: Request, res: Response) => {
   try {
     if (!(await ensureDatabaseReady())) {
       return res.status(503).json({ message: 'Database is not connected' });
+    }
+
+    const subdomain = getRequestSubdomain(req);
+    if (subdomain) {
+      return res.status(403).json({ message: 'নিবন্ধন শুধুমাত্র প্রধান ডোমেইনে করা যাবে।' });
     }
 
     const { email, password, phone } = req.body;
@@ -350,6 +382,13 @@ export const login = async (req: Request, res: Response) => {
             const inferredResult = await runWithTenantStorage(tenantContext, loginLookup);
             if (inferredResult?.user && inferredResult?.isMatch) {
               const { user, isMatch } = inferredResult;
+              const subdomain = getRequestSubdomain(req);
+              if (!subdomain) {
+                const allowedRoles = ['head', 'superadmin', 'admin', 'platform_admin'];
+                if (!allowedRoles.includes(user.role)) {
+                  return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' });
+                }
+              }
               const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
               const refreshToken = generateRefreshToken();
               const refreshHash = hashToken(refreshToken);
@@ -394,6 +433,14 @@ export const login = async (req: Request, res: Response) => {
         message: 'Invalid credentials',
         errors: [errorMsg],
       });
+    }
+
+    const subdomain = getRequestSubdomain(req);
+    if (!subdomain) {
+      const allowedRoles = ['head', 'superadmin', 'admin', 'platform_admin'];
+      if (!allowedRoles.includes(user.role)) {
+        return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' });
+      }
     }
 
     // Update last login
