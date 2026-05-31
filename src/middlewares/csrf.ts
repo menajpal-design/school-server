@@ -82,3 +82,27 @@ export function setCsrfCookie(res: Response, token: string, req?: Request) {
     // ignore set-cookie errors
   }
 }
+
+// Simple cookie parser middleware to populate req.cookies
+export function cookieParser(req: Request, res: Response, next: NextFunction) {
+  if (!req.cookies) {
+    const cookieHeader = req.headers.cookie;
+    const cookies: Record<string, string> = {};
+    if (cookieHeader) {
+      cookieHeader.split(';').forEach((cookie) => {
+        const parts = cookie.split('=');
+        const name = parts.shift()?.trim();
+        const value = parts.join('=').trim();
+        if (name) {
+          try {
+            cookies[name] = decodeURIComponent(value);
+          } catch (e) {
+            cookies[name] = value;
+          }
+        }
+      });
+    }
+    (req as any).cookies = cookies;
+  }
+  next();
+}

@@ -54,7 +54,7 @@ import './config/tenantStorage';
 import storageConfigGuard from './middlewares/storageConfigGuard';
 import resolveTenant from './middleware/tenant';
 import csrfRoutes from './routes/csrf';
-import { csrfProtection } from './middlewares/csrf';
+import { csrfProtection, cookieParser } from './middlewares/csrf';
 import { sanitizeRequest } from './middlewares/sanitize';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requestLogger, attachRequestId } from './middlewares/requestLogger';
@@ -73,7 +73,7 @@ const isAllowedOrigin = (origin?: string): boolean => {
   const normalized = origin.replace(/\/$/, '');
   if (envOrigins.has(normalized)) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
-  if (/^https?:\/\/(www\.)?easyschool\.live$/i.test(normalized)) return true;
+  if (/^https?:\/\/([a-z0-9-]+\.)*easyschool\.live$/i.test(normalized)) return true;
   if (/^https:\/\/.*\.herokuapp\.com$/i.test(normalized)) return true;
   return false;
 };
@@ -104,6 +104,7 @@ app.use(storageConfigGuard);
 app.use(attachRequestId);
 app.use(requestLogger as any);
 app.use(sanitizeRequest);
+app.use(cookieParser);
 // CSRF token endpoint (no auth required). Enable CSRF protection only in production.
 app.use('/api/csrf', csrfRoutes);
 if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
