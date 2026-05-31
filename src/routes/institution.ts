@@ -359,7 +359,8 @@ router.get('/subdomain/check', async (req, res) => {
     if (!subdomain) return res.status(400).json({ available: false, message: 'subdomain is required' });
     const existing = await Institution.findOne({ subdomain });
     if (!existing) return res.json({ available: true });
-    if (String(existing._id) === String(req.user.institutionId)) return res.json({ available: true });
+    // If the caller is authenticated and the existing belongs to the same institution, allow it
+    if ((req as any).user && String(existing._id) === String((req as any).user.institutionId)) return res.json({ available: true });
     return res.json({ available: false });
   } catch (err) {
     return res.status(500).json({ available: false, message: 'Failed to check subdomain' });

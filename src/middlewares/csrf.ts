@@ -56,15 +56,24 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
 }
 
 // Helper to set csrf cookie on responses
-export function setCsrfCookie(res: Response, token: string) {
+export function setCsrfCookie(res: Response, token: string, req?: Request) {
   try {
+    // Determine secure flag using request (trust proxy must be set in app)
     const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
-    const cookieDomain = process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN || undefined;
-    const domainOpt = cookieDomain ? { domain: cookieDomain.startsWith('.') ? cookieDomain : `.${cookieDomain}` } : {};
+    const reqIsSecure = Boolean(req && ((req as any).secure || String(req.headers['x-forwarded-proto'] || '').toLowerCase().startsWith('https')));
+    const secureFlag = isProd ? reqIsSecure || true : false;
+
+    // Only use explicit COOKIE_DOMAIN if provided. Prefer host-only cookie (no domain) to avoid cross-subdomain issues.
+    const explicitCookieDomain = process.env.COOKIE_DOMAIN || undefined;
+    const domainOpt = explicitCookieDomain ? { domain: explicitCookieDomain.startsWith('.') ? explicitCookieDomain : `.${explicitCookieDomain}` } : {};
+
+    // SameSite=none REQUIRES Secure=true. Only use 'none' if secure. Otherwise use 'Lax' (safe for credentials when same-site).
+    const sameSiteOpt = secureFlag ? 'none' : 'lax';
+
     res.cookie(CSRF_COOKIE_NAME, token, {
       httpOnly: false,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
+      secure: secureFlag,
+      sameSite: sameSiteOpt as any,
       path: '/',
       maxAge: 24 * 60 * 60 * 1000,
       ...domainOpt,

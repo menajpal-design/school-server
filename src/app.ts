@@ -79,9 +79,14 @@ const isAllowedOrigin = (origin?: string): boolean => {
 };
 const setCorsHeaders = (req: Request, res: Response) => {
   const origin = req.headers.origin as string | undefined;
-  if (origin && isAllowedOrigin(origin)) { res.header('Access-Control-Allow-Origin', origin); res.header('Vary', 'Origin'); }
-  else if (!origin && process.env.NODE_ENV !== 'production') res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  // For credentials requests, MUST echo the exact origin (never use *)
+  if (origin && isAllowedOrigin(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else if (!origin && process.env.NODE_ENV !== 'production') {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.header('Access-Control-Allow-Headers', Array.from(allowedHeaders).join(', '));
   res.header('Access-Control-Max-Age', process.env.CORS_MAX_AGE || '86400');
