@@ -1,5 +1,6 @@
 import express from 'express';
 import Stripe from 'stripe';
+import jwt from 'jsonwebtoken';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
@@ -330,10 +331,25 @@ router.put('/profile', authenticate, async (req, res) => {
 
     let institution: any = null;
     try {
+      const updatePayload: any = { ...update };
+      const updateQuery: any = {};
+      if (updatePayload.subdomain !== undefined) {
+        const normalizedSubdomain = String(updatePayload.subdomain).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40);
+        if (normalizedSubdomain) {
+          updatePayload.subdomain = normalizedSubdomain;
+          updateQuery.$set = updatePayload;
+        } else {
+          delete updatePayload.subdomain;
+          updateQuery.$set = updatePayload;
+          updateQuery.$unset = { subdomain: 1 };
+        }
+      } else {
+        updateQuery.$set = updatePayload;
+      }
+
       institution = await Institution.findOneAndUpdate(
         { _id: req.user.institutionId },
-        // normalize subdomain if provided
-        (update.subdomain ? { ...update, subdomain: String(update.subdomain).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40) } : update),
+        updateQuery,
         { new: true, runValidators: true }
       );
     } catch (err: any) {
@@ -359,8 +375,30 @@ router.get('/subdomain/check', async (req, res) => {
     if (!subdomain) return res.status(400).json({ available: false, message: 'subdomain is required' });
     const existing = await Institution.findOne({ subdomain });
     if (!existing) return res.json({ available: true });
-    // If the caller is authenticated and the existing belongs to the same institution, allow it
-    if ((req as any).user && String(existing._id) === String((req as any).user.institutionId)) return res.json({ available: true });
+
+    // Optional auth extraction to check if user owns this subdomain
+    let userInstitutionId: string | null = null;
+    try {
+      let token = req.header('Authorization')?.replace('Bearer ', '');
+      if (!token) {
+        const authCookieName = process.env.AUTH_COOKIE_NAME || 'es_token';
+        const cookieHeader = req.headers.cookie || '';
+        const match = cookieHeader.split(';').map(s => s.trim()).find((c) => c.startsWith(`${authCookieName}=`));
+        if (match) token = decodeURIComponent(match.split('=')[1] || '');
+      }
+      if (token) {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+        if (decoded && decoded.institutionId) {
+          userInstitutionId = String(decoded.institutionId);
+        }
+      }
+    } catch (e) {
+      // Ignore verification errors for optional auth
+    }
+
+    if (userInstitutionId && String(existing._id) === userInstitutionId) {
+      return res.json({ available: true });
+    }
     return res.json({ available: false });
   } catch (err) {
     return res.status(500).json({ available: false, message: 'Failed to check subdomain' });

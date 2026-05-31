@@ -36,6 +36,10 @@ export default async function resolveTenant(req: Request & any, res: Response, n
       if (hostParts.length > suffix) {
         subdomain = hostParts.slice(0, hostParts.length - suffix).join('.');
       }
+    } else if (headerHost.endsWith('localhost') || headerHost.endsWith('127.0.0.1')) {
+      if (hostParts.length > 1) {
+        subdomain = hostParts.slice(0, hostParts.length - 1).join('.');
+      }
     } else {
       // fallback: treat anything with 3+ parts as subdomain
       if (hostParts.length >= 3) subdomain = hostParts.slice(0, hostParts.length - 2).join('.');
