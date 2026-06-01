@@ -10,10 +10,10 @@ const allowedPaths = [
   '/api/config',
   '/api/health',
   '/api/institution/profile',
-  '/api/institution/billing/payment',
-  '/api/institution/billing/stripe/checkout',
+  '/api/institution/billing',
   '/api/institution/plans',
   '/api/site-settings/site-config',
+  '/api/site-settings/storage-status',
   '/api/site-settings/app-controls',
 ];
 
@@ -24,15 +24,22 @@ const getActiveAcademicYearStorage = (settings: any = {}) => {
   return settings.academicYears.find((item: any) => item?.isActive || item?.year === settings.activeAcademicYear) || {};
 };
 
+const isUsingEasySchoolStorage = (billing: any = {}) => {
+  // Existing schools may not have this field saved yet. In this app the default is EasySchool storage.
+  if (billing.useEasySchoolStorage === undefined || billing.useEasySchoolStorage === null) return true;
+  return billing.useEasySchoolStorage !== false;
+};
+
 const needsStorageConfig = (institution: any) => {
   if (!institution) return false;
 
   const billing = institution.billing || {};
   const settings = institution.settings || {};
   const activeAcademicYear = getActiveAcademicYearStorage(settings);
-  const usesEasySchoolStorage = billing.useEasySchoolStorage !== false;
 
-  if (usesEasySchoolStorage) return false;
+  // If the school selected/paid for EasySchool storage, do not require personal MongoDB/ImgBB.
+  // Personal MongoDB + ImgBB are required only when EasySchool storage is disabled.
+  if (isUsingEasySchoolStorage(billing)) return false;
 
   const mongoUri = String(activeAcademicYear.mongodbUri || settings.mongodbUri || '').trim();
   const imgbbApiKey = String(activeAcademicYear.imgbbApiKey || settings.imgbbApiKey || '').trim();
@@ -77,7 +84,7 @@ export const storageConfigGuard = async (req: Request, res: Response, next: Next
       return res.status(428).json({
         code: 'STORAGE_CONFIG_REQUIRED',
         redirectTo: '/settings',
-        message: 'দয়া করে MongoDB URL এবং ImgBB API Key সেট করুন। EasySchool storage ব্যবহার না করলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে প্রয়োজনীয় storage configuration দিতে হবে।',
+        message: 'দয়া করে MongoDB URL এবং ImgBB API Key সেট করুন। EasySchool storage subscription না থাকলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে personal storage configuration দিতে হবে।',
       });
     }
 
