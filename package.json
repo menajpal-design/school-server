@@ -4,9 +4,9 @@
   "description": "easy school School Management System Backend",
   "main": "index.js",
   "scripts": {
-    "start": "node -e \"const fs=require('fs');const files=['src/controllers/auth.ts','dist/controllers/auth.js'];for(const p of files){if(fs.existsSync(p)){let s=fs.readFileSync(p,'utf8');s=s.replace(/const allowedRoles = \\['head', 'superadmin', 'admin', 'platform_admin'\\];/g,\"const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin'];\").replace(/const allowedRoles = \\[\\\"head\\\", \\\"superadmin\\\", \\\"admin\\\", \\\"platform_admin\\\"\\];/g,\"const allowedRoles = [\\\"head\\\", \\\"super_admin\\\", \\\"superadmin\\\", \\\"admin\\\", \\\"platform_admin\\\"];\");fs.writeFileSync(p,s)}}\" && node --enable-source-maps dist/server.js",
+    "start": "node scripts/patchAdminLoginRoles.cjs && node --enable-source-maps dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "node -e \"const fs=require('fs');const p='src/controllers/auth.ts';if(fs.existsSync(p)){let s=fs.readFileSync(p,'utf8');s=s.replace(/const allowedRoles = \\['head', 'superadmin', 'admin', 'platform_admin'\\];/g,\"const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin'];\");fs.writeFileSync(p,s)}\" && tsc",
+    "build": "node scripts/patchAdminLoginRoles.cjs && tsc",
     "heroku-postbuild": "npm run build",
     "test": "jest --passWithNoTests",
     "seed": "npm run build && node dist/scripts/seed.js",
