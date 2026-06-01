@@ -3,8 +3,11 @@ import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import Staff from '../models/Staff';
 import User from '../models/User';
+import IDCard from '../models/IDCard';
 import SiteSetting from '../models/SiteSetting';
 import { runWithTenantStorage } from '../config/tenantStorage';
+import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 
 const router = express.Router();
 const connections = new Map<string, Promise<mongoose.Connection>>();
@@ -37,8 +40,19 @@ async function getConnection(req: any) {
 async function models(req: any) {
   const connection = await getConnection(req);
   const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  return { Staff: model('Staff', Staff) };
+  return {
+    Staff: model('Staff', Staff),
+    IDCard: model('IDCard', IDCard),
+  };
 }
+
+const createIdCard = async (M: any, staffId: any, req: any, photoUrl?: string) => {
+  const now = new Date();
+  const validityEnd = new Date(now);
+  validityEnd.setFullYear(now.getFullYear() + 1);
+  const cardNumber = `STAFF-${Date.now()}-${String(staffId).slice(-4)}`;
+  return M.IDCard.create({ ownerId: staffId, ownerType: 'staff', cardNumber, cardType: 'standard', photoUrl, qrCodeData: cardNumber, barcodeData: cardNumber, validityStart: now, validityEnd, issuedBy: req.user._id, issuedAt: now, institutionId: req.user.institutionId });
+};
 
 async function syncStaffProfiles(req: any, M: any) {
   const users = await primaryDb(() => User.find({ institutionId: req.user.institutionId, role: 'staff', isActive: { $ne: false } }).select('name username email phone avatar role salary employeeId designation department createdAt').lean());
@@ -79,6 +93,86 @@ router.get('/', async (req: any, res) => {
   }
 });
 
+router.post('/', async (req: any, res) => {
+  try {
+    const M = await models(req);
+    const password = generatePassword();
+    const safeEmail = (uname: string) => `${uname}@staff.internal.local`;
+    
+    let user: any = null;
+    let username = '';
+    
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      username = await primaryDb(() => generateUsername(req.body.name || 'Staff', 'staff'));
+      try {
+        user = await primaryDb(() => User.create({
+          name: String(req.body.name || 'Staff').trim() || 'Staff',
+          username,
+          email: safeEmail(username),
+          password: hashPassword(password),
+          role: 'staff',
+          phone: req.body.phone,
+          avatar: req.body.photo,
+          gender: req.body.gender,
+          salary: Number(req.body.salary) || 0,
+          employeeId: req.body.employeeId,
+          designation: req.body.designation || 'Staff',
+          department: req.body.department || 'General',
+          institutionId: req.user.institutionId
+        }));
+        break;
+      } catch (error: any) {
+        const key = Object.keys(error?.keyPattern || error?.keyValue || {})[0] || '';
+        if (error?.code === 11000 && (key.includes('username') || key.includes('email'))) continue;
+        throw error;
+      }
+    }
+    
+    if (!user) {
+      return res.status(409).json({ message: 'Could not generate unique staff username. Please try again.' });
+    }
+
+    const staff = await M.Staff.create({
+      userId: user._id,
+      employeeId: req.body.employeeId || `S-${Date.now()}`,
+      designation: req.body.designation || 'Staff',
+      department: req.body.department || 'General',
+      joiningDate: req.body.joiningDate || new Date(),
+      salary: Number(req.body.salary) || 0,
+      institutionId: req.user.institutionId
+    });
+
+    const idCard = req.body.autoIdCard !== false ? await createIdCard(M, staff._id, req, req.body.photo) : null;
+    
+    const phone = String(req.body.phone || user.phone || '').trim();
+    let smsSent = false;
+    if (phone) {
+      try {
+        smsSent = await sendSMS({
+          to: phone,
+          message: buildCredentialSmsMessage({ summary: 'Staff account created', username, password }),
+          institutionId: req.user.institutionId,
+          recipientName: user.name || 'Staff',
+          recipientPhone: phone,
+          type: 'notification'
+        });
+      } catch (smsError) {
+        console.error('Staff credential SMS failed:', smsError);
+      }
+    }
+
+    res.status(201).json({ staff, user, idCard, credentials: { username, password }, smsSent });
+  } catch (error: any) {
+    const isValidationError = error?.name === 'ValidationError';
+    const msgText = isValidationError
+      ? Object.values(error.errors || {}).map((item: any) => item?.message).filter(Boolean).join(', ')
+      : error?.code === 11000
+        ? 'Duplicate staff record found. Please try again.'
+        : error?.message || 'Staff API failed.';
+    res.status(error?.statusCode || (isValidationError ? 400 : 500)).json({ message: msgText, error: { name: error?.name, message: error?.message, code: error?.code } });
+  }
+});
+
 router.put('/:id', async (req: any, res) => {
   try {
     const M = await models(req);
@@ -103,6 +197,28 @@ router.put('/:id', async (req: any, res) => {
     res.json({ staff: updated, source: 'settings-active-mongodb-direct' });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to update staff', error });
+  }
+});
+
+router.delete('/:id', async (req: any, res) => {
+  try {
+    const M = await models(req);
+    const rawId = String(req.params.id || '');
+    if (rawId.startsWith('user-')) {
+      const uid = rawId.replace(/^user-/, '');
+      await primaryDb(() => User.findOneAndUpdate({ _id: uid, institutionId: req.user.institutionId, role: 'staff' }, { isActive: false }));
+      const profile = await M.Staff.findOne({ userId: uid, institutionId: req.user.institutionId });
+      if (profile) { profile.isActive = false; await profile.save(); }
+      return res.json({ message: 'Staff deactivated' });
+    }
+    const staff = await M.Staff.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!staff) return res.status(404).json({ message: 'Staff not found' });
+    await primaryDb(() => User.findByIdAndUpdate(staff.userId, { isActive: false }));
+    staff.isActive = false;
+    await staff.save();
+    res.json({ message: 'Staff deactivated', staff });
+  } catch (error: any) {
+    res.status(500).json({ message: error?.message || 'Staff delete failed', error });
   }
 });
 

@@ -5,8 +5,14 @@ import Teacher from '../models/Teacher';
 import User from '../models/User';
 import ClassModel from '../models/Class';
 import Subject from '../models/Subject';
+import IDCard from '../models/IDCard';
+import Institution from '../models/Institution';
 import SiteSetting from '../models/SiteSetting';
 import { runWithTenantStorage } from '../config/tenantStorage';
+import { generatePassword, generateUsername, hashPassword } from '../utils/credentials';
+import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
+import { sendEmail } from '../services/emailService';
+import { generateAppointmentLetter } from '../utils/appointmentLetter';
 
 const router = express.Router();
 const connections = new Map<string, Promise<mongoose.Connection>>();
@@ -40,8 +46,21 @@ async function getConnection(req: any) {
 async function models(req: any) {
   const connection = await getConnection(req);
   const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  return { Teacher: model('Teacher', Teacher), Class: model('Class', ClassModel), Subject: model('Subject', Subject) };
+  return {
+    Teacher: model('Teacher', Teacher),
+    Class: model('Class', ClassModel),
+    Subject: model('Subject', Subject),
+    IDCard: model('IDCard', IDCard),
+  };
 }
+
+const createIdCard = async (M: any, teacherId: any, req: any, photoUrl?: string) => {
+  const now = new Date();
+  const validityEnd = new Date(now);
+  validityEnd.setFullYear(now.getFullYear() + 1);
+  const cardNumber = `TEACHER-${Date.now()}-${String(teacherId).slice(-4)}`;
+  return M.IDCard.create({ ownerId: teacherId, ownerType: 'teacher', cardNumber, cardType: 'standard', photoUrl, qrCodeData: cardNumber, barcodeData: cardNumber, validityStart: now, validityEnd, issuedBy: req.user._id, issuedAt: now, institutionId: req.user.institutionId });
+};
 
 const normalizeNameList = (value: any) => {
   if (Array.isArray(value)) return value.map((item) => String(item?._id || item?.name || item).trim()).filter(Boolean);
@@ -118,6 +137,91 @@ router.get('/', async (req: any, res) => {
   }
 });
 
+router.post('/', async (req: any, res) => {
+  try {
+    if (!['admin', 'super_admin', 'head'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only school head or admin can assign teachers' });
+    }
+    const M = await models(req);
+    await syncTeacherProfiles(req, M);
+
+    const email = String(req.body.email || `${String(req.body.employeeId || Date.now()).toLowerCase()}@teacher.local`);
+    const existing = await primaryDb(() => User.findOne({ email }));
+    if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
+
+    const username = await primaryDb(() => generateUsername(req.body.name, 'teacher'));
+    const temporaryPassword = generatePassword();
+    
+    const user = await primaryDb(() => User.create({
+      name: req.body.name,
+      username,
+      email,
+      password: hashPassword(temporaryPassword),
+      role: 'subject_teacher',
+      phone: req.body.phone,
+      avatar: req.body.photo,
+      gender: req.body.gender,
+      institutionId: req.user.institutionId
+    }));
+
+    const classIds = await findOrCreateClasses(M, normalizeNameList(req.body.assignedClasses), req.user.institutionId);
+    const subjectIds = await findOrCreateSubjects(M, normalizeNameList(req.body.subjects), req.user.institutionId, classIds);
+
+    const teacher = await M.Teacher.create({
+      userId: user._id,
+      employeeId: req.body.employeeId || `T-${Date.now()}`,
+      designation: req.body.designation || 'Teacher',
+      department: req.body.department || 'General',
+      assignedClasses: classIds,
+      subjects: subjectIds,
+      joiningDate: req.body.joiningDate || new Date(),
+      qualification: req.body.qualification || 'Not specified',
+      experience: Number(req.body.experience) || 0,
+      salary: Number(req.body.salary) || 0,
+      institutionId: req.user.institutionId
+    });
+
+    const idCard = req.body.autoIdCard !== false ? await createIdCard(M, teacher._id, req, req.body.photo) : null;
+
+    if (req.body.phone) {
+      await sendSMS({
+        to: req.body.phone,
+        message: buildCredentialSmsMessage({ summary: 'Teacher account created', username, password: temporaryPassword }),
+        institutionId: req.user.institutionId,
+        recipientName: req.body.name,
+        recipientPhone: req.body.phone,
+        type: 'notification'
+      }).catch((err) => console.error('Teacher credential SMS failed:', err));
+    }
+
+    if (req.body.sendAppointmentLetter && req.body.email) {
+      try {
+        const institution = await primaryDb(() => Institution.findById(req.user.institutionId));
+        const appointmentLetterHtml = generateAppointmentLetter({
+          teacherName: req.body.name,
+          position: req.body.designation,
+          designation: req.body.designation,
+          joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+          departmentName: req.body.department,
+          salary: Number(req.body.salary) || 0,
+          qualification: req.body.qualification || 'Not specified',
+          schoolName: institution?.name || 'School',
+          schoolAddress: institution?.address || 'School Address',
+          principalName: req.user.name || 'Principal',
+          letterDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+        });
+        await sendEmail({ to: req.body.email, subject: `Appointment Letter - ${req.body.name}`, html: appointmentLetterHtml });
+      } catch (emailError) {
+        console.error('Error sending appointment letter:', emailError);
+      }
+    }
+
+    res.status(201).json({ teacher, user, idCard, credentials: { username, password: temporaryPassword } });
+  } catch (error: any) {
+    res.status(500).json({ message: 'Failed to create teacher', error: error?.message || error });
+  }
+});
+
 router.put('/:id', async (req: any, res) => {
   try {
     const M = await models(req);
@@ -164,6 +268,22 @@ router.put('/:id', async (req: any, res) => {
     res.json({ teacher: enriched, source: 'settings-active-mongodb-direct' });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to update teacher', error });
+  }
+});
+
+router.delete('/:id', async (req: any, res) => {
+  try {
+    const M = await models(req);
+    const teacher = await M.Teacher.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    await primaryDb(() => User.findByIdAndUpdate(teacher.userId, { isActive: false }));
+    teacher.isActive = false;
+    await teacher.save();
+
+    res.json({ message: 'Teacher deactivated', teacher });
+  } catch (error: any) {
+    res.status(500).json({ message: 'Failed to delete teacher', error: error?.message || error });
   }
 });
 

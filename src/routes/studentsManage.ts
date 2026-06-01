@@ -74,6 +74,29 @@ async function enrichStudent(student: any) {
   return { ...plain, userId: user || plain.userId, parentId: parent || plain.parentId };
 }
 
+router.get('/:id', authenticate, async (req: any, res) => {
+  try {
+    const M = await models(req);
+    const rawId = String(req.params.id || '');
+    let student: any = null;
+
+    if (rawId.startsWith('user-')) {
+      const uid = rawId.replace(/^user-/, '');
+      student = await M.Student.findOne({ userId: uid, institutionId: req.user.institutionId });
+    } else if (isObjectId(rawId)) {
+      student = await M.Student.findOne({ _id: rawId, institutionId: req.user.institutionId });
+      if (!student) student = await M.Student.findOne({ userId: rawId, institutionId: req.user.institutionId });
+    }
+
+    if (!student) return res.status(404).json({ message: 'Student profile not found.' });
+
+    const enriched = await enrichStudent(student);
+    res.json({ student: enriched, ...enriched });
+  } catch (error: any) {
+    res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load student.' });
+  }
+});
+
 router.put('/:id', authenticate, async (req: any, res) => {
   try {
     const M = await models(req);

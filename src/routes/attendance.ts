@@ -436,6 +436,92 @@ router.get('/me', authenticate, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load my attendance', error }));
 });
 
+router.post('/me/mark', authenticate, async (req: any, res) => {
+  try {
+    const institutionId = req.user.institutionId;
+    const dateValue = toDateValue(req.body.date);
+    const finalStatus = req.body.status || 'present';
+    const finalNotes = req.body.notes || 'Self-marked attendance';
+
+    let attendance: any = null;
+
+    const student = await Student.findOne({ institutionId, userId: req.user._id });
+    if (student) {
+      attendance = await Attendance.findOneAndUpdate(
+        {
+          studentId: student._id,
+          userType: 'student',
+          classId: student.classId,
+          sectionId: student.sectionId,
+          date: dateValue,
+          institutionId,
+        },
+        {
+          studentId: student._id,
+          userType: 'student',
+          classId: student.classId,
+          sectionId: student.sectionId,
+          date: dateValue,
+          status: finalStatus,
+          notes: finalNotes,
+          markedBy: req.user._id,
+          markedAt: new Date(),
+          institutionId,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } else if (['teacher', 'class_teacher', 'subject_teacher', 'assistant_head', 'head'].includes(req.user.role)) {
+      const teacher = await Teacher.findOne({ institutionId, userId: req.user._id });
+      attendance = await Attendance.findOneAndUpdate(
+        {
+          userId: req.user._id,
+          userType: 'teacher',
+          date: dateValue,
+          institutionId,
+        },
+        {
+          userId: req.user._id,
+          userType: 'teacher',
+          date: dateValue,
+          status: finalStatus,
+          notes: finalNotes,
+          markedBy: req.user._id,
+          markedAt: new Date(),
+          institutionId,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } else if (req.user.role === 'staff' || req.user.role === 'finance_officer') {
+      const staff = await Staff.findOne({ institutionId, userId: req.user._id });
+      attendance = await Attendance.findOneAndUpdate(
+        {
+          userId: req.user._id,
+          userType: 'staff',
+          date: dateValue,
+          institutionId,
+        },
+        {
+          userId: req.user._id,
+          userType: 'staff',
+          date: dateValue,
+          status: finalStatus,
+          notes: finalNotes,
+          markedBy: req.user._id,
+          markedAt: new Date(),
+          institutionId,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } else {
+      return res.status(403).json({ message: 'User role cannot mark attendance.' });
+    }
+
+    res.status(201).json({ attendance, message: 'Attendance marked successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to self-mark attendance', error });
+  }
+});
+
 router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const personType = normalizePersonType(req.query.personType);
