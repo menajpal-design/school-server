@@ -258,8 +258,17 @@ const updateResultWorkflow = async (req: any, workflowStatus: 'review' | 'approv
 };
 
 const resolvePublicInstitution = async (req: any) => {
+  if (req.institution?._id) return Institution.findOne({ _id: req.institution._id, isActive: true });
   if (req.query.institutionId) return Institution.findOne({ _id: req.query.institutionId, isActive: true });
-  const domain = String(req.query.domain || req.hostname || '').replace(/^www\./, '').toLowerCase();
+  
+  // Resolve by subdomain parameter or custom client header
+  const clientSubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+  if (clientSubdomain && !['www', 'app', 'api', 'admin'].includes(clientSubdomain)) {
+    const inst = await Institution.findOne({ subdomain: clientSubdomain, isActive: true });
+    if (inst) return inst;
+  }
+
+  const domain = String(req.query.domain || req.headers['x-client-domain'] || req.hostname || '').replace(/^www\./, '').toLowerCase();
   if (!domain) return null;
   return Institution.findOne({
     isActive: true,
@@ -273,7 +282,27 @@ const resolvePublicInstitution = async (req: any) => {
 
 router.get('/public/results/schools', async (req, res) => {
   try {
-    const tenantInstitution = (req as any).institution;
+    let tenantInstitution = (req as any).institution;
+    
+    // Resolve by query param or header if not determined by the hostname middleware
+    if (!tenantInstitution) {
+      const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+      const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
+      
+      if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
+        tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
+      } else if (queryDomain) {
+        tenantInstitution = await Institution.findOne({
+          isActive: true,
+          $or: [
+            { website: new RegExp(queryDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+            { domains: queryDomain },
+            { domains: `www.${queryDomain}` },
+          ]
+        }).lean();
+      }
+    }
+
     if (tenantInstitution) {
       const school = await Institution.findOne({ _id: tenantInstitution._id, isActive: true })
         .select('name type eiin address website domains subdomain')
@@ -300,6 +329,7 @@ router.get('/public/results/schools', async (req, res) => {
     res.status(500).json({ message: 'Failed to load public schools', error });
   }
 });
+
 
 router.get('/public/results/options', async (req, res) => {
   try {
@@ -329,7 +359,7 @@ router.get('/public/results', async (req, res) => {
     if (!studentQuery.rollNumber) return res.status(400).json({ message: 'Roll number is required' });
 
     const student = await Student.findOne(studentQuery)
-      .populate('userId', 'name')
+      .populate('userId', 'name gender fatherName motherName dateOfBirth')
       .populate('classId', 'name grade academicYear')
       .populate('sectionId', 'name')
       .lean();
@@ -343,18 +373,132 @@ router.get('/public/results', async (req, res) => {
     if (req.query.examId) resultQuery.examId = req.query.examId;
 
     const results = await Result.find(resultQuery)
-      .populate('examId', 'name type totalMarks passingMarks subjectMarks')
+      .populate({
+        path: 'examId',
+        select: 'name type totalMarks passingMarks subjectMarks classId startDate',
+        populate: {
+          path: 'classId',
+          select: 'name grade academicYear'
+        }
+      })
       .populate('subjectId', 'name code')
       .sort({ publishedAt: -1, createdAt: -1 })
       .lean();
     if (!results.length) return res.status(404).json({ message: 'Published result not found' });
 
-    const totalObtained = results.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
-    const totalMarks = results.reduce((sum: number, result: any) => {
+    // Helper function to match the exam type
+    const matchExam = (result: any, searchExam: string) => {
+      if (!searchExam) return true;
+      const examName = String(result.examId?.name || '').toLowerCase();
+      const className = String(result.examId?.classId?.name || '').toLowerCase();
+      const classGrade = String(result.examId?.classId?.grade || '').toLowerCase();
+      const search = searchExam.toLowerCase();
+
+      if (search === 'jsc') {
+        return examName.includes('jsc') || examName.includes('jdc') || 
+               className.includes('jsc') || className.includes('jdc') || 
+               className.includes('class 8') || className.includes('class-8') || className.includes('eight') ||
+               classGrade === '8' || classGrade.includes('eight');
+      }
+      if (search === 'ssc') {
+        return examName.includes('ssc') || examName.includes('dakhil') || 
+               className.includes('ssc') || className.includes('dakhil') || 
+               className.includes('class 10') || className.includes('class-10') || className.includes('ten') ||
+               className.includes('class 9') || className.includes('class-9') || className.includes('nine') ||
+               classGrade === '10' || classGrade === '9' || classGrade.includes('ten') || classGrade.includes('nine');
+      }
+      if (search === 'hsc') {
+        return examName.includes('hsc') || examName.includes('alim') || 
+               className.includes('hsc') || className.includes('alim') || 
+               className.includes('class 12') || className.includes('class-12') || className.includes('twelve') ||
+               className.includes('class 11') || className.includes('class-11') || className.includes('eleven') ||
+               classGrade === '12' || classGrade === '11' || classGrade.includes('twelve') || classGrade.includes('eleven');
+      }
+      if (search === 'dibs') {
+        return examName.includes('dibs') || className.includes('dibs') || classGrade.includes('dibs');
+      }
+      return true;
+    };
+
+    // Filter results by selected year and exam type if provided
+    let filteredResults = results;
+    const searchYear = String(req.query.year || '').trim();
+    const searchExam = String(req.query.exam || '').trim();
+
+    if (searchYear) {
+      filteredResults = filteredResults.filter((result: any) => {
+        const examYear = result.examId?.startDate ? new Date(result.examId.startDate).getFullYear().toString() : '';
+        const classYear = result.examId?.classId?.academicYear?.toString() || '';
+        return examYear === searchYear || classYear === searchYear;
+      });
+    }
+
+    if (searchExam) {
+      filteredResults = filteredResults.filter((result: any) => matchExam(result, searchExam));
+    }
+
+    if (!filteredResults.length) {
+      return res.status(404).json({ message: 'No published results found for the selected examination and year' });
+    }
+
+    const totalObtained = filteredResults.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
+    const totalMarks = filteredResults.reduce((sum: number, result: any) => {
       const setup = result.examId?.subjectMarks?.find((item: any) => String(item.subjectId) === String(result.subjectId?._id || result.subjectId));
       return sum + Number(setup?.totalMarks || result.examId?.totalMarks || 100);
     }, 0);
     const percentage = totalMarks ? Math.round((totalObtained / totalMarks) * 100) : 0;
+
+    // GPA Calculation
+    const gradePoints: Record<string, number> = {
+      'A+': 5,
+      'A': 4,
+      'A-': 3.5,
+      'B': 3,
+      'C': 2,
+      'D': 1,
+      'F': 0
+    };
+    
+    let hasFailed = false;
+    let totalPoints = 0;
+    let subjectCount = 0;
+    
+    filteredResults.forEach((r: any) => {
+      const g = String(r.grade || '').trim().toUpperCase();
+      if (g) {
+        if (g === 'F' || r.isPassed === false) {
+          hasFailed = true;
+        }
+        const gp = gradePoints[g] || 0;
+        totalPoints += gp;
+        subjectCount++;
+      }
+    });
+    
+    let gpaText = 'F';
+    if (subjectCount > 0) {
+      if (hasFailed) {
+        gpaText = 'FAILED';
+      } else {
+        const average = totalPoints / subjectCount;
+        gpaText = `GPA=${average.toFixed(2)}`;
+      }
+    }
+
+    // Format DOB to DD-MM-YYYY
+    const formatDOB = (dateStr: any) => {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}-${mm}-${yyyy}`;
+      } catch {
+        return '';
+      }
+    };
 
     res.json({
       institution: {
@@ -365,22 +509,34 @@ router.get('/public/results', async (req, res) => {
       },
       student: {
         id: student._id,
-        name: (student.userId as any)?.name,
+        name: (student.userId as any)?.name || student.guardianName,
         rollNumber: student.rollNumber,
         className: (student.classId as any)?.name,
         sectionName: (student.sectionId as any)?.name,
+        fatherName: student.fatherName || (student.userId as any)?.fatherName || '',
+        motherName: student.motherName || (student.userId as any)?.motherName || '',
+        dateOfBirth: formatDOB(student.dateOfBirth || (student.userId as any)?.dateOfBirth),
+        gender: (student.userId as any)?.gender || '',
+        bloodGroup: student.bloodGroup || (student.userId as any)?.bloodGroup || '',
+        session: (student.classId as any)?.academicYear ? `${(student.classId as any).academicYear}-${Number((student.classId as any).academicYear) + 1 - 2000}` : '',
+        group: (student.classId as any)?.name?.toUpperCase()?.includes('SCIENCE') ? 'SCIENCE' : (student.classId as any)?.name?.toUpperCase()?.includes('COMMERCE') ? 'COMMERCE' : (student.classId as any)?.name?.toUpperCase()?.includes('HUMANITIES') ? 'HUMANITIES' : 'GENERAL',
+        admissionDate: student.admissionDate,
       },
       summary: {
         totalObtained,
         totalMarks,
         percentage,
-        passed: results.every((result: any) => result.isPassed !== false),
+        passed: !hasFailed,
+        gpa: gpaText,
+        examName: (filteredResults[0]?.examId as any)?.name || 'SSC or Equivalent Examination',
+        examYear: (filteredResults[0]?.examId as any)?.startDate ? new Date((filteredResults[0].examId as any).startDate).getFullYear().toString() : searchYear,
+        board: req.query.board ? String(req.query.board).toUpperCase() : 'DHAKA'
       },
-      results: results.map((result: any) => ({
+      results: filteredResults.map((result: any) => ({
         examName: result.examId?.name,
         examType: result.examId?.type,
         subjectName: result.subjectId?.name,
-        subjectCode: result.subjectId?.code,
+        subjectCode: result.subjectId?.code || '',
         marksObtained: result.marksObtained,
         grade: result.grade,
         isPassed: result.isPassed,

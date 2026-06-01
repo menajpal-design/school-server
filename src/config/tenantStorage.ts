@@ -17,6 +17,7 @@ const schoolDataModels = new Set([
 const primaryMirrorModels = new Set(['User', 'Institution']);
 const tenantStorage = new AsyncLocalStorage<TenantStorageContext | null>();
 const tenantConnections = new Map<string, Promise<mongoose.Connection | null>>();
+const tenantConnectionLastAccess = new Map<string, number>();
 const tenantConnectionFailures = new Map<string, number>();
 const tenantConnectionRetryMs = Number(process.env.TENANT_MONGO_RETRY_AFTER_MS || 5000);
 const tenantConnectionHardTimeoutMs = Number(process.env.TENANT_MONGO_HARD_TIMEOUT_MS || 15000);
@@ -91,10 +92,12 @@ const getTenantConnection = async (context: TenantStorageContext) => {
       return null;
     }));
   }
+  tenantConnectionLastAccess.set(key, Date.now());
   const connection = await withTimeout(tenantConnections.get(key)!, tenantConnectionHardTimeoutMs, () => {
     console.warn('Tenant Mongo connection timed out. Primary fallback is disabled for school data.');
   });
   if (!connection) return null;
+  tenantConnectionLastAccess.set(key, Date.now());
   return connection;
 };
 const getTenantModel = async (baseModel: any, context: TenantStorageContext | null | undefined, forRead = false) => {
@@ -322,3 +325,37 @@ export const installTenantStoragePatches = () => {
 };
 
 installTenantStoragePatches();
+
+const evictIdleConnections = async () => {
+  const idleTimeoutMs = Number(process.env.TENANT_MONGO_IDLE_TIMEOUT_MS || 3600000); // default 1 hour
+  const now = Date.now();
+  for (const [key, promise] of tenantConnections.entries()) {
+    const lastAccess = tenantConnectionLastAccess.get(key) || 0;
+    if (now - lastAccess > idleTimeoutMs) {
+      tenantConnections.delete(key);
+      tenantConnectionLastAccess.delete(key);
+      try {
+        const conn = await promise;
+        if (conn) {
+          await conn.close();
+          console.log(`[TenantStorage] Evicted and closed idle connection: ${key}`);
+        }
+      } catch (err) {
+        console.warn(`[TenantStorage] Error closing idle connection ${key}:`, err);
+      }
+    }
+  }
+};
+
+// Run connection eviction check periodically (default every 5 minutes)
+const evictionIntervalMs = Number(process.env.TENANT_MONGO_EVICT_INTERVAL_MS || 300000);
+const evictionTimer = setInterval(() => {
+  evictIdleConnections().catch((err) => {
+    console.error('[TenantStorage] Connection eviction error:', err);
+  });
+}, evictionIntervalMs);
+
+// Unref the timer so it doesn't block process exit (especially useful for tests and clean shutdowns)
+if (evictionTimer && typeof evictionTimer.unref === 'function') {
+  evictionTimer.unref();
+}

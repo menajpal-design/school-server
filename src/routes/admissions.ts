@@ -69,7 +69,25 @@ const admissionError = (error: any) => {
 
 router.get('/public/schools', async (req, res) => {
   const search = String(req.query.search || '').trim();
-  const tenantInstitution = (req as any).institution;
+  let tenantInstitution = (req as any).institution;
+
+  if (!tenantInstitution) {
+    const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+    const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
+    
+    if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
+      tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
+    } else if (queryDomain) {
+      tenantInstitution = await Institution.findOne({
+        isActive: true,
+        $or: [
+          { website: new RegExp(queryDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+          { domains: queryDomain },
+          { domains: `www.${queryDomain}` },
+        ]
+      }).lean();
+    }
+  }
 
   if (tenantInstitution) {
     const school = await Institution.findOne({ _id: tenantInstitution._id, isActive: true })
