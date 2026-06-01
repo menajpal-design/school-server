@@ -370,6 +370,71 @@ export const login = async (req: Request, res: Response) => {
       : null;
     const loginResult = tenantResult || (await loginLookup());
 
+    // If no user was found in central DB and no explicit institution was provided,
+    // attempt a targeted cross-tenant lookup for high-privilege accounts so that
+    // admins, super_admins and school heads can sign in from the main domain.
+    if (!loginResult?.user && !mongoose.Types.ObjectId.isValid(institutionId)) {
+      try {
+        const institutions = await Institution.find({}).select('_id').lean().maxTimeMS(5000);
+        for (const inst of institutions || []) {
+          try {
+            const tctx = resolveTenantStorageContext(inst as any);
+            if (!tctx) continue;
+            const cross = await runWithTenantStorage(tctx, async () => {
+              const u = await User.findOne({
+                $or: [
+                  { email: emailQuery },
+                  { username: emailQuery.toLowerCase() },
+                  { phone: identifier },
+                ],
+                role: { $in: ['admin', 'super_admin', 'head'] },
+              }).populate('institutionId').maxTimeMS(5000);
+              if (!u) return null;
+              const m = await bcrypt.compare(password, u.password);
+              return m ? { user: u, isMatch: true } : { user: u, isMatch: false };
+            });
+            if (cross?.user && cross.isMatch) {
+              // Successful cross-tenant login — issue tokens and return immediately.
+              const { user } = cross as any;
+              const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
+              const refreshToken = generateRefreshToken();
+              const refreshHash = hashToken(refreshToken);
+              const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
+              try {
+                await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec();
+              } catch (e) { console.warn('Failed to save refresh token:', (e as any)?.message || e); }
+
+              const responseUser = {
+                id: user._id,
+                name: user.name,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                phone: user.phone,
+                isActive: user.isActive,
+                permissions: user.permissions || [],
+                institutionId: (user.institutionId as any)?._id || user.institutionId,
+                institution: serializeInstitution(user.institutionId)
+              };
+
+              try {
+                res.cookie(authCookieName, token, cookieOptions(0));
+                res.cookie(refreshCookieName, refreshToken, cookieOptions(refreshTokenDays));
+              } catch (e) {}
+
+              return res.json(buildAuthPayload('Login successful', token, responseUser));
+            }
+          } catch (err) {
+            // ignore tenant lookup errors and continue
+            console.warn('Cross-tenant lookup error:', (err as any)?.message || err);
+            continue;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to enumerate institutions for cross-tenant login:', (err as any)?.message || err);
+      }
+    }
+
     // If no user was found and no explicit institution context was provided,
     // try to infer the institution from the login identifier and retry inside tenant storage.
     if ((!loginResult?.user || !loginResult?.isMatch) && !mongoose.Types.ObjectId.isValid(institutionId)) {
