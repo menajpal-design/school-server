@@ -1,3 +1,4 @@
+import Institution from '../models/Institution';
 import { canUseSms, incrementSmsUsage, getSmsChargeAmount, getSmsChargeRate, recordSmsCharge } from '../services/billingService';
 import SmsLog from '../models/SmsLog';
 
@@ -15,6 +16,10 @@ interface SMSOptions {
   parentId?: any;
   smsChargeRate?: number;
   smsChargeAmount?: number;
+  smsProvider?: string;
+  smsApiUrl?: string;
+  smsApiKey?: string;
+  smsEnabled?: boolean;
 }
 
 interface CredentialSmsOptions {
@@ -37,10 +42,32 @@ const normalizePhone = (value: any) => {
   return digits && !digits.startsWith('0') ? `0${digits}` : digits;
 };
 
+// GSM 03.38 basic characters (approx). If a message contains any character
+// outside this set, treat it as Unicode which uses 70/67 segment sizes.
+const GSM_7_REGEX = /^[A-Za-z0-9 @£$¥èéùìòÇ\nØøCRÅå_\"'!@#%&()\-:;<=>?¡ÄÖÑÜ§¿äöñüà^{}\\\[~\]|€]*$/;
+
+function computeSmsSegments(message: string) {
+  const msg = String(message || '');
+  const isGsm7 = GSM_7_REGEX.test(msg);
+  if (isGsm7) {
+    const single = 160;
+    const multi = 153;
+    if (msg.length <= single) return 1;
+    return Math.ceil(msg.length / multi);
+  }
+  // Unicode (UCS-2)
+  const singleU = 70;
+  const multiU = 67;
+  if (msg.length <= singleU) return 1;
+  return Math.ceil(msg.length / multiU);
+}
+
 const ensureSmsQuota = async (options: SMSOptions) => {
   const recipients = recipientsFor(options.to).filter(Boolean);
   if (!options.institutionId) return true;
-  const quota = await canUseSms(options.institutionId, recipients.length);
+  const segments = computeSmsSegments(options.message || '');
+  const units = recipients.length * segments;
+  const quota = await canUseSms(options.institutionId, units);
   return Boolean(quota.allowed);
 };
 const markSmsUsed = async (options: SMSOptions, count?: number) => {
@@ -51,6 +78,21 @@ const buildChargeMeta = (options: SMSOptions, count = 1) => {
   const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose);
   const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose);
   return { smsChargeRate, smsChargeAmount };
+};
+
+const resolveSmsConfig = async (options: SMSOptions) => {
+  const institution = options.institutionId
+    ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean()
+    : null;
+
+  const institutionSettings: any = (institution as any)?.settings || {};
+  const globalEnabled = process.env.SMS_ENABLED === 'true';
+  const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase();
+  const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
+  const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
+  const enabled = typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled;
+
+  return { institution, provider, apiUrl, apiKey, enabled };
 };
 
 export const buildCredentialSmsMessage = ({
@@ -71,11 +113,12 @@ export const buildCredentialSmsMessage = ({
   return lines.join(' ');
 };
 
-const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'pending' | 'delivered', failureReason?: string, apiResponse?: string) => {
+const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'pending' | 'delivered', failureReason?: string, apiResponse?: string, countPerRecipient = 1) => {
   if (!options.institutionId) return;
   const phoneNumbers = recipientsFor(options.recipientPhone || options.to).map(normalizePhone).filter(Boolean);
   const names = options.recipientName ? recipientsFor(options.recipientName) : phoneNumbers;
-  const { smsChargeRate, smsChargeAmount } = buildChargeMeta(options, phoneNumbers.length || 1);
+  const { smsChargeRate, smsChargeAmount } = buildChargeMeta(options, countPerRecipient * (phoneNumbers.length || 1));
+  const provider = String(options.smsProvider || SMS_PROVIDER).toLowerCase();
   for (let i = 0; i < phoneNumbers.length; i += 1) {
     const phoneNumber = phoneNumbers[i];
     try {
@@ -89,7 +132,7 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
         message: options.message,
         type: options.type || 'notification',
         purpose: options.purpose || options.type || 'notification',
-        provider: SMS_PROVIDER,
+        provider,
         unitCharge: smsChargeRate,
         chargeAmount: smsChargeAmount / Math.max(phoneNumbers.length, 1),
         status,
@@ -107,46 +150,60 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
 };
 
 const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
-  if (!SMS_API_KEY) {
-    await logSmsAttempt(options, 'failed', 'SMS_API_KEY not configured');
+  const smsConfig = await resolveSmsConfig(options);
+  if (!smsConfig.enabled) {
+    const segments = computeSmsSegments(options.message || '');
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, segments);
+    return false;
+  }
+  if (smsConfig.provider !== 'anoncify') {
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);
+    return false;
+  }
+  if (!smsConfig.apiKey) {
+    const segments = computeSmsSegments(options.message || '');
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS API key not configured', undefined, segments);
     return false;
   }
   if (!(await ensureSmsQuota(options))) {
-    await logSmsAttempt(options, 'failed', 'SMS quota exceeded');
+    const segments = computeSmsSegments(options.message || '');
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS quota exceeded', undefined, segments);
     return false;
   }
   const recipients = recipientsFor(options.to).map(normalizePhone).filter(Boolean);
   let successCount = 0;
   for (let i = 0; i < recipients.length; i += 1) {
     const phoneNumber = recipients[i];
-    // Reserve monetary SMS balance before sending
-    const chargeResult = await recordSmsCharge(options.institutionId, 1, options.type, options.purpose);
+    // Reserve monetary SMS balance before sending (account for segments)
+    const segments = computeSmsSegments(options.message || '');
+    const chargeResult = await recordSmsCharge(options.institutionId, segments, options.type, options.purpose);
     if (chargeResult && (chargeResult as any).insufficient) {
-      await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', 'Insufficient SMS balance');
+      await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', 'Insufficient SMS balance', undefined, segments);
       continue;
     }
     try {
-      const url = new URL(SMS_API_URL);
-      url.searchParams.set('key', SMS_API_KEY);
-      url.searchParams.set('number', phoneNumber);
-      url.searchParams.set('msg', options.message);
-      const response = await fetch(url.toString(), { method: 'GET' });
+      const url = new URL(smsConfig.apiUrl);
+      const body = new URLSearchParams();
+      body.set('key', smsConfig.apiKey);
+      body.set('number', phoneNumber);
+      body.set('msg', options.message);
+      const response = await fetch(url.toString(), { method: 'POST', body });
       const responseText = await response.text();
-      if (!response.ok || isFailureResponse(responseText)) await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', `HTTP ${response.status}`, responseText);
+      if (!response.ok || isFailureResponse(responseText)) await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', `HTTP ${response.status}`, responseText, segments);
       else {
         successCount += 1;
-        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'sent', undefined, responseText);
+        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'sent', undefined, responseText, segments);
         // charge already applied before send
       }
     } catch (error) {
       // Attempt to refund the charge when send fails
       try {
-        const chargeMeta = buildChargeMeta(options, 1);
-        await (await import('../services/billingService')).refundSmsCharge(options.institutionId, 1, chargeMeta.smsChargeAmount, options.type, options.purpose);
+        const chargeMeta = buildChargeMeta(options, segments);
+        await (await import('../services/billingService')).refundSmsCharge(options.institutionId, segments, chargeMeta.smsChargeAmount, options.type, options.purpose);
       } catch (e) {
         console.error('Failed to refund SMS charge after send error:', e);
       }
-      await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber }, 'failed', String(error));
+        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', String(error), undefined, segments);
     }
   }
   return successCount === recipients.length;
@@ -155,15 +212,16 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
 export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
   const recipients = recipientsFor(options.to).map(normalizePhone).filter(Boolean);
   if (!recipients.length) { await logSmsAttempt(options, 'failed', 'No phone number found'); return false; }
-  const smsEnabled = process.env.SMS_ENABLED === 'true';
-  if (!smsEnabled) {
-    if (!(await ensureSmsQuota({ ...options, to: recipients }))) { await logSmsAttempt(options, 'failed', 'SMS quota exceeded'); return false; }
-    await markSmsUsed(options, recipients.length);
-    await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients }, 'sent', 'SMS service disabled; logged for monitoring');
+  const smsConfig = await resolveSmsConfig({ ...options, to: recipients });
+  if (!smsConfig.enabled) {
+    const segments = computeSmsSegments(options.message || '');
+    if (!(await ensureSmsQuota({ ...options, to: recipients }))) { await logSmsAttempt(options, 'failed', 'SMS quota exceeded', undefined, segments); return false; }
+    await markSmsUsed(options, recipients.length * segments);
+    await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients, smsProvider: smsConfig.provider }, 'sent', 'SMS service disabled; logged for monitoring', undefined, segments);
     return true;
   }
-  if (SMS_PROVIDER === 'anoncify') return sendViaAnoncify({ ...options, to: recipients });
-  await logSmsAttempt(options, 'failed', `Unsupported SMS provider: ${SMS_PROVIDER}`);
+  if (smsConfig.provider === 'anoncify') return sendViaAnoncify({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
+  await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);
   return false;
 };
 

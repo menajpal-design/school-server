@@ -393,3 +393,79 @@ router.get('/reports', authenticate, canManageFinance(), async (req, res) => {
 });
 
 export default router;
+
+// Audit and export endpoints
+router.get('/audit', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const start = req.query.start ? new Date(String(req.query.start)) : new Date('1970-01-01');
+    const end = req.query.end ? new Date(String(req.query.end)) : new Date();
+    // normalize end to include the day
+    end.setHours(23, 59, 59, 999);
+
+    const payments = await Payment.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
+    const salaries = await Salary.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
+    const smsTopups = await (require('../models/SmsTopup').default).find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
+    const fees = await Fee.find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
+
+    const totalIncome = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const totalSalaries = salaries.reduce((s: number, p: any) => s + (p.netSalary || p.net || 0), 0);
+    const totalSms = smsTopups.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const totalFees = fees.reduce((s: number, f: any) => s + (f.amount || 0), 0);
+
+    res.json({ totals: { totalIncome, totalFees, totalSalaries, totalSms }, counts: { payments: payments.length, salaries: salaries.length, smsTopups: smsTopups.length, fees: fees.length }, items: { payments, salaries, smsTopups, fees } });
+  } catch (error) {
+    res.status(500).json({ message: 'Audit failed', error });
+  }
+});
+
+router.get('/audit/export', authenticate, canManageFinance(), async (req, res) => {
+  try {
+    const fmt = String(req.query.format || 'csv');
+    const start = req.query.start ? new Date(String(req.query.start)) : new Date('1970-01-01');
+    const end = req.query.end ? new Date(String(req.query.end)) : new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const payments = await Payment.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
+    const salaries = await Salary.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
+    const smsTopups = await (require('../models/SmsTopup').default).find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
+
+    if (fmt === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="finance-audit-${Date.now()}.csv"`);
+      const rows: string[] = [];
+      rows.push('type,date,reference,description,amount');
+      payments.forEach((p: any) => rows.push([ 'payment', new Date(p.paymentDate).toISOString(), p.receiptNumber || '', p.notes?.replace(/[,\n\r]+/g, ' ') || '', String(p.amount || 0) ].join(',')));
+      salaries.forEach((s: any) => rows.push([ 'salary', new Date(s.paymentDate).toISOString(), s._id, s.notes?.replace(/[,\n\r]+/g, ' ') || '', String(s.netSalary || s.net || 0) ].join(',')));
+      smsTopups.forEach((t: any) => rows.push([ 'sms_topup', new Date(t.createdAt).toISOString(), t._id, JSON.stringify(t.meta || {}).replace(/[,\n\r]+/g, ' '), String(t.amount || 0) ].join(',')));
+      return res.send(rows.join('\n'));
+    }
+
+    if (fmt === 'pdf') {
+      const PDFDocument = require('pdfkit');
+      const doc = new PDFDocument({ size: 'A4', margin: 40 });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="finance-audit-${Date.now()}.pdf"`);
+      doc.fontSize(16).text('Finance Audit Report', { align: 'center' });
+      doc.moveDown();
+      doc.fontSize(10).text(`Institution: ${(req as any).institution?.name || ''}`);
+      doc.text(`Range: ${start.toISOString().slice(0,10)} - ${end.toISOString().slice(0,10)}`);
+      doc.moveDown();
+      doc.fontSize(12).text('Payments', { underline: true });
+      payments.forEach((p: any) => {
+        doc.fontSize(9).text(`${new Date(p.paymentDate).toLocaleString()} · ${p.receiptNumber || ''} · ${p.amount}`);
+      });
+      doc.addPage();
+      doc.fontSize(12).text('Salaries', { underline: true });
+      salaries.forEach((s: any) => {
+        doc.fontSize(9).text(`${new Date(s.paymentDate).toLocaleString()} · ${s.employeeId || s._id} · ${s.netSalary || s.net || 0}`);
+      });
+      doc.end();
+      doc.pipe(res);
+      return;
+    }
+
+    res.status(400).json({ message: 'Unsupported format' });
+  } catch (error) {
+    res.status(500).json({ message: 'Export failed', error });
+  }
+});

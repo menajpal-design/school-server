@@ -7,6 +7,7 @@ import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } fro
 import { activateBilling, getCurrentSmsBillingSummary } from '../services/billingService';
 import SmsTopup from '../models/SmsTopup';
 import { verifyGatewayPayment } from '../services/paymentGateway';
+import { writeAuditLog } from '../services/auditService';
 
 const router = express.Router();
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
@@ -461,6 +462,68 @@ router.post('/billing/payment', authenticate, async (req, res) => {
     res.json({ institution, verification: finalVerification, message: finalVerification.verified ? 'Payment verified and school activated.' : 'Payment submitted. Admin will verify and activate the school.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save payment', error });
+  }
+});
+
+// Return current subscription/billing info
+router.get('/billing/subscription', authenticate, async (req, res) => {
+  try {
+    const institution = (req as any).institution || await Institution.findById(req.user.institutionId).lean().maxTimeMS(3000);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+    res.json({ billing: institution.billing });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load subscription', error });
+  }
+});
+
+// Change plan (updates billing to new plan and marks pending)
+router.post('/billing/change-plan', authenticate, async (req, res) => {
+  try {
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+    const currentBilling = (institution as any).billing?.toObject?.() || (institution as any).billing || {};
+    const newBilling = buildBilling({ planCode: req.body.planCode, billingCycle: req.body.billingCycle, useEasySchoolStorage: req.body.useEasySchoolStorage }, currentBilling);
+    newBilling.billingStatus = 'pending';
+    institution.billing = newBilling as any;
+    await institution.save();
+    await writeAuditLog(req, 'update', 'billing', institution._id, newBilling, currentBilling).catch(() => undefined);
+    res.json({ message: 'Plan change requested', billing: institution.billing });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to change plan', error });
+  }
+});
+
+// Cancel subscription immediately (sets status cancelled and expires now)
+router.post('/billing/cancel', authenticate, async (req, res) => {
+  try {
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+    const currentBilling = (institution as any).billing?.toObject?.() || (institution as any).billing || {};
+    const updated = {
+      ...currentBilling,
+      billingStatus: 'cancelled',
+      subscriptionExpiresAt: new Date(),
+    };
+    institution.billing = updated as any;
+    institution.isActive = false;
+    await institution.save();
+    await writeAuditLog(req, 'update', 'billing', institution._id, updated, currentBilling).catch(() => undefined);
+    res.json({ message: 'Subscription cancelled', billing: institution.billing });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to cancel subscription', error });
+  }
+});
+
+// Request unsubscribe (creates an audit request for platform admins)
+router.post('/billing/request-unsubscribe', authenticate, async (req, res) => {
+  try {
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+    const note = String(req.body.note || 'Unsubscribe requested by head');
+    await writeAuditLog(req, 'request', 'unsubscribe', institution._id, { requestedBy: req.user._id, note });
+    res.json({ message: 'Unsubscribe request submitted. Platform admin will process it.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to request unsubscribe', error });
   }
 });
 
