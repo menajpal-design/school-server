@@ -22,8 +22,9 @@ jobs:
             elif [ -d "/var/www/school-server" ]; then
               cd "/var/www/school-server"
             else
-              echo "School server directory not found. Please set it up first."
-              exit 1
+              echo "School server directory not found, cloning into $HOME/school-server..."
+              git clone https://github.com/menajpal-design/school-server.git "$HOME/school-server"
+              cd "$HOME/school-server"
             fi
 
             echo "Deploying to $(pwd)..."
