@@ -71,10 +71,11 @@ router.get('/public/schools', async (req, res) => {
   const search = String(req.query.search || '').trim();
   let tenantInstitution = (req as any).institution;
 
-  if (!tenantInstitution) {
-    const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
-    const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
-    
+  const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+  const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
+  const isSpecificSearch = (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain;
+
+  if (!tenantInstitution && isSpecificSearch) {
     if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
       tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
     } else if (queryDomain) {
@@ -93,6 +94,11 @@ router.get('/public/schools', async (req, res) => {
     const school = await Institution.findOne({ _id: tenantInstitution._id, isActive: true })
       .select('name type eiin address phone email website subdomain');
     return res.json({ schools: school ? [school] : [] });
+  }
+
+  // If a specific subdomain/domain was requested but we didn't find the school, return empty
+  if (isSpecificSearch) {
+    return res.json({ schools: [] });
   }
 
   const query: any = { isActive: true };

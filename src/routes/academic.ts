@@ -284,11 +284,12 @@ router.get('/public/results/schools', async (req, res) => {
   try {
     let tenantInstitution = (req as any).institution;
     
+    const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+    const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
+    const isSpecificSearch = (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain;
+
     // Resolve by query param or header if not determined by the hostname middleware
-    if (!tenantInstitution) {
-      const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
-      const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
-      
+    if (!tenantInstitution && isSpecificSearch) {
       if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
         tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
       } else if (queryDomain) {
@@ -308,6 +309,11 @@ router.get('/public/results/schools', async (req, res) => {
         .select('name type eiin address website domains subdomain')
         .lean();
       return res.json({ schools: school ? [school] : [] });
+    }
+
+    // If a specific subdomain/domain was requested but we didn't find the school, return empty
+    if (isSpecificSearch) {
+      return res.json({ schools: [] });
     }
 
     const search = String(req.query.search || '').trim();

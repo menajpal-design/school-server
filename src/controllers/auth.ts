@@ -463,7 +463,7 @@ export const login = async (req: Request, res: Response) => {
               const { user, isMatch } = inferredResult;
               const subdomain = getRequestSubdomain(req);
               if (!subdomain) {
-                const allowedRoles = ['head', 'superadmin', 'admin', 'platform_admin'];
+                const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin'];
                 if (!allowedRoles.includes(user.role)) {
                   return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' });
                 }
@@ -515,7 +515,7 @@ export const login = async (req: Request, res: Response) => {
     }
 
     if (!subdomain) {
-      const allowedRoles = ['head', 'superadmin', 'admin', 'platform_admin'];
+      const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin'];
       if (!allowedRoles.includes(user.role)) {
         return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' });
       }
