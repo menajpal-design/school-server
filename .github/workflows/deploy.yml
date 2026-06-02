@@ -15,6 +15,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
             # Detect server directory
             if [ -d "$HOME/school-server" ]; then
