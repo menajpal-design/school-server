@@ -1,0 +1,42 @@
+name: Deploy to DigitalOcean (Server)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Backend via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            # Detect server directory
+            if [ -d "$HOME/school-server" ]; then
+              cd "$HOME/school-server"
+            elif [ -d "/var/www/school-server" ]; then
+              cd "/var/www/school-server"
+            else
+              echo "School server directory not found. Please set it up first."
+              exit 1
+            fi
+
+            echo "Deploying to $(pwd)..."
+
+            # Pull the latest changes
+            git reset --hard
+            git pull origin main
+
+            # Install dependencies (including devDependencies for build step)
+            npm install --production=false
+
+            # Build backend
+            npm run build
+
+            # Restart using PM2 (checks school-server first, then fallback to restart all, then starts)
+            pm2 restart school-server || pm2 restart all || pm2 start dist/server.js --name "school-server"
