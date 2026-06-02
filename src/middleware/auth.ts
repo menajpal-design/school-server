@@ -144,6 +144,12 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       );
     }
 
+    if (institution && user && !platformAdminRoles.includes(user.role)) {
+      if (String(user.institutionId) !== String(institution._id)) {
+        return res.status(403).json({ message: 'আপনি এই প্রতিষ্ঠানের সাবডোমেনে প্রবেশ করতে পারবেন না।' });
+      }
+    }
+
     if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
       const selectedInstitution = await withAuthTimeout(
         Institution.findById(selectedInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),

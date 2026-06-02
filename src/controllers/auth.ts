@@ -157,7 +157,9 @@ export const register = async (req: Request, res: Response) => {
 
     // Check if user already exists
     const storageContext = institution ? resolveTenantStorageContext(institution) : null;
-    const existingUser = await runWithTenantStorage(storageContext, async () => User.findOne({ email }));
+    const existingUser = institutionId
+      ? await runWithTenantStorage(storageContext, async () => User.findOne({ email, institutionId }))
+      : null;
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -294,7 +296,19 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
-    const institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || (req as any).institutionId || '');
+    const subdomain = getRequestSubdomain(req);
+    let institutionId = '';
+
+    if (subdomain) {
+      const tenantInst = (req as any).institution;
+      if (!tenantInst) {
+        return res.status(404).json({ message: 'নির্ধারিত প্রতিষ্ঠানের সাবডোমেনটি পাওয়া যায়নি।' });
+      }
+      institutionId = String(tenantInst._id || (req as any).institutionId || '');
+    } else {
+      institutionId = String(req.headers['x-institution-id'] || req.body.institutionId || '');
+    }
+
     const institutionScope = mongoose.Types.ObjectId.isValid(institutionId) ? { institutionId } : {};
     let tenantInstitution: any = null;
     let tenantContext = null;
@@ -500,7 +514,6 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
-    const subdomain = getRequestSubdomain(req);
     if (!subdomain) {
       const allowedRoles = ['head', 'superadmin', 'admin', 'platform_admin'];
       if (!allowedRoles.includes(user.role)) {

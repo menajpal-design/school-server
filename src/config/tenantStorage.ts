@@ -84,6 +84,8 @@ const getTenantConnection = async (context: TenantStorageContext) => {
     }).asPromise().then((connection) => {
       tenantConnectionFailures.delete(key);
       registerBridgeModels(connection);
+      connection.collection('users').dropIndex('email_1').catch(() => {});
+      connection.collection('users').dropIndex('username_1').catch(() => {});
       return connection;
     }).catch((error) => {
       tenantConnections.delete(key);

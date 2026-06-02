@@ -24,8 +24,8 @@ export interface IUser extends Document {
 
 const UserSchema: Schema = new Schema({
   name: { type: String, required: true, trim: true },
-  username: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
-  email: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
+  username: { type: String, sparse: true, lowercase: true, trim: true },
+  email: { type: String, sparse: true, lowercase: true, trim: true },
   password: { type: String, required: true },
   role: {
     type: String,
@@ -58,8 +58,22 @@ UserSchema.add({
 });
 
 // Index for better query performance
-UserSchema.index({ email: 1, institutionId: 1 }, { sparse: true });
-UserSchema.index({ username: 1, institutionId: 1 });
+UserSchema.index({ email: 1, institutionId: 1 }, { unique: true, sparse: true });
+UserSchema.index({ username: 1, institutionId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ role: 1, institutionId: 1 });
+
+const dropLegacy = () => {
+  const col = mongoose.connection.collection('users');
+  col.dropIndex('email_1').catch(() => {});
+  col.dropIndex('username_1').catch(() => {});
+};
+
+if (mongoose.connection) {
+  if (mongoose.connection.readyState === 1) {
+    process.nextTick(dropLegacy);
+  } else {
+    mongoose.connection.on('open', dropLegacy);
+  }
+}
 
 export default mongoose.model<IUser>('User', UserSchema);

@@ -368,7 +368,7 @@ router.post('/users', async (req, res) => {
     if (!institutionId) return res.status(400).json({ message: 'institutionId is required for new user' });
 
     // Check existing
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({ email, institutionId });
     if (existing) return res.status(400).json({ message: 'User with this email already exists' });
 
     const bcrypt = await import('bcryptjs');

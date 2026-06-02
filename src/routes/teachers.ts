@@ -106,7 +106,7 @@ router.post('/', authenticate, async (req, res) => {
   try {
     if (!['admin', 'super_admin', 'head'].includes(req.user.role)) return res.status(403).json({ message: 'Only school head or admin can assign teachers' });
     const email = String(req.body.email || `${String(req.body.employeeId || Date.now()).toLowerCase()}@teacher.local`);
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({ email, institutionId: req.user.institutionId });
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
     const username = await generateUsername(req.body.name, 'teacher');
     const temporaryPassword = generatePassword();

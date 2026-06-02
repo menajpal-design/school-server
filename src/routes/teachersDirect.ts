@@ -146,7 +146,7 @@ router.post('/', async (req: any, res) => {
     await syncTeacherProfiles(req, M);
 
     const email = String(req.body.email || `${String(req.body.employeeId || Date.now()).toLowerCase()}@teacher.local`);
-    const existing = await primaryDb(() => User.findOne({ email }));
+    const existing = await primaryDb(() => User.findOne({ email, institutionId: req.user.institutionId }));
     if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
 
     const username = await primaryDb(() => generateUsername(req.body.name, 'teacher'));
