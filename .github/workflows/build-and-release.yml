@@ -84,6 +84,13 @@ jobs:
         # allow any APK produced in the release output dir (handles -unsigned or different names)
         path: android/app/build/outputs/apk/release/*.apk
     
+    - name: Find Release APK
+      id: find_apk
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        APK_PATH=$(find android/app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
+        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
     - name: Create Release
       id: create_release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -109,8 +116,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        # point to any APK produced by the release build
-        asset_path: android/app/build/outputs/apk/release/*.apk
+        asset_path: ${{ steps.find_apk.outputs.apk_path }}
         asset_name: SchoolApp-v${{ github.run_number }}.apk
         asset_content_type: application/vnd.android.package-archive
 
