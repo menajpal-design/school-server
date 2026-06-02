@@ -15,9 +15,10 @@ on:
         required: false
         default: 'Latest Build'
 
-    # Allow the workflow to create releases and upload artifacts
-    permissions:
-      contents: write
+# Allow the workflow to create releases and upload artifacts
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
