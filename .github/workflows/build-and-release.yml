@@ -55,12 +55,10 @@ jobs:
         if [ -n "$KEYSTORE_BASE64" ]; then
           echo "Decoding keystore and writing key.properties"
           echo "$KEYSTORE_BASE64" | base64 --decode > android/app/my-release-key.jks
-          cat > android/key.properties <<EOF
-storePassword=$KEYSTORE_PASSWORD
-keyPassword=$KEY_PASSWORD
-keyAlias=$KEY_ALIAS
-storeFile=app/my-release-key.jks
-EOF
+          echo "storePassword=$KEYSTORE_PASSWORD" > android/key.properties
+          echo "keyPassword=$KEY_PASSWORD" >> android/key.properties
+          echo "keyAlias=$KEY_ALIAS" >> android/key.properties
+          echo "storeFile=app/my-release-key.jks" >> android/key.properties
         else
           echo "No KEYSTORE_BASE64 provided; skipping keystore setup"
         fi
