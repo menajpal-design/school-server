@@ -118,46 +118,4 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ${{ steps.find_apk.outputs.apk_path }}
         asset_name: SchoolApp-v${{ github.run_number }}.apk
-        asset_content_type: application/vnd.android.package-archive
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-    
-    - name: Install dependencies (Server)
-      run: cd server && npm install
-    
-    - name: Build Server
-      run: cd server && npm run build
-    
-    - name: Deploy to Heroku (Server)
-      env:
-        HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-      run: |
-        cd server
-        git remote add heroku https://git.heroku.com/school-server.git
-        git push heroku main
-    
-    - name: Install dependencies (Client)
-      run: cd client && npm install
-    
-    - name: Build Client
-      run: cd client && npm run build
-    
-    - name: Deploy to Heroku (Client)
-      env:
-        HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-      run: |
-        cd client
-        git remote add heroku https://git.heroku.com/school-client.git
-        git push heroku main
+         asset_content_type: application/vnd.android.package-archive
