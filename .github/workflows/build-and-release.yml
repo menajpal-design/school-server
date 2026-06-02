@@ -118,4 +118,4 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ${{ steps.find_apk.outputs.apk_path }}
         asset_name: SchoolApp-v${{ github.run_number }}.apk
-         asset_content_type: application/vnd.android.package-archive
+        asset_content_type: application/vnd.android.package-archive
