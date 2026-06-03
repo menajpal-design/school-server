@@ -13,12 +13,6 @@ const getActiveMongo = (value: any = {}) => {
   return String(active?.uri || value.mongodbUrl || '').trim();
 };
 
-const getActiveImgbb = (value: any = {}) => {
-  const items = Array.isArray(value.imgbbKeys) ? value.imgbbKeys : [];
-  const active = items.find((item: any) => item?.isActive) || items[items.length - 1];
-  return String(active?.apiKey || value.imgbbApiKey || '').trim();
-};
-
 const syncInstitutionToTenant = async (institution: any, tenantContext: any) => {
   if (!tenantContext?.mongoUri || !institution?._id) return;
 
@@ -66,7 +60,6 @@ router.post('/apply-to-institution', authenticate, authorize('admin', 'super_adm
     const setting: any = await SiteSetting.findOne({ key: 'site_config' }).lean();
     const value = setting?.value || {};
     const mongodbUri = String(req.body?.mongodbUri || getActiveMongo(value)).trim();
-    const imgbbApiKey = String(req.body?.imgbbApiKey || getActiveImgbb(value)).trim();
 
     if (!mongodbUri) {
       return res.status(400).json({ message: 'MongoDB URI missing. Save MongoDB URI in settings first.' });
@@ -77,7 +70,6 @@ router.post('/apply-to-institution', authenticate, authorize('admin', 'super_adm
       {
         $set: {
           'settings.mongodbUri': mongodbUri,
-          'settings.imgbbApiKey': imgbbApiKey,
           'billing.useEasySchoolStorage': false,
         },
       },
@@ -98,7 +90,6 @@ router.post('/apply-to-institution', authenticate, authorize('admin', 'super_adm
       message: 'Storage config applied to institution. School login and data access now use the selected personal storage.',
       institution,
       hasMongoUrl: Boolean(mongodbUri),
-      hasImgbbKey: Boolean(imgbbApiKey),
       migratedUsers,
     });
   } catch (error) {

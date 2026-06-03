@@ -1,27 +1,14 @@
 /**
  * File Upload Utility
- * Supports image uploads with IMGBB API
+ * Supports local uploads stored on disk and served from /uploads
  */
 
 import fs from 'fs';
 import path from 'path';
 import { getTenantStorageContext } from '../config/tenantStorage';
 
-const parseKeyList = (value?: string | null): string[] => {
-  if (!value) return [];
-  return value
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-};
-
 const MAX_FILE_SIZE = (parseInt(process.env.UPLOAD_MAX_SIZE_MB || '5') || 5) * 1024 * 1024; // Convert MB to bytes
 const ALLOWED_TYPES = (process.env.UPLOAD_ALLOWED_TYPES || 'image/jpeg,image/png,application/pdf').split(',');
-
-const getImgBBApiKeys = () => {
-  const tenantKey = getTenantStorageContext()?.imgbbApiKey;
-  return parseKeyList(tenantKey || process.env.IMGBB_API_KEYS || process.env.IMGBB_API_KEY);
-};
 
 interface UploadResponse {
   success: boolean;
@@ -59,60 +46,14 @@ export const validateFile = (
 };
 
 /**
- * Upload image to IMGBB
+ * Upload file locally
  */
-export const uploadToImgBB = async (filePath: string): Promise<UploadResponse> => {
-  try {
-    const imgbbApiKeys = getImgBBApiKeys();
-    if (imgbbApiKeys.length === 0) {
-      return {
-        success: false,
-        error: 'IMGBB_API_KEY or IMGBB_API_KEYS is not configured',
-      };
-    }
-
-    // Read file
-    const fileBuffer = fs.readFileSync(filePath);
-    const base64String = fileBuffer.toString('base64');
-    const filename = path.basename(filePath);
-
-    for (const apiKey of imgbbApiKeys) {
-      try {
-        const body = new URLSearchParams({
-          key: apiKey,
-          image: base64String,
-        });
-
-        const response = await fetch('https://api.imgbb.com/1/upload', {
-          method: 'POST',
-          body,
-          signal: AbortSignal.timeout(30000),
-        });
-        const data = await response.json() as any;
-
-        if (data.success) {
-          return {
-            success: true,
-            url: data.data.url,
-            filename: data.data.display_url.split('/').pop(),
-            size: fileBuffer.length,
-          };
-        }
-      } catch (error) {
-        continue;
-      }
-    }
-
-    return {
-      success: false,
-      error: 'All ImgBB API keys failed',
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Upload failed',
-    };
-  }
+/**
+ * Upload file locally
+ */
+export const uploadFileLocally = async (filePath: string): Promise<UploadResponse> => {
+  const filename = path.basename(filePath);
+  return uploadLocally(filePath, filename);
 };
 
 /**
@@ -197,9 +138,9 @@ export const getFileInfo = (filename: string): { exists: boolean; size?: number;
 /**
  * Generate file URL
  */
-export const getFileUrl = (filename: string, useImgBB: boolean = false): string => {
-  if (useImgBB) {
-    return `https://imgbb.com/${filename}`;
-  }
+/**
+ * Generate file URL
+ */
+export const getFileUrl = (filename: string): string => {
   return `/uploads/${filename}`;
 };

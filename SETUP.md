@@ -70,7 +70,6 @@ MONGO_PERSISTENCE_ENABLED=true
 
 ### File Upload Configuration
 ```env
-IMGBB_API_KEY=your_api_key                   # Get from https://api.imgbb.com/
 UPLOAD_MAX_SIZE_MB=5                         # Max file size in MB
 UPLOAD_ALLOWED_TYPES=image/jpeg,image/png,application/pdf
 UPLOAD_PATH=uploads/                         # Local upload directory
@@ -209,7 +208,6 @@ Student:
 
 ### File Upload Service
 - Local filesystem storage
-- ImgBB integration for images
 - File validation
 - Size and type restrictions
 

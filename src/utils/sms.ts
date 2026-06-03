@@ -97,7 +97,7 @@ const resolveSmsConfig = async (options: SMSOptions) => {
 
 export const buildCredentialSmsMessage = ({
   appName = process.env.APP_NAME || 'EASY SCHOOL',
-  loginUrl = process.env.FRONTEND_URL || 'https://www.easyschool.live/login',
+  loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000/login',
   summary,
   username,
   password,

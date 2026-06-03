@@ -8,7 +8,6 @@ export type TenantStorageContext = {
   mongoUri?: string;
   // optional array of archive/previous MongoDB URIs (read-only fallback)
   archiveMongoUris?: string[];
-  imgbbApiKey?: string;
 };
 
 const schoolDataModels = new Set([
@@ -236,9 +235,8 @@ export const resolveTenantStorageContext = (institution: any): TenantStorageCont
   }
 
   const archiveUris = normalized.filter((u: string) => u && u !== primaryUri);
-  const imgbbApiKey = activeAcademicYear?.imgbbApiKey || settings.imgbbApiKey || '';
-  if (!primaryUri && !imgbbApiKey) return null;
-  return { institutionId: String(institution?._id || institution?.id || ''), mongoUri: primaryUri || undefined, archiveMongoUris: archiveUris.length ? archiveUris : undefined, imgbbApiKey: imgbbApiKey || undefined };
+  if (!primaryUri) return null;
+  return { institutionId: String(institution?._id || institution?.id || ''), mongoUri: primaryUri || undefined, archiveMongoUris: archiveUris.length ? archiveUris : undefined };
 };
 
 export const installTenantStoragePatches = () => {

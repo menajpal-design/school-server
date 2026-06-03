@@ -56,7 +56,6 @@ export interface IInstitution extends Document {
   };
   settings: {
     mongodbUri?: string;
-    imgbbApiKey?: string;
     smsEnabled?: boolean;
     smsProvider?: string;
     smsApiUrl?: string;
@@ -65,7 +64,6 @@ export interface IInstitution extends Document {
     academicYears?: {
       year: string;
       mongodbUri?: string;
-      imgbbApiKey?: string;
       isActive?: boolean;
     }[];
     backupSettings: {
@@ -136,7 +134,6 @@ const InstitutionSchema: Schema = new Schema({
   },
   settings: {
     mongodbUri: { type: String },
-    imgbbApiKey: { type: String },
     smsEnabled: { type: Boolean, default: true },
     smsProvider: { type: String, default: 'anoncify' },
     smsApiUrl: { type: String },
@@ -145,7 +142,6 @@ const InstitutionSchema: Schema = new Schema({
     academicYears: [{
       year: { type: String, trim: true },
       mongodbUri: { type: String },
-      imgbbApiKey: { type: String },
       isActive: { type: Boolean, default: false },
     }],
     backupSettings: {

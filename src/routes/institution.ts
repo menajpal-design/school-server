@@ -257,7 +257,7 @@ router.get('/plans', (req, res) => {
     plans: SCHOOL_PLANS,
     storage: {
       easySchoolMonthlyPrice: EASY_SCHOOL_STORAGE_MONTHLY_PRICE,
-      ownMongoDbAndImgBbPrice: 0,
+      ownMongoDbAndLocalStoragePrice: 0,
     },
     paymentGateway: {
       bkashNumber: process.env.PAYMENT_BKASH_NUMBER || '0179007328',
@@ -317,7 +317,6 @@ router.put('/profile', authenticate, async (req, res) => {
           .map((item: any) => ({
             year: String(item.year || '').trim(),
             mongodbUri: item.mongodbUri,
-            imgbbApiKey: item.imgbbApiKey,
             isActive: item.isActive === true,
           }))
           .filter((item: any) => item.year);

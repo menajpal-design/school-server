@@ -33,13 +33,12 @@ async function schoolDb<T>(req: any, fn: () => Promise<T>) {
   if (!context?.mongoUri) {
     const setting: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
     const mongoUri = String(req.user?.institution?.settings?.mongodbUri || activeFrom(setting.mongodbUris, 'uri') || setting.mongodbUrl || '').trim();
-    const imgbbApiKey = String(req.user?.institution?.settings?.imgbbApiKey || activeFrom(setting.imgbbKeys, 'apiKey') || setting.imgbbApiKey || '').trim();
     if (!mongoUri) {
       const error: any = new Error('School MongoDB URI missing. Save MongoDB URI in Settings before adding students.');
       error.statusCode = 428;
       throw error;
     }
-    context = { institutionId: String(req.user.institutionId), mongoUri, imgbbApiKey: imgbbApiKey || undefined };
+    context = { institutionId: String(req.user.institutionId), mongoUri };
   }
   return runWithTenantStorage(context, fn, req.user, req.user?.institution);
 }

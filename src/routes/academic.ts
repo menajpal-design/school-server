@@ -265,7 +265,7 @@ const resolvePublicInstitution = async (req: any) => {
   const clientSubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
   if (clientSubdomain && !['www', 'app', 'api', 'admin'].includes(clientSubdomain)) {
     const inst = await Institution.findOne({ subdomain: clientSubdomain, isActive: true });
-    if (inst) return inst;
+    return inst || null;
   }
 
   const domain = String(req.query.domain || req.headers['x-client-domain'] || req.hostname || '').replace(/^www\./, '').toLowerCase();
@@ -283,15 +283,19 @@ const resolvePublicInstitution = async (req: any) => {
 router.get('/public/results/schools', async (req, res) => {
   try {
     let tenantInstitution = (req as any).institution;
-    
     const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+    const hasRequestedSubdomain = Boolean(querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain));
     const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
     const isSpecificSearch = (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain;
 
     // Resolve by query param or header if not determined by the hostname middleware
     if (!tenantInstitution && isSpecificSearch) {
       if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
+      if (hasRequestedSubdomain) {
         tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
+        if (!tenantInstitution) {
+          return res.json({ schools: [] });
+        }
       } else if (queryDomain) {
         tenantInstitution = await Institution.findOne({
           isActive: true,
@@ -311,7 +315,6 @@ router.get('/public/results/schools', async (req, res) => {
       return res.json({ schools: school ? [school] : [] });
     }
 
-    // If a specific subdomain/domain was requested but we didn't find the school, return empty
     if (isSpecificSearch) {
       return res.json({ schools: [] });
     }

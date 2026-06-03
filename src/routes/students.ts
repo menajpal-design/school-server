@@ -6,7 +6,7 @@ import { buildCredentialSmsMessage, sendSMS } from '../utils/sms';
 const router = express.Router();
 
 const validBloodGroups = new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
-const loginUrl = process.env.FRONTEND_URL || 'https://www.easyschool.live/login';
+const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000/login';
 const appName = process.env.APP_NAME || 'EASY SCHOOL';
 const safeDate = (value: any) => {
   if (!value) return undefined;

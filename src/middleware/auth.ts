@@ -308,6 +308,7 @@ export const canManageFinance = () => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
     if (isPrivilegedRole(req.user.role)) return next();
+    if (req.user.role === 'assistant_head') return next();
     if (req.user.role === 'finance_officer' || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:finance'))) return next();
     return res.status(403).json({ message: 'Access denied. Finance management only.' });
   };

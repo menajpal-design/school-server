@@ -23,24 +23,17 @@ const getActiveMongo = (value: any = {}) => {
   return String(active?.uri || value.mongodbUrl || '').trim();
 };
 
-const getActiveImgbb = (value: any = {}) => {
-  const items = Array.isArray(value.imgbbKeys) ? value.imgbbKeys : [];
-  const active = items.find((item: any) => item?.isActive) || items[items.length - 1];
-  return String(active?.apiKey || value.imgbbApiKey || '').trim();
-};
-
 const schoolDb = async <T>(req: any, fn: () => Promise<T>) => {
   let context = getTenantStorageContext();
   if (!context?.mongoUri) {
     const siteConfig: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
     const mongoUri = String(req.user?.institution?.settings?.mongodbUri || getActiveMongo(siteConfig)).trim();
-    const imgbbApiKey = String(req.user?.institution?.settings?.imgbbApiKey || getActiveImgbb(siteConfig)).trim();
     if (!mongoUri) {
       const error: any = new Error('School MongoDB URI missing. Save MongoDB URI in Settings before admitting students.');
       error.statusCode = 428;
       throw error;
     }
-    context = { institutionId: String(req.user.institutionId), mongoUri, imgbbApiKey: imgbbApiKey || undefined };
+    context = { institutionId: String(req.user.institutionId), mongoUri };
   }
   return runWithTenantStorage(context, fn, req.user, req.user?.institution);
 };
@@ -67,17 +60,26 @@ const admissionError = (error: any) => {
   return error?.message || 'Failed to process admission.';
 };
 
+const getRequestedSubdomain = (req: any) => {
+  const value = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
+  return value && !['www', 'app', 'api', 'admin'].includes(value) ? value : '';
+};
+
 router.get('/public/schools', async (req, res) => {
   const search = String(req.query.search || '').trim();
   let tenantInstitution = (req as any).institution;
+  const requestedSubdomain = getRequestedSubdomain(req);
 
   const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
   const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
-  const isSpecificSearch = (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain;
+  const isSpecificSearch = Boolean((querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain);
 
   if (!tenantInstitution && isSpecificSearch) {
     if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
       tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
+      if (!tenantInstitution) {
+        return res.json({ schools: [] });
+      }
     } else if (queryDomain) {
       tenantInstitution = await Institution.findOne({
         isActive: true,
@@ -96,7 +98,6 @@ router.get('/public/schools', async (req, res) => {
     return res.json({ schools: school ? [school] : [] });
   }
 
-  // If a specific subdomain/domain was requested but we didn't find the school, return empty
   if (isSpecificSearch) {
     return res.json({ schools: [] });
   }
@@ -112,6 +113,15 @@ router.get('/public/schools', async (req, res) => {
 });
 
 router.post('/public/apply', async (req, res) => {
+  const requestedSubdomain = getRequestedSubdomain(req);
+  if (requestedSubdomain) {
+    const school = await Institution.findOne({ subdomain: requestedSubdomain, isActive: true }).lean();
+    if (!school) return res.status(404).json({ message: 'School not found' });
+    if (String(req.body.institutionId || '') !== String(school._id)) {
+      return res.status(403).json({ message: 'This subdomain can only submit applications for its own school.' });
+    }
+  }
+
   const application = await primaryDb(() => AdmissionApplication.create({
     institutionId: req.body.institutionId,
     studentName: req.body.studentName,

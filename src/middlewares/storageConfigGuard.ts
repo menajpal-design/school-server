@@ -35,15 +35,13 @@ const needsStorageConfig = (institution: any) => {
 
   const billing = institution.billing || {};
   const settings = institution.settings || {};
-  const activeAcademicYear = getActiveAcademicYearStorage(settings);
 
   // If the school selected/paid for EasySchool storage, do not require personal MongoDB/ImgBB.
   // Personal MongoDB + ImgBB are required only when EasySchool storage is disabled.
   if (isUsingEasySchoolStorage(billing)) return false;
 
-  const mongoUri = String(activeAcademicYear.mongodbUri || settings.mongodbUri || '').trim();
-  const imgbbApiKey = String(activeAcademicYear.imgbbApiKey || settings.imgbbApiKey || '').trim();
-  return !mongoUri || !imgbbApiKey;
+  const mongoUri = String(getActiveAcademicYearStorage(settings).mongodbUri || settings.mongodbUri || '').trim();
+  return !mongoUri;
 };
 
 const resolveInstitutionId = (decoded: any) => {
@@ -84,7 +82,7 @@ export const storageConfigGuard = async (req: Request, res: Response, next: Next
       return res.status(428).json({
         code: 'STORAGE_CONFIG_REQUIRED',
         redirectTo: '/settings',
-        message: 'দয়া করে MongoDB URL এবং ImgBB API Key সেট করুন। EasySchool storage subscription না থাকলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে personal storage configuration দিতে হবে।',
+        message: 'দয়া করে MongoDB URL সেট করুন। Local storage ব্যবহার না করলে নতুন ডাটা তৈরি, ফাইল/ছবি আপলোড বা ডাটাবেস ব্যবহারের আগে প্রয়োজনীয় storage configuration দিতে হবে।',
       });
     }
 

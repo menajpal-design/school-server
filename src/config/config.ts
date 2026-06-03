@@ -25,7 +25,6 @@ export interface Config {
   mongoSnapshotId: string;
 
   // Uploads
-  imgbbApiKey: string;
   uploadMaxSizeMB: number;
   uploadAllowedTypes: string[];
   uploadPath: string;
@@ -72,7 +71,7 @@ export const getConfig = (): Config => {
     jwtExpire: process.env.JWT_EXPIRE || '7d',
 
     // MongoDB
-    mongoUri: 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0',
+    mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/easy_school',
     mongoDbName: process.env.MONGO_DB_NAME || 'easy_school',
     mongoReplicaSet: process.env.MONGO_REPLICA_SET || '',
     mongoSSL: process.env.MONGO_SSL === 'true',
@@ -84,7 +83,6 @@ export const getConfig = (): Config => {
     mongoSnapshotId: process.env.MONGO_SNAPSHOT_ID || 'app-main',
 
     // Uploads
-    imgbbApiKey: process.env.IMGBB_API_KEY || '',
     uploadMaxSizeMB: parseInt(process.env.UPLOAD_MAX_SIZE_MB || '5', 10),
     uploadAllowedTypes: (process.env.UPLOAD_ALLOWED_TYPES || 'image/jpeg,image/png,application/pdf').split(','),
     uploadPath: process.env.UPLOAD_PATH || './uploads',
@@ -111,7 +109,7 @@ export const getConfig = (): Config => {
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
     mobileUrl: process.env.MOBILE_URL || 'http://localhost:8081',
     androidUrl: process.env.ANDROID_URL || 'http://localhost:8082',
-    staticServerUrl: process.env.SERVER_URL || 'https://school-server-b264c1a1fac6.herokuapp.com',
+    staticServerUrl: process.env.SERVER_URL || 'http://localhost:5000',
     allowedOrigins: process.env.ALLOWED_ORIGINS || '',
     mainDomain: process.env.MAIN_DOMAIN || '',
     cookieDomain: process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN || '',

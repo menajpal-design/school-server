@@ -87,7 +87,8 @@ function getExamStats(results: any[]) {
 }
 
 function buildMessage(studentName: string, rollNumber: string, monthLabel: string, attendanceDays: number, presentDays: number, resultSummary: string) {
-  const baseMessage = `Dear Parent, ${studentName} (${rollNumber}) ${monthLabel}: Attendance ${presentDays}/${attendanceDays} days. ${resultSummary}`;
+  // Bengali message for monthly parent summary
+  const baseMessage = `${studentName} (${rollNumber}) — ${monthLabel} এর সারসংক্ষেপ: উপস্থিতি ${presentDays}/${attendanceDays} দিন। ${resultSummary}`;
   return baseMessage.substring(0, 160);
 }
 

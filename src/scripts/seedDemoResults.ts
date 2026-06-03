@@ -30,8 +30,8 @@ const seedDemoResults = async () => {
         address: 'Kanaipur, Faridpur Sadar, Faridpur',
         phone: '+8801700000000',
         email: 'info@kanaipurhighschool.edu.bd',
-        website: 'school-b-6-10.easyschool.live',
-        domains: ['school-b-6-10.easyschool.live'],
+        website: 'school-b-6-10.localhost',
+        domains: ['school-b-6-10.localhost'],
         subdomain: subdomain,
         isActive: true,
       });
