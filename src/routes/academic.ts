@@ -290,7 +290,6 @@ router.get('/public/results/schools', async (req, res) => {
 
     // Resolve by query param or header if not determined by the hostname middleware
     if (!tenantInstitution && isSpecificSearch) {
-      if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
       if (hasRequestedSubdomain) {
         tenantInstitution = await Institution.findOne({ subdomain: querySubdomain, isActive: true }).lean();
         if (!tenantInstitution) {
