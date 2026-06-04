@@ -35,7 +35,6 @@ interface CredentialSmsOptions {
 const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
 const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
 const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || '';
-const SMS_SENDER_ID = process.env.SMS_SENDER_ID || process.env.SENDER_ID || process.env.SMS_FROM || '';
 
 const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => {
@@ -45,17 +44,17 @@ const normalizePhone = (value: any) => {
 
 const parseGatewayResponse = (text: string) => {
   const raw = String(text || '').trim();
-  if (!raw) return { ok: true, raw };
+  if (!raw) return { ok: false, raw };
   try {
     const json: any = JSON.parse(raw);
     const status = String(json.status ?? json.success ?? json.response ?? json.message ?? '').toLowerCase();
-    const ok = json.success === true || json.ok === true || ['success', 'sent', 'queued', 'submitted', 'ok', 'true', '1'].some((word) => status.includes(word));
+    const ok = json.success === true || json.ok === true || ['sent', 'success', 'queued', 'submitted', 'ok', 'true', '1'].some((word) => status.includes(word));
     const failed = json.success === false || ['error', 'fail', 'failed', 'invalid', 'unauthorized', 'insufficient'].some((word) => status.includes(word));
     return { ok: ok || !failed, raw };
   } catch (_) {
     const lower = raw.toLowerCase();
-    const ok = /success|sent|queued|submitted|ok|accepted/.test(lower);
-    const failed = /error|fail|failed|invalid|unauthorized|insufficient|expired/.test(lower);
+    const ok = /(^|\b)(sent|success|queued|submitted|ok|accepted)(\b|$)/.test(lower);
+    const failed = /error|fail|failed|invalid|unauthorized|insufficient|expired|missing|bad params/.test(lower);
     return { ok: ok || !failed, raw };
   }
 };
@@ -97,26 +96,19 @@ const buildChargeMeta = (options: SMSOptions, count = 1) => {
 
 const resolveSmsConfig = async (options: SMSOptions) => {
   const institution = options.institutionId
-    ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey settings.smsSenderId billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean()
+    ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean()
     : null;
 
   const institutionSettings: any = (institution as any)?.settings || {};
-  // Default SMS to enabled unless explicitly disabled on institution or globally disabled via env
-  const globalEnabled = process.env.SMS_ENABLED !== 'false'; // default true unless explicitly set to 'false'
+  const globalEnabled = process.env.SMS_ENABLED !== 'false';
   const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase();
   const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
-<<<<<<< HEAD
-  const rawKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
-  // Reject placeholder/demo keys — real keys are typically 20+ chars with no spaces and no common placeholder patterns
+  const rawKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || SMS_API_KEY || '').trim();
   const isPlaceholder = !rawKey || rawKey.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
   const apiKey = isPlaceholder ? '' : rawKey;
-=======
-  const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || SMS_API_KEY || '').trim();
-  const senderId = String(institutionSettings.smsSenderId || process.env.SMS_SENDER_ID || process.env.SENDER_ID || process.env.SMS_FROM || SMS_SENDER_ID || '').trim();
->>>>>>> 22b591c434157b2cc1ab9f9c8dbf61cd22a01fe5
   const enabled = typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled;
 
-  return { institution, provider, apiUrl, apiKey, senderId, enabled };
+  return { institution, provider, apiUrl, apiKey, enabled };
 };
 
 export const buildCredentialSmsMessage = ({
@@ -173,22 +165,15 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
   }
 };
 
-const buildAnoncifyBody = (smsConfig: Awaited<ReturnType<typeof resolveSmsConfig>>, phoneNumber: string, message: string) => {
-  const body = new URLSearchParams();
-  body.set('key', smsConfig.apiKey);
-  body.set('number', phoneNumber);
-  // SmsLayer/Anoncify API docs use `message`; older examples sometimes use `msg`.
-  // Send both so existing deployments work with either parser.
-  body.set('message', message);
-  body.set('msg', message);
-  if (smsConfig.senderId) {
-    body.set('senderid', smsConfig.senderId);
-    body.set('sender_id', smsConfig.senderId);
-  }
-  return body;
+const buildSmsLayerUrl = (smsConfig: Awaited<ReturnType<typeof resolveSmsConfig>>, phoneNumber: string, message: string) => {
+  const url = new URL(smsConfig.apiUrl || 'https://anoncify.xyz/api/sms');
+  url.searchParams.set('key', smsConfig.apiKey);
+  url.searchParams.set('number', phoneNumber);
+  url.searchParams.set('msg', String(message || '').slice(0, 1224));
+  return url;
 };
 
-const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
+const sendViaSmsLayer = async (options: SMSOptions): Promise<boolean> => {
   const smsConfig = await resolveSmsConfig(options);
   if (!smsConfig.enabled) {
     const segments = computeSmsSegments(options.message || '');
@@ -201,7 +186,7 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
   }
   if (!smsConfig.apiKey) {
     const segments = computeSmsSegments(options.message || '');
-    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS API key not configured', undefined, segments);
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS API key not configured or placeholder key used', undefined, segments);
     return false;
   }
   if (!(await ensureSmsQuota(options))) {
@@ -220,13 +205,8 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
       continue;
     }
     try {
-      const url = new URL(smsConfig.apiUrl);
-      const body = buildAnoncifyBody(smsConfig, phoneNumber, options.message);
-      const response = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
+      const url = buildSmsLayerUrl(smsConfig, phoneNumber, options.message);
+      const response = await fetch(url.toString(), { method: 'GET' });
       const responseText = await response.text();
       const parsed = parseGatewayResponse(responseText);
       if (!response.ok || !parsed.ok) {
@@ -264,7 +244,7 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
     return false;
   }
   if (smsConfig.provider === 'anoncify' || smsConfig.provider === 'smslayer') {
-    return sendViaAnoncify({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
+    return sendViaSmsLayer({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
   }
   await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);
   return false;
