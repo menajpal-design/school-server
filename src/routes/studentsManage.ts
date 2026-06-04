@@ -13,6 +13,8 @@ import { runWithTenantStorage } from '../config/tenantStorage';
 const router = express.Router();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
 const connections = new Map<string, Promise<mongoose.Connection>>();
+const canViewStudents = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'admin', 'super_admin'].includes(role);
+const canEditStudents = (role: string) => ['head', 'assistant_head', 'admin', 'super_admin'].includes(role);
 
 const normalizeRoll = (value: any) => {
   const raw = String(value || '').trim();
@@ -89,6 +91,8 @@ router.get('/:id', authenticate, async (req: any, res) => {
     }
 
     if (!student) return res.status(404).json({ message: 'Student profile not found.' });
+    const isSelf = String(student.userId) === String(req.user._id) || String(student.parentId || '') === String(req.user._id);
+    if (!canViewStudents(req.user.role) && !isSelf) return res.status(403).json({ message: 'Access denied. Students can only view their own profile.' });
 
     const enriched = await enrichStudent(student);
     res.json({ student: enriched, ...enriched });
@@ -99,6 +103,7 @@ router.get('/:id', authenticate, async (req: any, res) => {
 
 router.put('/:id', authenticate, async (req: any, res) => {
   try {
+    if (!canEditStudents(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant Head/Admin can update student records.' });
     const M = await models(req);
     const rawId = String(req.params.id || '');
     let student: any = null;
