@@ -1,10 +1,19 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import Result from '../models/Result';
 import Student from '../models/Student';
 import Institution from '../models/Institution';
+import ClassModel from '../models/Class';
+import Section from '../models/Section';
+import Subject from '../models/Subject';
+import Exam from '../models/Exam';
+import SiteSetting from '../models/SiteSetting';
+import { runWithTenantStorage } from '../config/tenantStorage';
 
 const router = express.Router();
+const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
+const resultConnections = new Map<string, Promise<mongoose.Connection>>();
 
 const gradePoint = (grade?: string) => {
   const g = String(grade || '').trim().toUpperCase();
@@ -22,6 +31,50 @@ const totalMarksFor = (result: any) => {
   return Number(setup?.totalMarks || result.examId?.totalMarks || 100);
 };
 
+const normalizeMongoItems = (config: any = {}) => {
+  const existing = Array.isArray(config.mongodbUris) ? config.mongodbUris : [];
+  const items = existing.map((item: any, index: number) => ({ id: item.id || `mongo-${index + 1}`, uri: item.uri || item.mongodbUrl || '', isActive: item.isActive === true })).filter((item: any) => item.uri);
+  if (config.mongodbUrl && !items.some((item: any) => item.uri === config.mongodbUrl)) items.push({ id: `mongo-${items.length + 1}`, uri: config.mongodbUrl, isActive: true });
+  if (items.length && !items.some((item: any) => item.isActive)) items[items.length - 1].isActive = true;
+  return items;
+};
+
+async function activeMongoUri(req: any) {
+  const setting: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
+  const items = normalizeMongoItems(setting);
+  const activeMongo = items.find((item: any) => item.isActive) || items[items.length - 1];
+  return String(activeMongo?.uri || setting.mongodbUrl || req.user?.institution?.settings?.mongodbUri || '').trim();
+}
+
+async function resultConnection(req: any) {
+  const uri = await activeMongoUri(req);
+  if (!uri) return null;
+  if (!resultConnections.has(uri)) resultConnections.set(uri, mongoose.createConnection(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15000, connectTimeoutMS: 15000, socketTimeoutMS: 30000, retryWrites: true }).asPromise());
+  try {
+    const connection = await resultConnections.get(uri)!;
+    await connection.db.admin().ping();
+    return connection;
+  } catch (error) {
+    resultConnections.delete(uri);
+    console.warn('Personal result active school MongoDB failed; falling back:', (error as any)?.message || error);
+    return null;
+  }
+}
+
+async function models(req: any) {
+  const connection = await resultConnection(req);
+  if (!connection) return { Student, Result, Class: ClassModel, Section, Subject, Exam };
+  const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
+  return {
+    Student: model('Student', Student),
+    Result: model('Result', Result),
+    Class: model('Class', ClassModel),
+    Section: model('Section', Section),
+    Subject: model('Subject', Subject),
+    Exam: model('Exam', Exam),
+  };
+}
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
     if (!['student', 'parent'].includes(req.user.role)) {
@@ -29,6 +82,7 @@ router.get('/', authenticate, async (req: any, res) => {
     }
 
     const institutionId = req.user.institutionId;
+    const M = await models(req);
     const studentQuery: any = { institutionId, isActive: true };
 
     if (req.user.role === 'student') {
@@ -40,11 +94,19 @@ router.get('/', authenticate, async (req: any, res) => {
       studentQuery.parentId = req.user._id;
     }
 
-    const student = await Student.findOne(studentQuery)
+    let student = await M.Student.findOne(studentQuery)
       .populate('userId', 'name email phone avatar gender')
       .populate('classId', 'name grade academicYear')
       .populate('sectionId', 'name')
       .lean();
+
+    if (!student && req.user.role === 'student') {
+      student = await M.Student.findOne({ institutionId, userId: req.user._id })
+        .populate('userId', 'name email phone avatar gender')
+        .populate('classId', 'name grade academicYear')
+        .populate('sectionId', 'name')
+        .lean();
+    }
 
     if (!student) return res.status(404).json({ message: 'Student profile/result not found for current user.' });
 
@@ -52,13 +114,13 @@ router.get('/', authenticate, async (req: any, res) => {
     if (req.query.examId) query.examId = req.query.examId;
     if (req.query.subjectId) query.subjectId = req.query.subjectId;
 
-    const results = await Result.find(query)
+    const results = await M.Result.find(query)
       .populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate')
       .populate('subjectId', 'name code')
       .sort({ publishedAt: -1, createdAt: -1 })
       .lean();
 
-    const institution = await Institution.findById(institutionId).select('name eiin address phone website subdomain').lean();
+    const institution = await primaryDb(() => Institution.findById(institutionId).select('name eiin address phone website subdomain').lean());
     const rows = results.map((result: any) => {
       const totalMarks = totalMarksFor(result);
       const marks = Number(result.marksObtained || 0);
@@ -101,14 +163,7 @@ router.get('/', authenticate, async (req: any, res) => {
         exams: Array.from(new Map(rows.map((r) => [String(r.examId), { _id: r.examId, name: r.examName, type: r.examType }])).values()),
         subjects: Array.from(new Map(rows.map((r) => [String(r.subjectId), { _id: r.subjectId, name: r.subjectName, code: r.subjectCode }])).values()),
       },
-      summary: {
-        totalSubjects: rows.length,
-        totalObtained,
-        totalMarks: grandTotal,
-        percentage: grandTotal ? Math.round((totalObtained / grandTotal) * 100) : 0,
-        gpa,
-        passed: rows.length ? !failed : false,
-      },
+      summary: { totalSubjects: rows.length, totalObtained, totalMarks: grandTotal, percentage: grandTotal ? Math.round((totalObtained / grandTotal) * 100) : 0, gpa, passed: rows.length ? !failed : false },
       results: rows,
     });
   } catch (error) {
