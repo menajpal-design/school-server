@@ -152,11 +152,11 @@ router.post('/', async (req: any, res) => {
     const username = await primaryDb(() => generateUsername(req.body.name, 'teacher'));
     const temporaryPassword = generatePassword();
     
-    const user = await primaryDb(() => User.create({
+    const user = await primaryDb(async () => User.create({
       name: req.body.name,
       username,
       email,
-      password: hashPassword(temporaryPassword),
+      password: await hashPassword(temporaryPassword),
       role: 'subject_teacher',
       phone: req.body.phone,
       avatar: req.body.photo,

@@ -105,11 +105,11 @@ router.post('/', async (req: any, res) => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       username = await primaryDb(() => generateUsername(req.body.name || 'Staff', 'staff'));
       try {
-        user = await primaryDb(() => User.create({
+        user = await primaryDb(async () => User.create({
           name: String(req.body.name || 'Staff').trim() || 'Staff',
           username,
           email: safeEmail(username),
-          password: hashPassword(password),
+          password: await hashPassword(password),
           role: 'staff',
           phone: req.body.phone,
           avatar: req.body.photo,
