@@ -65,106 +65,71 @@ async function models(req: any) {
   const connection = await resultConnection(req);
   if (!connection) return { Student, Result, Class: ClassModel, Section, Subject, Exam };
   const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  return {
-    Student: model('Student', Student),
-    Result: model('Result', Result),
-    Class: model('Class', ClassModel),
-    Section: model('Section', Section),
-    Subject: model('Subject', Subject),
-    Exam: model('Exam', Exam),
-  };
+  return { Student: model('Student', Student), Result: model('Result', Result), Class: model('Class', ClassModel), Section: model('Section', Section), Subject: model('Subject', Subject), Exam: model('Exam', Exam) };
 }
+
+const shapeRow = (result: any) => {
+  const totalMarks = totalMarksFor(result);
+  const marks = Number(result.marksObtained || 0);
+  const percentage = totalMarks ? Math.round((marks / totalMarks) * 100) : 0;
+  return {
+    _id: result._id,
+    examId: result.examId?._id || result.examId,
+    examName: result.examId?.name || 'Exam',
+    examType: result.examId?.type || '',
+    subjectId: result.subjectId?._id || result.subjectId,
+    subjectName: result.subjectId?.name || 'Subject',
+    subjectCode: result.subjectId?.code || '',
+    marksObtained: result.marksObtained,
+    totalMarks,
+    percentage,
+    grade: result.grade || '',
+    gradePoint: gradePoint(result.grade),
+    isPassed: result.isPassed !== false,
+    remarks: result.remarks || '',
+    publishedAt: result.publishedAt || result.createdAt,
+  };
+};
 
 router.get('/', authenticate, async (req: any, res) => {
   try {
-    if (!['student', 'parent'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Only students and parents can access personal results from this endpoint.' });
-    }
-
+    if (!['student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can access personal results from this endpoint.' });
     const institutionId = req.user.institutionId;
     const M = await models(req);
     const studentQuery: any = { institutionId, isActive: true };
+    if (req.user.role === 'student') studentQuery.userId = req.user._id;
+    else if (req.query.studentId) { studentQuery._id = req.query.studentId; studentQuery.parentId = req.user._id; }
+    else studentQuery.parentId = req.user._id;
 
-    if (req.user.role === 'student') {
-      studentQuery.userId = req.user._id;
-    } else if (req.query.studentId) {
-      studentQuery._id = req.query.studentId;
-      studentQuery.parentId = req.user._id;
-    } else {
-      studentQuery.parentId = req.user._id;
-    }
-
-    let student = await M.Student.findOne(studentQuery)
-      .populate('userId', 'name email phone avatar gender')
-      .populate('classId', 'name grade academicYear')
-      .populate('sectionId', 'name')
-      .lean();
-
-    if (!student && req.user.role === 'student') {
-      student = await M.Student.findOne({ institutionId, userId: req.user._id })
-        .populate('userId', 'name email phone avatar gender')
-        .populate('classId', 'name grade academicYear')
-        .populate('sectionId', 'name')
-        .lean();
-    }
-
+    let student = await M.Student.findOne(studentQuery).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
+    if (!student && req.user.role === 'student') student = await M.Student.findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
     if (!student) return res.status(404).json({ message: 'Student profile/result not found for current user.' });
 
-    const query: any = { institutionId, studentId: student._id, workflowStatus: 'published' };
-    if (req.query.examId) query.examId = req.query.examId;
-    if (req.query.subjectId) query.subjectId = req.query.subjectId;
+    const baseQuery: any = { institutionId, studentId: student._id, workflowStatus: 'published' };
+    const allResults = await M.Result.find(baseQuery).populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate').populate('subjectId', 'name code').sort({ publishedAt: -1, createdAt: -1 }).lean();
+    const allRows = allResults.map(shapeRow);
 
-    const results = await M.Result.find(query)
-      .populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate')
-      .populate('subjectId', 'name code')
-      .sort({ publishedAt: -1, createdAt: -1 })
-      .lean();
-
-    const institution = await primaryDb(() => Institution.findById(institutionId).select('name eiin address phone website subdomain').lean());
-    const rows = results.map((result: any) => {
-      const totalMarks = totalMarksFor(result);
-      const marks = Number(result.marksObtained || 0);
-      const percentage = totalMarks ? Math.round((marks / totalMarks) * 100) : 0;
-      return {
-        _id: result._id,
-        examId: result.examId?._id || result.examId,
-        examName: result.examId?.name || 'Exam',
-        examType: result.examId?.type || '',
-        subjectId: result.subjectId?._id || result.subjectId,
-        subjectName: result.subjectId?.name || 'Subject',
-        subjectCode: result.subjectId?.code || '',
-        marksObtained: result.marksObtained,
-        totalMarks,
-        percentage,
-        grade: result.grade || '',
-        gradePoint: gradePoint(result.grade),
-        isPassed: result.isPassed !== false,
-        remarks: result.remarks || '',
-        publishedAt: result.publishedAt || result.createdAt,
-      };
+    const filteredRows = allRows.filter((row: any) => {
+      if (req.query.examId && String(row.examId) !== String(req.query.examId)) return false;
+      if (req.query.subjectId && String(row.subjectId) !== String(req.query.subjectId)) return false;
+      return true;
     });
 
-    const totalObtained = rows.reduce((sum, item) => sum + Number(item.marksObtained || 0), 0);
-    const grandTotal = rows.reduce((sum, item) => sum + Number(item.totalMarks || 0), 0);
-    const failed = rows.some((item) => item.isPassed === false || String(item.grade).toUpperCase() === 'F');
-    const gpa = rows.length ? (failed ? 0 : Number((rows.reduce((sum, item) => sum + Number(item.gradePoint || 0), 0) / rows.length).toFixed(2))) : 0;
+    const institution = await primaryDb(() => Institution.findById(institutionId).select('name eiin address phone website subdomain').lean());
+    const totalObtained = filteredRows.reduce((sum, item) => sum + Number(item.marksObtained || 0), 0);
+    const grandTotal = filteredRows.reduce((sum, item) => sum + Number(item.totalMarks || 0), 0);
+    const failed = filteredRows.some((item) => item.isPassed === false || String(item.grade).toUpperCase() === 'F');
+    const gpa = filteredRows.length ? (failed ? 0 : Number((filteredRows.reduce((sum, item) => sum + Number(item.gradePoint || 0), 0) / filteredRows.length).toFixed(2))) : 0;
 
     res.json({
       institution,
-      student: {
-        _id: student._id,
-        name: (student.userId as any)?.name || student.guardianName || 'Student',
-        rollNumber: student.rollNumber,
-        className: (student.classId as any)?.name || '',
-        sectionName: (student.sectionId as any)?.name || '',
-        academicYear: (student.classId as any)?.academicYear || '',
-      },
+      student: { _id: student._id, name: (student.userId as any)?.name || student.guardianName || 'Student', rollNumber: student.rollNumber, className: (student.classId as any)?.name || '', sectionName: (student.sectionId as any)?.name || '', academicYear: (student.classId as any)?.academicYear || '' },
       filters: {
-        exams: Array.from(new Map(rows.map((r) => [String(r.examId), { _id: r.examId, name: r.examName, type: r.examType }])).values()),
-        subjects: Array.from(new Map(rows.map((r) => [String(r.subjectId), { _id: r.subjectId, name: r.subjectName, code: r.subjectCode }])).values()),
+        exams: Array.from(new Map(allRows.map((r: any) => [String(r.examId), { _id: r.examId, name: r.examName, type: r.examType }])).values()),
+        subjects: Array.from(new Map(allRows.map((r: any) => [String(r.subjectId), { _id: r.subjectId, name: r.subjectName, code: r.subjectCode }])).values()),
       },
-      summary: { totalSubjects: rows.length, totalObtained, totalMarks: grandTotal, percentage: grandTotal ? Math.round((totalObtained / grandTotal) * 100) : 0, gpa, passed: rows.length ? !failed : false },
-      results: rows,
+      summary: { totalSubjects: filteredRows.length, totalObtained, totalMarks: grandTotal, percentage: grandTotal ? Math.round((totalObtained / grandTotal) * 100) : 0, gpa, passed: filteredRows.length ? !failed : false },
+      results: filteredRows,
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load personal results', error });
