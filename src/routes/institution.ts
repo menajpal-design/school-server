@@ -272,21 +272,21 @@ router.get('/profile', authenticate, async (req, res) => {
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
     const smsBilling = await getCurrentSmsBillingSummary(req.user.institutionId).catch(() => null);
     const currentBilling = (institution as any).billing || {};
-    const smsChargeAmount = Number(smsBilling?.totalAmount ?? currentBilling.smsChargeAmount ?? 0);
+    const smsChargeAmount = Number(smsBilling?.smsChargeAmount ?? currentBilling.smsChargeAmount ?? 0);
     const baseDueAmount = Number(currentBilling.baseDueAmount ?? Math.max(Number(currentBilling.dueAmount || 0) - Number(currentBilling.smsChargeAmount || 0), 0));
     const billing = {
       ...currentBilling,
       baseDueAmount,
       smsChargeAmount,
-      smsChargeBreakdown: smsBilling?.breakdown || currentBilling.smsChargeBreakdown || {},
+      smsChargeBreakdown: smsBilling?.smsChargeBreakdown || currentBilling.smsChargeBreakdown || {},
       smsChargePeriodStart: smsBilling?.periodStart || currentBilling.smsChargePeriodStart,
       smsChargePeriodEnd: smsBilling?.periodEnd || currentBilling.smsChargePeriodEnd,
       dueAmount: Number(baseDueAmount + smsChargeAmount),
       monthlyBillAmount: Number(baseDueAmount + smsChargeAmount),
       smsMonthlySummary: smsBilling ? {
-        totalCount: smsBilling.totalCount,
-        totalAmount: smsBilling.totalAmount,
-        breakdown: smsBilling.breakdown,
+        totalCount: smsBilling.smsUsed,
+        totalAmount: smsBilling.smsChargeAmount,
+        breakdown: smsBilling.smsChargeBreakdown,
       } : currentBilling.smsMonthlySummary,
     };
     res.json({ institution: { ...institution, billing } });

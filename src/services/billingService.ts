@@ -121,10 +121,11 @@ export const canUseSms = async (institutionId: any, units = 1) => {
 export const incrementSmsUsage = async (institutionId: any, units = 1) => {
   const usage = await canUseSms(institutionId, units);
   if (!usage.allowed) return usage;
+  const { start, end } = currentSmsPeriod();
   await Institution.findByIdAndUpdate(institutionId, {
     'billing.smsUsed': (usage.used || 0) + units,
-    'billing.smsPeriodStart': usage.start,
-    'billing.smsPeriodEnd': usage.end,
+    'billing.smsPeriodStart': start,
+    'billing.smsPeriodEnd': end,
   });
   return usage;
 };
@@ -141,17 +142,10 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
 
   const billing: any = (institution as any).billing || {};
 
-  // SMS Package credit system: smsBalance = SMS count remaining
-  // Only deduct from balance if it's > 0 (actual purchased credits)
   const smsBalance = Number(billing.smsBalance ?? 0);
   const isPackageBased = smsBalance > 0;
-
   if (isPackageBased) {
-<<<<<<< HEAD
-    // Deduct 1 SMS credit per message sent
-=======
     // Deduct 1 SMS credit per message segment sent (not money)
->>>>>>> 22b591c434157b2cc1ab9f9c8dbf61cd22a01fe5
     if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
     await Institution.findByIdAndUpdate(institutionId, {
       $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count },

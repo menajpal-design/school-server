@@ -184,7 +184,7 @@ router.get('/fee-overview', authenticate, authorize('admin', 'super_admin', 'hea
 router.get('/recent-notices', authenticate, async (req, res) => {
   try {
     const M = await dashboardModels(req);
-    const notices = await M.Notice.find({ ...institutionFilter(req.user.institutionId), isPublished: true })
+    const notices = await (M.Notice as any).find({ ...institutionFilter(req.user.institutionId), isPublished: true })
       .populate('postedBy', 'name')
       .sort({ publishedAt: -1, createdAt: -1 })
       .limit(5)

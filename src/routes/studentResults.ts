@@ -102,12 +102,12 @@ router.get('/', authenticate, async (req: any, res) => {
     else if (req.query.studentId) { studentQuery._id = req.query.studentId; studentQuery.parentId = req.user._id; }
     else studentQuery.parentId = req.user._id;
 
-    let student = await M.Student.findOne(studentQuery).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
-    if (!student && req.user.role === 'student') student = await M.Student.findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
+    let student = await (M.Student as any).findOne(studentQuery).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
+    if (!student && req.user.role === 'student') student = await (M.Student as any).findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
     if (!student) return res.status(404).json({ message: 'Student profile/result not found for current user.' });
 
     const baseQuery: any = { institutionId, studentId: student._id, workflowStatus: { $in: ['approved', 'published'] } };
-    const allResults = await M.Result.find(baseQuery).populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate').populate('subjectId', 'name code').sort({ publishedAt: -1, createdAt: -1 }).lean();
+    const allResults = await (M.Result as any).find(baseQuery).populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate').populate('subjectId', 'name code').sort({ publishedAt: -1, createdAt: -1 }).lean();
     const allRows = allResults.map(shapeRow);
 
     const filteredRows = allRows.filter((row: any) => {
@@ -117,10 +117,10 @@ router.get('/', authenticate, async (req: any, res) => {
     });
 
     const institution = await primaryDb(() => Institution.findById(institutionId).select('name eiin address phone website subdomain').lean());
-    const totalObtained = filteredRows.reduce((sum, item) => sum + Number(item.marksObtained || 0), 0);
-    const grandTotal = filteredRows.reduce((sum, item) => sum + Number(item.totalMarks || 0), 0);
-    const failed = filteredRows.some((item) => item.isPassed === false || String(item.grade).toUpperCase() === 'F');
-    const gpa = filteredRows.length ? (failed ? 0 : Number((filteredRows.reduce((sum, item) => sum + Number(item.gradePoint || 0), 0) / filteredRows.length).toFixed(2))) : 0;
+    const totalObtained = filteredRows.reduce((sum: number, item: any) => sum + Number(item.marksObtained || 0), 0);
+    const grandTotal = filteredRows.reduce((sum: number, item: any) => sum + Number(item.totalMarks || 0), 0);
+    const failed = filteredRows.some((item: any) => item.isPassed === false || String(item.grade).toUpperCase() === 'F');
+    const gpa = filteredRows.length ? (failed ? 0 : Number((filteredRows.reduce((sum: number, item: any) => sum + Number(item.gradePoint || 0), 0) / filteredRows.length).toFixed(2))) : 0;
 
     res.json({
       institution,

@@ -72,7 +72,12 @@ router.get('/public/schools', async (req, res) => {
 
   const querySubdomain = String(req.query.subdomain || req.headers['x-client-subdomain'] || '').trim().toLowerCase();
   const queryDomain = String(req.query.domain || req.headers['x-client-domain'] || '').trim().toLowerCase();
-  const isSpecificSearch = Boolean((querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || queryDomain);
+  const mainDomain = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
+  const isMainDomainOrLocal = ['localhost', '127.0.0.1', mainDomain].includes(queryDomain);
+  const isSpecificSearch = Boolean(
+    (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) || 
+    (queryDomain && !isMainDomainOrLocal)
+  );
 
   if (!tenantInstitution && isSpecificSearch) {
     if (querySubdomain && !['www', 'app', 'api', 'admin'].includes(querySubdomain)) {
