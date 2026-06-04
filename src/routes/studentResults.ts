@@ -33,12 +33,11 @@ router.get('/', authenticate, async (req: any, res) => {
 
     if (req.user.role === 'student') {
       studentQuery.userId = req.user._id;
+    } else if (req.query.studentId) {
+      studentQuery._id = req.query.studentId;
+      studentQuery.parentId = req.user._id;
     } else {
-      studentQuery.parentId = req.query.studentId || req.user._id;
-      if (req.query.studentId) {
-        studentQuery._id = req.query.studentId;
-        studentQuery.parentId = req.user._id;
-      }
+      studentQuery.parentId = req.user._id;
     }
 
     const student = await Student.findOne(studentQuery)
