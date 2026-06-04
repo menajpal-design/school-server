@@ -1,3 +1,7 @@
+// School subscription plans and SMS package configuration
+// SMS minimum price: 0.50 BDT per SMS (no bulk discount below this floor)
+// Student plan includes free SMS equal to student count each billing cycle
+
 export type BillingCycle = 'monthly' | 'yearly';
 
 export const SCHOOL_PLANS = [
