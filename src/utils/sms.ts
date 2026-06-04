@@ -1,5 +1,5 @@
 import Institution from '../models/Institution';
-import { canUseSms, incrementSmsUsage, getSmsChargeAmount, getSmsChargeRate, recordSmsCharge } from '../services/billingService';
+import { canUseSms, getSmsChargeAmount, getSmsChargeRate, recordSmsCharge } from '../services/billingService';
 import SmsLog from '../models/SmsLog';
 
 interface SMSOptions {
@@ -34,12 +34,30 @@ interface CredentialSmsOptions {
 
 const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
 const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
-const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '';
-const isFailureResponse = (text: string): boolean => /error|fail|invalid/i.test(text);
+const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || '';
+const SMS_SENDER_ID = process.env.SMS_SENDER_ID || process.env.SENDER_ID || process.env.SMS_FROM || '';
+
 const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => {
   const digits = String(value || '').replace(/\D/g, '').replace(/^88/, '');
   return digits && !digits.startsWith('0') ? `0${digits}` : digits;
+};
+
+const parseGatewayResponse = (text: string) => {
+  const raw = String(text || '').trim();
+  if (!raw) return { ok: true, raw };
+  try {
+    const json: any = JSON.parse(raw);
+    const status = String(json.status ?? json.success ?? json.response ?? json.message ?? '').toLowerCase();
+    const ok = json.success === true || json.ok === true || ['success', 'sent', 'queued', 'submitted', 'ok', 'true', '1'].some((word) => status.includes(word));
+    const failed = json.success === false || ['error', 'fail', 'failed', 'invalid', 'unauthorized', 'insufficient'].some((word) => status.includes(word));
+    return { ok: ok || !failed, raw };
+  } catch (_) {
+    const lower = raw.toLowerCase();
+    const ok = /success|sent|queued|submitted|ok|accepted/.test(lower);
+    const failed = /error|fail|failed|invalid|unauthorized|insufficient|expired/.test(lower);
+    return { ok: ok || !failed, raw };
+  }
 };
 
 // GSM 03.38 basic characters (approx). If a message contains any character
@@ -70,9 +88,6 @@ const ensureSmsQuota = async (options: SMSOptions) => {
   const quota = await canUseSms(options.institutionId, units);
   return Boolean(quota.allowed);
 };
-const markSmsUsed = async (options: SMSOptions, count?: number) => {
-  if (options.institutionId) await incrementSmsUsage(options.institutionId, count ?? recipientsFor(options.to).filter(Boolean).length);
-};
 
 const buildChargeMeta = (options: SMSOptions, count = 1) => {
   const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose);
@@ -82,7 +97,7 @@ const buildChargeMeta = (options: SMSOptions, count = 1) => {
 
 const resolveSmsConfig = async (options: SMSOptions) => {
   const institution = options.institutionId
-    ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean()
+    ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey settings.smsSenderId billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean()
     : null;
 
   const institutionSettings: any = (institution as any)?.settings || {};
@@ -90,10 +105,11 @@ const resolveSmsConfig = async (options: SMSOptions) => {
   const globalEnabled = process.env.SMS_ENABLED !== 'false'; // default true unless explicitly set to 'false'
   const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase();
   const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
-  const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
+  const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || SMS_API_KEY || '').trim();
+  const senderId = String(institutionSettings.smsSenderId || process.env.SMS_SENDER_ID || process.env.SENDER_ID || process.env.SMS_FROM || SMS_SENDER_ID || '').trim();
   const enabled = typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled;
 
-  return { institution, provider, apiUrl, apiKey, enabled };
+  return { institution, provider, apiUrl, apiKey, senderId, enabled };
 };
 
 export const buildCredentialSmsMessage = ({
@@ -150,6 +166,21 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
   }
 };
 
+const buildAnoncifyBody = (smsConfig: Awaited<ReturnType<typeof resolveSmsConfig>>, phoneNumber: string, message: string) => {
+  const body = new URLSearchParams();
+  body.set('key', smsConfig.apiKey);
+  body.set('number', phoneNumber);
+  // SmsLayer/Anoncify API docs use `message`; older examples sometimes use `msg`.
+  // Send both so existing deployments work with either parser.
+  body.set('message', message);
+  body.set('msg', message);
+  if (smsConfig.senderId) {
+    body.set('senderid', smsConfig.senderId);
+    body.set('sender_id', smsConfig.senderId);
+  }
+  return body;
+};
+
 const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
   const smsConfig = await resolveSmsConfig(options);
   if (!smsConfig.enabled) {
@@ -157,7 +188,7 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
     await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, segments);
     return false;
   }
-  if (smsConfig.provider !== 'anoncify') {
+  if (smsConfig.provider !== 'anoncify' && smsConfig.provider !== 'smslayer') {
     await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);
     return false;
   }
@@ -175,7 +206,6 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
   let successCount = 0;
   for (let i = 0; i < recipients.length; i += 1) {
     const phoneNumber = recipients[i];
-    // Reserve monetary SMS balance before sending (account for segments)
     const segments = computeSmsSegments(options.message || '');
     const chargeResult = await recordSmsCharge(options.institutionId, segments, options.type, options.purpose);
     if (chargeResult && (chargeResult as any).insufficient) {
@@ -184,27 +214,34 @@ const sendViaAnoncify = async (options: SMSOptions): Promise<boolean> => {
     }
     try {
       const url = new URL(smsConfig.apiUrl);
-      const body = new URLSearchParams();
-      body.set('key', smsConfig.apiKey);
-      body.set('number', phoneNumber);
-      body.set('msg', options.message);
-      const response = await fetch(url.toString(), { method: 'POST', body });
+      const body = buildAnoncifyBody(smsConfig, phoneNumber, options.message);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
       const responseText = await response.text();
-      if (!response.ok || isFailureResponse(responseText)) await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', `HTTP ${response.status}`, responseText, segments);
-      else {
+      const parsed = parseGatewayResponse(responseText);
+      if (!response.ok || !parsed.ok) {
+        try {
+          const chargeMeta = buildChargeMeta(options, segments);
+          await (await import('../services/billingService')).refundSmsCharge(options.institutionId, segments, chargeMeta.smsChargeAmount, options.type, options.purpose);
+        } catch (refundError) {
+          console.error('Failed to refund SMS charge after gateway failure:', refundError);
+        }
+        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', `HTTP ${response.status}`, responseText, segments);
+      } else {
         successCount += 1;
         await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'sent', undefined, responseText, segments);
-        // charge already applied before send
       }
     } catch (error) {
-      // Attempt to refund the charge when send fails
       try {
         const chargeMeta = buildChargeMeta(options, segments);
         await (await import('../services/billingService')).refundSmsCharge(options.institutionId, segments, chargeMeta.smsChargeAmount, options.type, options.purpose);
       } catch (e) {
         console.error('Failed to refund SMS charge after send error:', e);
       }
-        await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', String(error), undefined, segments);
+      await logSmsAttempt({ ...options, to: phoneNumber, recipientPhone: phoneNumber, smsProvider: smsConfig.provider }, 'failed', String(error), undefined, segments);
     }
   }
   return successCount === recipients.length;
@@ -219,7 +256,9 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
     await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, segments);
     return false;
   }
-  if (smsConfig.provider === 'anoncify') return sendViaAnoncify({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
+  if (smsConfig.provider === 'anoncify' || smsConfig.provider === 'smslayer') {
+    return sendViaAnoncify({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
+  }
   await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);
   return false;
 };
