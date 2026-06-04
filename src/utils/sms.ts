@@ -35,6 +35,7 @@ interface CredentialSmsOptions {
 const SMS_PROVIDER = (process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
 const SMS_API_URL = process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms';
 const SMS_API_KEY = process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || '';
+const DEFAULT_MAIN_DOMAIN = process.env.MAIN_DOMAIN || process.env.NEXT_PUBLIC_MAIN_DOMAIN || process.env.PUBLIC_ROOT_DOMAIN || 'easyschool.live';
 
 const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => {
@@ -56,6 +57,67 @@ const parseGatewayResponse = (text: string) => {
     const ok = /(^|\b)(sent|success|queued|submitted|ok|accepted)(\b|$)/.test(lower);
     const failed = /error|fail|failed|invalid|unauthorized|insufficient|expired|missing|bad params/.test(lower);
     return { ok: ok || !failed, raw };
+  }
+};
+
+const cleanOrigin = (value?: string) => {
+  const raw = String(value || '').trim();
+  if (!raw || /localhost|127\.0\.0\.1/i.test(raw)) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    return `${url.protocol}//${url.host}`.replace(/\/$/, '');
+  } catch (_) {
+    return '';
+  }
+};
+
+const frontendOriginFromEnv = () => cleanOrigin(process.env.FRONTEND_URL || process.env.CLIENT_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || '');
+const rootDomainFromEnv = () => {
+  const origin = frontendOriginFromEnv();
+  if (origin) {
+    try {
+      return new URL(origin).hostname.replace(/^www\./i, '');
+    } catch (_) {
+      return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+    }
+  }
+  return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+};
+
+const buildInstitutionLoginUrl = (institution: any) => {
+  const subdomain = String(institution?.subdomain || '').trim().toLowerCase();
+  if (subdomain) return `https://${subdomain}.${rootDomainFromEnv()}/login`;
+  const domains = Array.isArray(institution?.domains) ? institution.domains : [];
+  const domainOrigin = cleanOrigin(domains.find(Boolean));
+  if (domainOrigin) return `${domainOrigin}/login`;
+  const websiteOrigin = cleanOrigin(institution?.website);
+  if (websiteOrigin) return `${websiteOrigin}/login`;
+  const envOrigin = frontendOriginFromEnv() || `https://www.${rootDomainFromEnv()}`;
+  return `${envOrigin}/login`;
+};
+
+const getInstitutionSmsBranding = async (institutionId?: any) => {
+  if (!institutionId) return null;
+  const institution: any = await Institution.findById(institutionId).select('name website domains subdomain').lean();
+  if (!institution) return null;
+  const appName = String(institution.name || process.env.APP_NAME || 'EASY SCHOOL').trim() || 'EASY SCHOOL';
+  return { appName, loginUrl: buildInstitutionLoginUrl(institution) };
+};
+
+const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOptions> => {
+  if (!options.institutionId || !options.message) return options;
+  try {
+    const branding = await getInstitutionSmsBranding(options.institutionId);
+    if (!branding) return options;
+    let message = String(options.message || '');
+    message = message.replace(/^\s*(EASY SCHOOL|Easy School)\b/, branding.appName);
+    message = message.replace(/Login:\s*https?:\/\/localhost(?::\d+)?\/login\.?/i, `Login: ${branding.loginUrl}.`);
+    message = message.replace(/https?:\/\/localhost(?::\d+)?\/login/gi, branding.loginUrl);
+    return { ...options, message };
+  } catch (error) {
+    console.error('Failed to apply institution SMS branding:', error);
+    return options;
   }
 };
 
@@ -113,7 +175,7 @@ const resolveSmsConfig = async (options: SMSOptions) => {
 
 export const buildCredentialSmsMessage = ({
   appName = process.env.APP_NAME || 'EASY SCHOOL',
-  loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000/login',
+  loginUrl = frontendOriginFromEnv() ? `${frontendOriginFromEnv()}/login` : `https://www.${rootDomainFromEnv()}/login`,
   summary,
   username,
   password,
@@ -173,7 +235,8 @@ const buildSmsLayerUrl = (smsConfig: Awaited<ReturnType<typeof resolveSmsConfig>
   return url;
 };
 
-const sendViaSmsLayer = async (options: SMSOptions): Promise<boolean> => {
+const sendViaSmsLayer = async (rawOptions: SMSOptions): Promise<boolean> => {
+  const options = await applyInstitutionBrandingToSms(rawOptions);
   const smsConfig = await resolveSmsConfig(options);
   if (!smsConfig.enabled) {
     const segments = computeSmsSegments(options.message || '');
@@ -234,7 +297,8 @@ const sendViaSmsLayer = async (options: SMSOptions): Promise<boolean> => {
   return successCount === recipients.length;
 };
 
-export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
+export const sendSMS = async (rawOptions: SMSOptions): Promise<boolean> => {
+  const options = await applyInstitutionBrandingToSms(rawOptions);
   const recipients = recipientsFor(options.to).map(normalizePhone).filter(Boolean);
   if (!recipients.length) { await logSmsAttempt(options, 'failed', 'No phone number found'); return false; }
   const smsConfig = await resolveSmsConfig({ ...options, to: recipients });
