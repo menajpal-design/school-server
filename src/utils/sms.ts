@@ -86,7 +86,8 @@ const resolveSmsConfig = async (options: SMSOptions) => {
     : null;
 
   const institutionSettings: any = (institution as any)?.settings || {};
-  const globalEnabled = process.env.SMS_ENABLED === 'true';
+  // Default SMS to enabled unless explicitly disabled on institution or globally disabled via env
+  const globalEnabled = process.env.SMS_ENABLED !== 'false'; // default true unless explicitly set to 'false'
   const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase();
   const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
   const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
@@ -215,10 +216,8 @@ export const sendSMS = async (options: SMSOptions): Promise<boolean> => {
   const smsConfig = await resolveSmsConfig({ ...options, to: recipients });
   if (!smsConfig.enabled) {
     const segments = computeSmsSegments(options.message || '');
-    if (!(await ensureSmsQuota({ ...options, to: recipients }))) { await logSmsAttempt(options, 'failed', 'SMS quota exceeded', undefined, segments); return false; }
-    await markSmsUsed(options, recipients.length * segments);
-    await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients, smsProvider: smsConfig.provider }, 'sent', 'SMS service disabled; logged for monitoring', undefined, segments);
-    return true;
+    await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, segments);
+    return false;
   }
   if (smsConfig.provider === 'anoncify') return sendViaAnoncify({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled });
   await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`);

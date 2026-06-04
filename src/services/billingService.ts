@@ -94,7 +94,8 @@ export const canUseSms = async (institutionId: any, units = 1) => {
 
   const billing: any = (institution as any).billing || {};
   const limit = Number(billing.monthlySmsLimit || 0);
-  if (!limit) return { allowed: false, message: 'SMS limit not configured' };
+  // If no limit configured, allow SMS (unlimited)
+  if (!limit) return { allowed: true, used: 0, limit: 0, unlimited: true };
 
   const { start, end } = currentSmsPeriod();
   const periodStart = billing.smsPeriodStart ? new Date(billing.smsPeriodStart) : null;
@@ -156,16 +157,22 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   }
 
   // Attempt atomic debit of smsBalance and update billing in one operation.
-  const updateResult = await Institution.findOneAndUpdate(
-    { _id: institutionId, 'billing.smsBalance': { $gte: amount } },
-    { $set: updatedBilling, $inc: { 'billing.smsBalance': -amount, 'billing.smsUsed': count } },
-    { new: true }
-  );
-
-  if (!updateResult) {
+  const balance = Number(institution ? (institution as any).billing?.smsBalance || 0 : 0);
+  // If smsBalance is not configured (0 and never set), skip balance check and allow SMS
+  const hasBalanceConfigured = balance > 0 || (billing && billing.smsBalance !== undefined && billing.smsBalance !== null);
+  if (hasBalanceConfigured && balance < amount) {
     // Insufficient SMS balance
     return { count, amount, rate, category, start, end, insufficient: true };
   }
+
+  const updateQuery: Record<string, any> = { $set: updatedBilling };
+  if (hasBalanceConfigured) {
+    updateQuery['$inc'] = { 'billing.smsBalance': -amount, 'billing.smsUsed': count };
+  } else {
+    updateQuery['$inc'] = { 'billing.smsUsed': count };
+  }
+
+  await Institution.findByIdAndUpdate(institutionId, updateQuery, { new: true });
 
   return { count, amount, rate, category, start, end, insufficient: false };
 };
