@@ -15,6 +15,7 @@ const allowedPaths = [
   '/api/site-settings/site-config',
   '/api/site-settings/storage-status',
   '/api/site-settings/app-controls',
+  '/api/academic/results/me',
 ];
 
 const isAllowedPath = (path: string) => allowedPaths.some((allowed) => path === allowed || path.startsWith(`${allowed}/`));
