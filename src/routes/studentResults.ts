@@ -87,6 +87,7 @@ const shapeRow = (result: any) => {
     gradePoint: gradePoint(result.grade),
     isPassed: result.isPassed !== false,
     remarks: result.remarks || '',
+    status: result.workflowStatus,
     publishedAt: result.publishedAt || result.createdAt,
   };
 };
@@ -105,7 +106,7 @@ router.get('/', authenticate, async (req: any, res) => {
     if (!student && req.user.role === 'student') student = await M.Student.findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
     if (!student) return res.status(404).json({ message: 'Student profile/result not found for current user.' });
 
-    const baseQuery: any = { institutionId, studentId: student._id, workflowStatus: 'published' };
+    const baseQuery: any = { institutionId, studentId: student._id, workflowStatus: { $in: ['approved', 'published'] } };
     const allResults = await M.Result.find(baseQuery).populate('examId', 'name type totalMarks passingMarks subjectMarks startDate endDate').populate('subjectId', 'name code').sort({ publishedAt: -1, createdAt: -1 }).lean();
     const allRows = allResults.map(shapeRow);
 
