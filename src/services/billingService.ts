@@ -105,23 +105,17 @@ export const canUseSms = async (institutionId: any, units = 1) => {
   const billing: any = (institution as any).billing || {};
 
   // SMS Package credit system: smsBalance = remaining SMS count
-  // If smsBalance is explicitly set (bought a package), use it
-  const smsBalance = Number(billing.smsBalance ?? -1);
-  if (smsBalance >= 0) {
-    // Package-based: check if enough credits remain
+  // Only treat as package-based if smsBalance is EXPLICITLY > 0
+  // (smsBalance=0 or undefined means no package configured → allow unlimited)
+  const smsBalance = Number(billing.smsBalance ?? 0);
+  const hasPackage = smsBalance > 0;
+  if (hasPackage) {
     if (smsBalance < units) return { allowed: false, message: 'SMS balance exhausted. Please buy an SMS package.' };
     return { allowed: true, balance: smsBalance, packageBased: true };
   }
 
-  // Legacy: monthlySmsLimit based check
-  const limit = Number(billing.monthlySmsLimit || 0);
-  if (!limit) return { allowed: true, used: 0, limit: 0, unlimited: true };
-  const { start, end } = currentSmsPeriod();
-  const periodStart = billing.smsPeriodStart ? new Date(billing.smsPeriodStart) : null;
-  const samePeriod = periodStart && periodStart.getTime() === start.getTime();
-  const used = samePeriod ? Number(billing.smsUsed || 0) : 0;
-  if (used + units > limit) return { allowed: false, message: 'Monthly SMS limit reached' };
-  return { allowed: true, used, limit, start, end };
+  // No package / unlimited: allow SMS (track usage only)
+  return { allowed: true, used: Number(billing.smsUsed || 0), unlimited: true };
 };
 
 export const incrementSmsUsage = async (institutionId: any, units = 1) => {
@@ -148,11 +142,12 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   const billing: any = (institution as any).billing || {};
 
   // SMS Package credit system: smsBalance = SMS count remaining
-  const smsBalance = Number(billing.smsBalance ?? -1);
-  const isPackageBased = smsBalance >= 0;
+  // Only deduct from balance if it's > 0 (actual purchased credits)
+  const smsBalance = Number(billing.smsBalance ?? 0);
+  const isPackageBased = smsBalance > 0;
 
   if (isPackageBased) {
-    // Deduct 1 SMS credit per message sent (not money)
+    // Deduct 1 SMS credit per message sent
     if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
     await Institution.findByIdAndUpdate(institutionId, {
       $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count },

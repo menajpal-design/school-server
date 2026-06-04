@@ -90,7 +90,10 @@ const resolveSmsConfig = async (options: SMSOptions) => {
   const globalEnabled = process.env.SMS_ENABLED !== 'false'; // default true unless explicitly set to 'false'
   const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase();
   const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
-  const apiKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
+  const rawKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || SMS_API_KEY || '').trim();
+  // Reject placeholder/demo keys — real keys are typically 20+ chars with no spaces and no common placeholder patterns
+  const isPlaceholder = !rawKey || rawKey.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
+  const apiKey = isPlaceholder ? '' : rawKey;
   const enabled = typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled;
 
   return { institution, provider, apiUrl, apiKey, enabled };

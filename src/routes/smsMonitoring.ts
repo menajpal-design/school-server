@@ -4,8 +4,151 @@ import SmsLog from '../models/SmsLog';
 import Parent from '../models/Parent';
 import Institution from '../models/Institution';
 import getTenantIdFromReq from '../utils/tenant';
+import { sendSMS } from '../utils/sms';
 
 const router = Router();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMS DIAGNOSTIC — tells you exactly why SMS is failing
+// GET /institution/sms-diagnostic
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/sms-diagnostic', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const tenantId = getTenantIdFromReq(req);
+    const institution = await Institution.findById(tenantId).select('settings billing name').lean();
+    const settings: any = (institution as any)?.settings || {};
+    const billing: any = (institution as any)?.billing || {};
+
+    // Check each failure point
+    const globalEnabled = process.env.SMS_ENABLED !== 'false';
+    const smsEnabled = typeof settings.smsEnabled === 'boolean' ? settings.smsEnabled : globalEnabled;
+
+    const rawKey = String(settings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '').trim();
+    const isPlaceholder = !rawKey || rawKey.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
+    const hasValidKey = !isPlaceholder;
+
+    const provider = String(settings.smsProvider || process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
+    const apiUrl = String(settings.smsApiUrl || process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
+
+    const smsBalance = Number(billing.smsBalance ?? 0);
+    const hasCredits = smsBalance > 0;
+
+    // Recent SMS logs (last 10)
+    const recentLogs = await SmsLog.find({ institutionId: tenantId })
+      .sort({ sentAt: -1 }).limit(10).lean();
+
+    const failureReasons = recentLogs
+      .filter((log: any) => log.status === 'failed')
+      .map((log: any) => log.failureReason || log.errorMessage)
+      .filter(Boolean);
+
+    const uniqueFailures = [...new Set(failureReasons)];
+
+    const diagnosis = {
+      institutionName: (institution as any)?.name,
+      smsEnabled,
+      provider,
+      apiUrl,
+      hasValidKey,
+      keySource: settings.smsApiKey ? 'institution_settings' : (process.env.SMS_API_KEY && !isPlaceholder) ? 'env_variable' : 'NONE',
+      rawKeyMasked: rawKey ? `${rawKey.slice(0, 4)}${'*'.repeat(Math.max(rawKey.length - 4, 0))}` : '(empty)',
+      smsBalance,
+      hasCredits,
+      recentLogCount: recentLogs.length,
+      recentFailures: uniqueFailures,
+      verdict: !smsEnabled ? '❌ SMS is DISABLED' :
+               !hasValidKey ? '❌ NO VALID API KEY — set it via POST /institution/sms-settings' :
+               provider !== 'anoncify' ? `❌ Unknown provider: ${provider}` :
+               !hasCredits && smsBalance === 0 ? '✅ Config OK — SMS will work (no package needed, unlimited mode)' :
+               '✅ SMS should be working',
+      fix: !hasValidKey ? 'Call POST /institution/sms-settings with { "smsApiKey": "your-real-key" }' : undefined,
+    };
+
+    res.json({ diagnosis, recentLogs });
+  } catch (error) {
+    res.status(500).json({ message: 'Diagnostic failed', error });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET SMS SETTINGS for this institution
+// GET /institution/sms-settings
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const tenantId = getTenantIdFromReq(req);
+    const institution = await Institution.findById(tenantId).select('settings').lean();
+    const settings: any = (institution as any)?.settings || {};
+    res.json({
+      smsEnabled: settings.smsEnabled ?? true,
+      smsProvider: settings.smsProvider || 'anoncify',
+      smsApiUrl: settings.smsApiUrl || 'https://anoncify.xyz/api/sms',
+      // Mask the key — only show first 4 chars
+      smsApiKeyMasked: settings.smsApiKey
+        ? `${String(settings.smsApiKey).slice(0, 4)}${'*'.repeat(Math.max(String(settings.smsApiKey).length - 4, 0))}`
+        : '(not set)',
+      smsApiKeySet: Boolean(settings.smsApiKey),
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch SMS settings', error });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SAVE SMS SETTINGS — set institution-level API key (overrides .env)
+// POST /institution/sms-settings
+// Body: { smsApiKey, smsEnabled, smsProvider, smsApiUrl }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const tenantId = getTenantIdFromReq(req);
+    const institution = await Institution.findById(tenantId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    const update: Record<string, any> = {};
+    if (req.body.smsApiKey !== undefined) update['settings.smsApiKey'] = String(req.body.smsApiKey || '').trim();
+    if (req.body.smsEnabled !== undefined) update['settings.smsEnabled'] = Boolean(req.body.smsEnabled);
+    if (req.body.smsProvider !== undefined) update['settings.smsProvider'] = String(req.body.smsProvider || 'anoncify').toLowerCase();
+    if (req.body.smsApiUrl !== undefined) update['settings.smsApiUrl'] = String(req.body.smsApiUrl || '').trim();
+
+    if (!Object.keys(update).length) return res.status(400).json({ message: 'No SMS settings provided to update' });
+
+    await Institution.findByIdAndUpdate(tenantId, { $set: update });
+
+    res.json({ message: 'SMS settings saved successfully', updated: Object.keys(update) });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to save SMS settings', error });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST SMS — send a test message to verify configuration
+// POST /institution/sms-test
+// Body: { phone }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const tenantId = getTenantIdFromReq(req);
+    const phone = String(req.body?.phone || '').trim();
+    if (!phone) return res.status(400).json({ message: 'phone number required in body' });
+
+    const result = await sendSMS({
+      to: phone,
+      message: 'EASY SCHOOL SMS test message. If you receive this, SMS is working correctly.',
+      institutionId: tenantId,
+      type: 'notification',
+      purpose: 'sms_test',
+      recipientName: 'Test',
+      recipientPhone: phone,
+    });
+
+    res.json({ sent: result, phone, message: result ? '✅ SMS sent successfully' : '❌ SMS failed — check /institution/sms-diagnostic' });
+  } catch (error) {
+    res.status(500).json({ message: 'SMS test failed', error });
+  }
+});
+
+
 
 // Get all SMS logs for an institution (Admin, Head, Assistant Head, Finance Officer)
 router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
