@@ -93,10 +93,19 @@ export const canUseSms = async (institutionId: any, units = 1) => {
   if (!institution) return { allowed: false, message: 'Institution not found' };
 
   const billing: any = (institution as any).billing || {};
-  const limit = Number(billing.monthlySmsLimit || 0);
-  // If no limit configured, allow SMS (unlimited)
-  if (!limit) return { allowed: true, used: 0, limit: 0, unlimited: true };
 
+  // SMS Package credit system: smsBalance = remaining SMS count
+  // If smsBalance is explicitly set (bought a package), use it
+  const smsBalance = Number(billing.smsBalance ?? -1);
+  if (smsBalance >= 0) {
+    // Package-based: check if enough credits remain
+    if (smsBalance < units) return { allowed: false, message: 'SMS balance exhausted. Please buy an SMS package.' };
+    return { allowed: true, balance: smsBalance, packageBased: true };
+  }
+
+  // Legacy: monthlySmsLimit based check
+  const limit = Number(billing.monthlySmsLimit || 0);
+  if (!limit) return { allowed: true, used: 0, limit: 0, unlimited: true };
   const { start, end } = currentSmsPeriod();
   const periodStart = billing.smsPeriodStart ? new Date(billing.smsPeriodStart) : null;
   const samePeriod = periodStart && periodStart.getTime() === start.getTime();
@@ -127,6 +136,22 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   if (!institution) return { count, amount, rate, category, start, end };
 
   const billing: any = (institution as any).billing || {};
+
+  // SMS Package credit system: smsBalance = SMS count remaining
+  const smsBalance = Number(billing.smsBalance ?? -1);
+  const isPackageBased = smsBalance >= 0;
+
+  if (isPackageBased) {
+    // Deduct 1 SMS credit per message sent (not money)
+    if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
+    await Institution.findByIdAndUpdate(institutionId, {
+      $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count },
+      $set: { 'billing.smsPeriodStart': start, 'billing.smsPeriodEnd': end },
+    });
+    return { count, amount, rate, category, start, end, insufficient: false, packageBased: true };
+  }
+
+  // Legacy: monetary billing tracking (no balance deduction)
   const periodStart = billing.smsChargePeriodStart ? new Date(billing.smsChargePeriodStart) : null;
   const samePeriod = periodStart && periodStart.getTime() === start.getTime();
   const currentBreakdown = samePeriod ? { ...(billing.smsChargeBreakdown || {}) } : {};
@@ -143,37 +168,13 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
     'billing.smsChargePeriodStart': start,
     'billing.smsChargePeriodEnd': end,
   };
-
+  const incFields: Record<string, any> = { 'billing.smsUsed': count };
   if (!samePeriod) {
-    Object.assign(updatedBilling, {
-      'billing.smsUsed': Number(count || 0),
-      'billing.smsPeriodStart': start,
-      'billing.smsPeriodEnd': end,
-    });
+    updatedBilling['billing.smsPeriodStart'] = start;
+    updatedBilling['billing.smsPeriodEnd'] = end;
   }
 
-  if (samePeriod) {
-    updatedBilling['billing.smsUsed'] = Number(billing.smsUsed || 0) + Number(count || 0);
-  }
-
-  // Attempt atomic debit of smsBalance and update billing in one operation.
-  const balance = Number(institution ? (institution as any).billing?.smsBalance || 0 : 0);
-  // If smsBalance is not configured (0 and never set), skip balance check and allow SMS
-  const hasBalanceConfigured = balance > 0 || (billing && billing.smsBalance !== undefined && billing.smsBalance !== null);
-  if (hasBalanceConfigured && balance < amount) {
-    // Insufficient SMS balance
-    return { count, amount, rate, category, start, end, insufficient: true };
-  }
-
-  const updateQuery: Record<string, any> = { $set: updatedBilling };
-  if (hasBalanceConfigured) {
-    updateQuery['$inc'] = { 'billing.smsBalance': -amount, 'billing.smsUsed': count };
-  } else {
-    updateQuery['$inc'] = { 'billing.smsUsed': count };
-  }
-
-  await Institution.findByIdAndUpdate(institutionId, updateQuery, { new: true });
-
+  await Institution.findByIdAndUpdate(institutionId, { $set: updatedBilling, $inc: incFields }, { new: true });
   return { count, amount, rate, category, start, end, insufficient: false };
 };
 

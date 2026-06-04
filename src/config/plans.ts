@@ -11,6 +11,24 @@ export const SCHOOL_PLANS = [
   yearlyDiscountPercent: Math.round((1 - plan.yearlyPrice / (plan.monthlyPrice * 12)) * 100),
 }));
 
+// SMS Package system: 1 credit = 1 SMS
+// Schools buy SMS credits. Each SMS sent deducts 1 credit from smsBalance.
+// Minimum price = 0.50 BDT (50 পয়সা) per SMS — no bulk discount below this floor.
+export const SMS_PACKAGES = [
+  { code: 'sms_50',   smsCount: 50,   price: 30,   label: '৫০ SMS',   pricePerSms: 0.60 },
+  { code: 'sms_100',  smsCount: 100,  price: 55,   label: '১০০ SMS',  pricePerSms: 0.55 },
+  { code: 'sms_200',  smsCount: 200,  price: 100,  label: '২০০ SMS',  pricePerSms: 0.50 },
+  { code: 'sms_300',  smsCount: 300,  price: 150,  label: '৩০০ SMS',  pricePerSms: 0.50 },
+  { code: 'sms_500',  smsCount: 500,  price: 250,  label: '৫০০ SMS',  pricePerSms: 0.50 },
+  { code: 'sms_1000', smsCount: 1000, price: 500,  label: '১০০০ SMS', pricePerSms: 0.50 },
+  { code: 'sms_2000', smsCount: 2000, price: 1000, label: '২০০০ SMS', pricePerSms: 0.50 },
+  { code: 'sms_5000', smsCount: 5000, price: 2500, label: '৫০০০ SMS', pricePerSms: 0.50 },
+];
+
+export const getSmsPackageByCode = (code?: string) => SMS_PACKAGES.find((pkg) => pkg.code === code);
+export const getSmsPackageForStudentCount = (studentCount: number) =>
+  SMS_PACKAGES.find((pkg) => pkg.smsCount >= studentCount) || SMS_PACKAGES[SMS_PACKAGES.length - 1];
+
 export const EASY_SCHOOL_STORAGE_MONTHLY_PRICE = 100;
 
 export const getPlanByCode = (code?: string) => SCHOOL_PLANS.find((plan) => plan.code === code) || SCHOOL_PLANS[0];

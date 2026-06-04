@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
 import Institution from '../models/Institution';
 import { authenticate } from '../middleware/auth';
-import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS } from '../config/plans';
+import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS, SMS_PACKAGES, getSmsPackageByCode } from '../config/plans';
 import { activateBilling, getCurrentSmsBillingSummary } from '../services/billingService';
 import SmsTopup from '../models/SmsTopup';
 import { verifyGatewayPayment } from '../services/paymentGateway';
@@ -644,6 +644,104 @@ router.post('/sms/topup/payment', authenticate, async (req, res) => {
     res.json({ message: 'SMS balance topped up successfully', topup, billing: (updated as any)?.billing, verification });
   } catch (error) {
     res.status(500).json({ message: 'Failed to process SMS top-up payment', error });
+  }
+});
+
+// Get all available SMS packages
+router.get('/sms/packages', (req, res) => {
+  res.json({ packages: SMS_PACKAGES });
+});
+
+// Purchase an SMS package — adds SMS credits to smsBalance
+router.post('/sms/package/purchase', authenticate, async (req, res) => {
+  try {
+    const allowedRoles = ['admin', 'super_admin', 'finance_officer', 'head'];
+    if (!allowedRoles.includes((req.user as any).role)) return res.status(403).json({ message: 'Permission denied' });
+
+    const packageCode = String(req.body?.packageCode || '');
+    const smsPackage = getSmsPackageByCode(packageCode);
+    if (!smsPackage) return res.status(400).json({ message: 'Invalid SMS package code', availablePackages: SMS_PACKAGES.map((p) => p.code) });
+
+    const paymentGateway = String(req.body?.paymentGateway || 'popup');
+    const paymentOrderId = String(req.body?.paymentOrderId || '');
+    const paymentTrxId = String(req.body?.paymentTrxId || '');
+    const paymentSenderNumber = String(req.body?.paymentSenderNumber || '');
+    const paymentTime = req.body?.paymentTime ? String(req.body.paymentTime) : new Date().toISOString();
+    const popupPaymentResponse = req.body?.popupPaymentResponse || {};
+    const popupVerification = req.body?.popupVerification || {};
+    const receivedAmount = Number(req.body?.receivedAmount || req.body?.amount || 0);
+
+    if (!receivedAmount || receivedAmount <= 0) return res.status(400).json({ message: 'Invalid payment amount' });
+    if (receivedAmount < smsPackage.price) {
+      return res.status(400).json({ message: `Payment amount ${receivedAmount} is less than package price ${smsPackage.price}` });
+    }
+
+    const institution = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    // Verify payment
+    const verification = await verifyGatewayPayment({
+      trxId: paymentTrxId,
+      amount: smsPackage.price,
+      senderNumber: paymentSenderNumber,
+      gateway: paymentGateway,
+      orderId: paymentOrderId,
+      paymentTime,
+      domain: process.env.PAYMENT_GATEWAY_DOMAIN,
+    });
+
+    const popupVerified = Boolean(
+      popupPaymentResponse?.status === 'verified' ||
+      popupPaymentResponse?.data?.status === 'verified' ||
+      popupVerification?.status === 'verified'
+    );
+
+    if (!verification.verified && !popupVerified) {
+      return res.status(400).json({ message: verification.message || 'SMS package payment verification failed', verification });
+    }
+
+    // Record topup transaction
+    await SmsTopup.create({
+      institutionId: institution._id,
+      amount: smsPackage.price,
+      method: paymentGateway,
+      meta: {
+        packageCode: smsPackage.code,
+        packageLabel: smsPackage.label,
+        smsCount: smsPackage.smsCount,
+        pricePerSms: smsPackage.pricePerSms,
+        verification: verification.data || {},
+        popupPaymentResponse,
+        popupVerification,
+        paymentTrxId,
+        paymentOrderId,
+        paymentSenderNumber,
+      },
+      createdBy: req.user._id,
+    });
+
+    // Credit SMS balance: add smsCount to existing balance
+    const updated = await Institution.findByIdAndUpdate(
+      institution._id,
+      {
+        $inc: { 'billing.smsBalance': smsPackage.smsCount },
+        $set: {
+          'billing.monthlySmsLimit': smsPackage.smsCount,
+          'billing.lastSmsPackageCode': smsPackage.code,
+          'billing.lastSmsPackagePurchasedAt': new Date(),
+        },
+      },
+      { new: true }
+    );
+
+    res.json({
+      message: `SMS package purchased: ${smsPackage.label}. ${smsPackage.smsCount} SMS credits added.`,
+      package: smsPackage,
+      billing: (updated as any)?.billing,
+      verification,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to purchase SMS package', error });
   }
 });
 

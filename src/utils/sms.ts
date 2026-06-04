@@ -63,8 +63,8 @@ function computeSmsSegments(message: string) {
 }
 
 const ensureSmsQuota = async (options: SMSOptions) => {
-  const recipients = recipientsFor(options.to).filter(Boolean);
   if (!options.institutionId) return true;
+  const recipients = recipientsFor(options.to).filter(Boolean);
   const segments = computeSmsSegments(options.message || '');
   const units = recipients.length * segments;
   const quota = await canUseSms(options.institutionId, units);
