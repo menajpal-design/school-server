@@ -54,14 +54,24 @@ export const getSmsChargeAmount = (count = 1, type?: string, purpose?: string) =
   return amount;
 };
 
-export const activateBilling = (billing: any, at = new Date()) => ({
-  ...billing,
-  billingStatus: 'active',
-  isPaymentReceived: true,
-  activatedAt: billing.activatedAt || at,
-  subscriptionStartedAt: at,
-  subscriptionExpiresAt: nextSubscriptionEnd(billing.billingCycle || 'monthly', at),
-});
+export const activateBilling = (billing: any, at = new Date()) => {
+  const planSmsCredits = Number(billing.monthlySmsLimit || billing.studentLimit || 0);
+  // Extra credits bought separately via SMS packages (preserved across renewals)
+  const extraSmsCredits = Number(billing.extraSmsCredits || 0);
+  return {
+    ...billing,
+    billingStatus: 'active',
+    isPaymentReceived: true,
+    activatedAt: billing.activatedAt || at,
+    subscriptionStartedAt: at,
+    subscriptionExpiresAt: nextSubscriptionEnd(billing.billingCycle || 'monthly', at),
+    // Grant free SMS credits = student limit every billing cycle
+    planSmsCredits,
+    extraSmsCredits,
+    smsBalance: planSmsCredits + extraSmsCredits,
+    smsBalanceResetAt: at,
+  };
+};
 
 export const isSubscriptionExpired = (institution: any) => {
   const billing = institution?.billing || {};

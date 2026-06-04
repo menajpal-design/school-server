@@ -720,13 +720,15 @@ router.post('/sms/package/purchase', authenticate, async (req, res) => {
       createdBy: req.user._id,
     });
 
-    // Credit SMS balance: add smsCount to existing balance
+    // Credit SMS balance: add smsCount to smsBalance AND extraSmsCredits (tracks paid packages separately from free plan credits)
     const updated = await Institution.findByIdAndUpdate(
       institution._id,
       {
-        $inc: { 'billing.smsBalance': smsPackage.smsCount },
+        $inc: {
+          'billing.smsBalance': smsPackage.smsCount,
+          'billing.extraSmsCredits': smsPackage.smsCount,
+        },
         $set: {
-          'billing.monthlySmsLimit': smsPackage.smsCount,
           'billing.lastSmsPackageCode': smsPackage.code,
           'billing.lastSmsPackagePurchasedAt': new Date(),
         },
