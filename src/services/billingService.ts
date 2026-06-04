@@ -147,7 +147,11 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   const isPackageBased = smsBalance > 0;
 
   if (isPackageBased) {
+<<<<<<< HEAD
     // Deduct 1 SMS credit per message sent
+=======
+    // Deduct 1 SMS credit per message segment sent (not money)
+>>>>>>> 22b591c434157b2cc1ab9f9c8dbf61cd22a01fe5
     if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
     await Institution.findByIdAndUpdate(institutionId, {
       $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count },
@@ -184,10 +188,10 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
 };
 
 export const refundSmsCharge = async (institutionId: any, count = 1, amount = 0, type?: string, purpose?: string) => {
-  if (!institutionId || !count) return { refunded: 0 };
+  if (!institutionId || !count) return { refunded: 0, count: 0 };
   const { start } = currentSmsPeriod();
   const institution = await Institution.findById(institutionId).select('billing');
-  if (!institution) return { refunded: 0 };
+  if (!institution) return { refunded: 0, count: 0 };
 
   const billing: any = (institution as any).billing || {};
   const periodStart = billing.smsChargePeriodStart ? new Date(billing.smsChargePeriodStart) : null;
@@ -195,6 +199,8 @@ export const refundSmsCharge = async (institutionId: any, count = 1, amount = 0,
   const category = getSmsChargeCategory(type, purpose);
   const currentBreakdown = samePeriod ? { ...(billing.smsChargeBreakdown || {}) } : {};
   const currentEntry = currentBreakdown[category] || { count: 0, amount: 0, rate: getSmsChargeRate(type, purpose) };
+  const smsBalance = Number(billing.smsBalance ?? -1);
+  const isPackageBased = smsBalance >= 0;
 
   currentBreakdown[category] = {
     count: Math.max(0, Number(currentEntry.count || 0) - Number(count || 0)),
@@ -207,32 +213,29 @@ export const refundSmsCharge = async (institutionId: any, count = 1, amount = 0,
     'billing.smsChargeBreakdown': currentBreakdown,
   };
 
-  // Atomic refund: increment balance, decrement smsUsed
-  await Institution.findByIdAndUpdate(institutionId, { $set: updatedBilling, $inc: { 'billing.smsBalance': Number(amount || 0), 'billing.smsUsed': -count } });
+  // Package-based billing stores smsBalance as SMS credits, not money.
+  // Refund the same credit/segment count that was reserved before sending.
+  const incFields: Record<string, any> = { 'billing.smsUsed': -Number(count || 0) };
+  if (isPackageBased) incFields['billing.smsBalance'] = Number(count || 0);
+
+  await Institution.findByIdAndUpdate(institutionId, { $set: updatedBilling, $inc: incFields });
   return { refunded: amount, count };
 };
 
 export const getCurrentSmsBillingSummary = async (institutionId: any) => {
+  const institution: any = await Institution.findById(institutionId).select('billing').lean();
+  const billing = institution?.billing || {};
   const { start, end } = currentSmsPeriod();
-  const logs = await SmsLog.find({ institutionId, sentAt: { $gte: start, $lt: end }, status: 'sent' }).select('type purpose').lean();
-  const summary = logs.reduce((acc: any, log: any) => {
-    const category = getSmsChargeCategory(log.type, log.purpose);
-    const rate = getSmsChargeRate(log.type, log.purpose);
-    const entry = acc.breakdown[category] || { count: 0, amount: 0, rate };
-    entry.count += 1;
-    entry.amount = Number((entry.amount + rate).toFixed(2));
-    entry.rate = rate;
-    acc.breakdown[category] = entry;
-    acc.totalCount += 1;
-    acc.totalAmount = Number((acc.totalAmount + rate).toFixed(2));
-    return acc;
-  }, { totalCount: 0, totalAmount: 0, breakdown: {} as Record<string, { count: number; amount: number; rate: number }> });
-
+  const periodStart = billing.smsChargePeriodStart ? new Date(billing.smsChargePeriodStart) : null;
+  const samePeriod = periodStart && periodStart.getTime() === start.getTime();
+  const breakdown = samePeriod ? billing.smsChargeBreakdown || {} : {};
+  const smsBalance = Number(billing.smsBalance ?? -1);
   return {
     periodStart: start,
     periodEnd: end,
-    totalCount: summary.totalCount,
-    totalAmount: summary.totalAmount,
-    breakdown: summary.breakdown,
+    smsUsed: Number(billing.smsUsed || 0),
+    smsBalance: smsBalance >= 0 ? smsBalance : null,
+    smsChargeAmount: Number(samePeriod ? billing.smsChargeAmount || 0 : 0),
+    smsChargeBreakdown: breakdown,
   };
 };
