@@ -112,8 +112,11 @@ const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOp
     if (!branding) return options;
     let message = String(options.message || '');
     message = message.replace(/^\s*(EASY SCHOOL|Easy School)\b/, branding.appName);
-    message = message.replace(/Login:\s*https?:\/\/localhost(?::\d+)?\/login\.?/i, `Login: ${branding.loginUrl}.`);
+    // Force every credential Login URL to the school-specific subdomain/custom domain.
+    message = message.replace(/Login:\s*https?:\/\/[^\s.]+(?:\.[^\s.]+)*(?::\d+)?\/login\.?/i, `Login: ${branding.loginUrl}.`);
     message = message.replace(/https?:\/\/localhost(?::\d+)?\/login/gi, branding.loginUrl);
+    message = message.replace(/https?:\/\/www\.easyschool\.live\/login/gi, branding.loginUrl);
+    message = message.replace(/https?:\/\/easyschool\.live\/login/gi, branding.loginUrl);
     return { ...options, message };
   } catch (error) {
     console.error('Failed to apply institution SMS branding:', error);
@@ -134,7 +137,6 @@ function computeSmsSegments(message: string) {
     if (msg.length <= single) return 1;
     return Math.ceil(msg.length / multi);
   }
-  // Unicode (UCS-2)
   const singleU = 70;
   const multiU = 67;
   if (msg.length <= singleU) return 1;
