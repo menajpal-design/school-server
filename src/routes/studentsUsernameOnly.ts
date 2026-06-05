@@ -13,6 +13,7 @@ import { runWithTenantStorage } from '../config/tenantStorage';
 
 const router = express.Router();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
+const canList = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'admin', 'super_admin'].includes(role);
 const canAdd = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'admin', 'super_admin'].includes(role);
 const canManualRoll = (role: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'admin', 'super_admin'].includes(role);
 const validBloodGroups = new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
@@ -34,17 +35,9 @@ async function activeMongoUri(req: any) {
 }
 async function getSchoolConnection(req: any) {
   const uri = await activeMongoUri(req);
-  if (!directConnections.has(uri)) {
-    directConnections.set(uri, mongoose.createConnection(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15000, connectTimeoutMS: 15000, socketTimeoutMS: 30000, retryWrites: true }).asPromise());
-  }
-  try {
-    const connection = await directConnections.get(uri)!;
-    await connection.db.admin().ping();
-    return connection;
-  } catch (e: any) {
-    directConnections.delete(uri);
-    throw diagnosticError('school_mongo_connect', `Active MongoDB connected in Settings test, but student route direct connection failed: ${e?.message || 'unknown error'}`, 503);
-  }
+  if (!directConnections.has(uri)) directConnections.set(uri, mongoose.createConnection(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15000, connectTimeoutMS: 15000, socketTimeoutMS: 30000, retryWrites: true }).asPromise());
+  try { const connection = await directConnections.get(uri)!; await connection.db.admin().ping(); return connection; }
+  catch (e: any) { directConnections.delete(uri); throw diagnosticError('school_mongo_connect', `Active MongoDB connected in Settings test, but student route direct connection failed: ${e?.message || 'unknown error'}`, 503); }
 }
 async function schoolModels(req: any) {
   const connection = await getSchoolConnection(req);
@@ -58,17 +51,12 @@ async function ensureClass(req: any, M: any) {
   const sectionName = String(req.body.sectionName || req.body.section || '').trim() || 'A';
   if (!requestedClassId && !className) throw diagnosticError('class_input', 'Class missing. Student form থেকে class select করুন।', 400);
   let cls: any = null;
-  try {
-    if (isObjectId(requestedClassId)) cls = await M.Class.findOne({ _id: requestedClassId, institutionId: req.user.institutionId });
-    if (!cls) cls = await M.Class.findOneAndUpdate({ institutionId: req.user.institutionId, name: className }, { $setOnInsert: { institutionId: req.user.institutionId, name: className, grade: className.match(/\d+/)?.[0] || className, academicYear: String(new Date().getFullYear()), shift: 'day' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
-  } catch (e: any) { throw diagnosticError('class_save', `Class database save failed on active Settings MongoDB: ${e?.message || 'unknown error'}`, 500, { classId: requestedClassId, className }); }
+  try { if (isObjectId(requestedClassId)) cls = await M.Class.findOne({ _id: requestedClassId, institutionId: req.user.institutionId }); if (!cls) cls = await M.Class.findOneAndUpdate({ institutionId: req.user.institutionId, name: className }, { $setOnInsert: { institutionId: req.user.institutionId, name: className, grade: className.match(/\d+/)?.[0] || className, academicYear: String(new Date().getFullYear()), shift: 'day' } }, { upsert: true, new: true, setDefaultsOnInsert: true }); }
+  catch (e: any) { throw diagnosticError('class_save', `Class database save failed on active Settings MongoDB: ${e?.message || 'unknown error'}`, 500, { classId: requestedClassId, className }); }
   if (!cls?._id) throw diagnosticError('class_save', 'Class save/read failed on active Settings MongoDB.', 500, { classId: requestedClassId, className });
   let sec: any = null;
-  try {
-    if (isObjectId(requestedSectionId)) sec = await M.Section.findOne({ _id: requestedSectionId, institutionId: req.user.institutionId, classId: cls._id });
-    if (!sec) sec = await M.Section.findOneAndUpdate({ institutionId: req.user.institutionId, classId: cls._id, name: sectionName }, { $setOnInsert: { institutionId: req.user.institutionId, classId: cls._id, name: sectionName, capacity: 30, currentStudents: 0 } }, { upsert: true, new: true, setDefaultsOnInsert: true });
-    await M.Class.updateOne({ _id: cls._id }, { $addToSet: { sections: sec._id } });
-  } catch (e: any) { throw diagnosticError('section_save', `Section database save failed on active Settings MongoDB: ${e?.message || 'unknown error'}`, 500, { sectionId: requestedSectionId, sectionName, classId: String(cls._id) }); }
+  try { if (isObjectId(requestedSectionId)) sec = await M.Section.findOne({ _id: requestedSectionId, institutionId: req.user.institutionId, classId: cls._id }); if (!sec) sec = await M.Section.findOneAndUpdate({ institutionId: req.user.institutionId, classId: cls._id, name: sectionName }, { $setOnInsert: { institutionId: req.user.institutionId, classId: cls._id, name: sectionName, capacity: 30, currentStudents: 0 } }, { upsert: true, new: true, setDefaultsOnInsert: true }); await M.Class.updateOne({ _id: cls._id }, { $addToSet: { sections: sec._id } }); }
+  catch (e: any) { throw diagnosticError('section_save', `Section database save failed on active Settings MongoDB: ${e?.message || 'unknown error'}`, 500, { sectionId: requestedSectionId, sectionName, classId: String(cls._id) }); }
   if (!sec?._id) throw diagnosticError('section_save', 'Section save/read failed on active Settings MongoDB.', 500, { sectionId: requestedSectionId, sectionName });
   return { classId: cls._id, sectionId: sec._id };
 }
@@ -79,6 +67,7 @@ async function enrichStudents(rows: any[]) { const plain = rows.map((item: any) 
 
 router.get('/', authenticate, async (req: any, res) => {
   try {
+    if (!canList(req.user.role)) return res.status(403).json({ message: 'Access denied. Student list is restricted to school staff only.' });
     const M = await schoolModels(req);
     const primaryStudentUsers = await primaryDb(() => User.find({ institutionId: req.user.institutionId, role: 'student' }).select('_id').lean());
     const userIds = primaryStudentUsers.map((u: any) => u._id);
@@ -126,26 +115,8 @@ router.post('/', authenticate, async (req: any, res) => {
     const [student] = await enrichStudents([saved]);
     const smsPhone = String(guardianPhone || req.body.phone || '').trim();
     if (smsPhone) {
-      const smsMessage = buildCredentialSmsMessage({
-        summary: `Student admitted for ${studentName}`,
-        username: uname,
-        password: secret,
-        parentUsername: pUname,
-        parentPassword: pSecret,
-      }).slice(0, 320);
-      sendSMS({
-        to: smsPhone,
-        message: smsMessage,
-        institutionId: req.user.institutionId,
-        recipientName: guardianName,
-        recipientPhone: smsPhone,
-        recipientId: parentUser?._id,
-        recipientType: 'guardian',
-        type: 'credentials',
-        purpose: 'student_parent_login',
-        studentId: user._id,
-        parentId: parentUser?._id,
-      }).catch((error) => console.error('Student admission SMS failed:', error));
+      const smsMessage = buildCredentialSmsMessage({ summary: `Student admitted for ${studentName}`, username: uname, password: secret, parentUsername: pUname, parentPassword: pSecret }).slice(0, 320);
+      sendSMS({ to: smsPhone, message: smsMessage, institutionId: req.user.institutionId, recipientName: guardianName, recipientPhone: smsPhone, recipientId: parentUser?._id, recipientType: 'guardian', type: 'credentials', purpose: 'student_parent_login', studentId: user._id, parentId: parentUser?._id }).catch((error) => console.error('Student admission SMS failed:', error));
     }
     step = 'completed';
     res.status(201).json({ message: 'Student admitted successfully using active Settings MongoDB URI.', step, storageSource: 'settings-active-mongodb-direct', student, user: { _id: user._id, name: user.name, username: user.username, role: user.role }, parent: parentUser ? { _id: parentUser._id, name: parentUser.name, username: parentUser.username, role: parentUser.role } : null, credentials: { username: uname, temporary: secret, password: secret, parentUsername: pUname, parentTemporary: pSecret, parentPassword: pSecret } });
