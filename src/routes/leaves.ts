@@ -7,8 +7,13 @@ import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
 
 const router = express.Router();
-const approvalRoles = ['head', 'assistant_head', 'class_teacher', 'admin', 'super_admin'];
+const reviewRoles = ['head', 'assistant_head', 'class_teacher'];
 const applicantRoles = ['student', 'parent'];
+const normalizeRole = (role?: string) => {
+  const normalized = String(role || '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized === 'guardian' || normalized === 'parent_guardian') return 'parent';
+  return normalized;
+};
 
 const parseDateOnly = (value?: string) => {
   if (!value) return new Date();
@@ -44,11 +49,12 @@ const buildDateList = (start: Date, end: Date) => {
 };
 
 const getOwnStudentIds = async (req: any) => {
-  if (req.user.role === 'student') {
-    const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('_id').lean();
+  const role = normalizeRole(req.user.role);
+  if (role === 'student') {
+    const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('_id').lean();
     return student ? [student._id] : [];
   }
-  if (req.user.role === 'parent') {
+  if (role === 'parent') {
     const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
     return parent?.children || [];
   }
@@ -56,14 +62,15 @@ const getOwnStudentIds = async (req: any) => {
 };
 
 const getAssignedClassIds = async (req: any) => {
-  if (req.user.role !== 'class_teacher') return [];
+  if (normalizeRole(req.user.role) !== 'class_teacher') return [];
   const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('assignedClasses').lean();
   return (teacher?.assignedClasses || []).map((id: any) => String(id));
 };
 
 const canReviewLeave = async (req: any, leave: any) => {
-  if (['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role)) return true;
-  if (req.user.role !== 'class_teacher') return false;
+  const role = normalizeRole(req.user.role);
+  if (['head', 'assistant_head'].includes(role)) return true;
+  if (role !== 'class_teacher') return false;
   const assignedClassIds = await getAssignedClassIds(req);
   return assignedClassIds.includes(String(leave.classId?._id || leave.classId));
 };
@@ -72,6 +79,7 @@ router.use(authenticate);
 
 router.get('/', async (req: any, res) => {
   try {
+    const role = normalizeRole(req.user.role);
     const query: any = { institutionId: req.user.institutionId };
     if (req.query.status) query.status = req.query.status;
     if (req.query.classId) query.classId = req.query.classId;
@@ -85,11 +93,11 @@ router.get('/', async (req: any, res) => {
       query.endDate = { $gte: start };
     }
 
-    if (req.user.role === 'class_teacher') {
+    if (role === 'class_teacher') {
       const assignedClassIds = await getAssignedClassIds(req);
       query.classId = { $in: assignedClassIds };
       if (!req.query.status) query.status = 'pending';
-    } else if (!approvalRoles.includes(req.user.role)) {
+    } else if (!reviewRoles.includes(role)) {
       const ownIds = await getOwnStudentIds(req);
       query.studentId = { $in: ownIds };
     }
@@ -103,10 +111,11 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    if (!applicantRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
+    const role = normalizeRole(req.user.role);
+    if (!applicantRoles.includes(role)) return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
 
     let student: any = null;
-    if (req.user.role === 'parent') {
+    if (role === 'parent') {
       if (!req.body.studentId) return res.status(400).json({ message: 'Please select a child for leave application.' });
       const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
       const childIds = (parent?.children || []).map((id: any) => String(id));
@@ -122,20 +131,21 @@ router.post('/', async (req: any, res) => {
 
     const startDate = toDateValue(req.body.startDate);
     const endDate = toDateValue(req.body.endDate || req.body.startDate);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return res.status(400).json({ message: 'Valid start and end dates are required.' });
     if (endDate < startDate) return res.status(400).json({ message: 'End date cannot be before start date.' });
     if (!req.body.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ message: 'Leave reason is required.' });
 
     const leave = await LeaveApplication.create({
       studentId: student._id,
       userId: student.userId,
-      applicantType: req.user.role === 'parent' ? 'parent' : 'student',
+      applicantType: role === 'parent' ? 'parent' : 'student',
       classId: student.classId,
       sectionId: student.sectionId,
       startDate,
       endDate,
       totalDays: countDays(startDate, endDate),
       reason: String(req.body.reason || '').trim(),
-      attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
+      attachmentUrl: String(req.body.attachmentUrl || req.body.attachment || '').trim() || undefined,
       guardianNote: String(req.body.guardianNote || '').trim() || undefined,
       status: 'pending',
       institutionId: req.user.institutionId,
@@ -148,7 +158,7 @@ router.post('/', async (req: any, res) => {
   }
 });
 
-router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant_head', 'class_teacher'), async (req: any, res) => {
+router.patch('/:id/review', authorize('head', 'assistant_head', 'class_teacher'), async (req: any, res) => {
   try {
     const status = req.body.status;
     if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ message: 'Invalid leave status.' });
