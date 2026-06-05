@@ -31,17 +31,8 @@ const buildBookQuery = (query: any = {}, institutionId?: any) => {
 export const createBook = async (data: Partial<IBook>, userId?: Types.ObjectId, institutionId?: Types.ObjectId) => {
   const total = Math.max(0, Number(data.copiesTotal ?? 1));
   const available = Math.max(0, Math.min(total, Number(data.copiesAvailable ?? total)));
-  const book = new Book({
-    ...data,
-    copiesTotal: total,
-    copiesAvailable: available,
-    status: available > 0 ? 'available' : 'unavailable',
-    qrCodeValue: data.qrCodeValue || `LIB-${randomUUID()}`,
-    institutionId,
-    createdBy: userId,
-  });
-  const saved = await book.save();
-  return attachBookQrCode(saved);
+  const book = new Book({ ...data, copiesTotal: total, copiesAvailable: available, status: available > 0 ? 'available' : 'unavailable', qrCodeValue: data.qrCodeValue || `LIB-${randomUUID()}`, institutionId, createdBy: userId });
+  return attachBookQrCode(await book.save());
 };
 
 export const updateBook = async (id: string, data: Partial<IBook>, institutionId?: Types.ObjectId) => {
@@ -49,14 +40,12 @@ export const updateBook = async (id: string, data: Partial<IBook>, institutionId
   if (payload.copiesTotal !== undefined) payload.copiesTotal = Math.max(0, Number(payload.copiesTotal));
   if (payload.copiesAvailable !== undefined) payload.copiesAvailable = Math.max(0, Number(payload.copiesAvailable));
   if (payload.copiesTotal !== undefined && payload.copiesAvailable !== undefined) payload.copiesAvailable = Math.min(payload.copiesAvailable, payload.copiesTotal);
-  const book = await Book.findOneAndUpdate({ _id: id, institutionId }, payload, { new: true });
-  return attachBookQrCode(book);
+  return attachBookQrCode(await Book.findOneAndUpdate({ _id: id, institutionId }, payload, { new: true }));
 };
 
 export const listBooks = async (query: any = {}, institutionId?: Types.ObjectId) => {
   const books = await Book.find(buildBookQuery(query, institutionId)).sort({ title: 1 });
-  const result = await Promise.all(books.map((book) => attachBookQrCode(book)));
-  return result;
+  return Promise.all(books.map((book) => attachBookQrCode(book)));
 };
 
 export const getBook = async (id: string, institutionId?: Types.ObjectId) => attachBookQrCode(await Book.findOne({ _id: id, institutionId }));
@@ -71,8 +60,7 @@ export const issueBook = async (bookId: string, userId: string, issuedBy: string
   await book.save();
   const issuedAt = new Date();
   const dueDate = new Date(issuedAt.getTime() + Number(days || 14) * 24 * 60 * 60 * 1000);
-  const loan = new Loan({ book: book._id, user: userId, issuedBy, issuedAt, dueDate, status: 'issued', institutionId });
-  return loan.save();
+  return new Loan({ book: book._id, user: userId, issuedBy, issuedAt, dueDate, status: 'issued', institutionId }).save();
 };
 
 export const returnBook = async (loanId: string, institutionId?: Types.ObjectId) => {
@@ -83,7 +71,7 @@ export const returnBook = async (loanId: string, institutionId?: Types.ObjectId)
   loan.returnedAt = now;
   const overdueDays = now > loan.dueDate ? Math.ceil((now.getTime() - loan.dueDate.getTime()) / (24 * 60 * 60 * 1000)) : 0;
   loan.fine = overdueDays * DEFAULT_FINE_PER_DAY;
-  loan.status = 'returned';
+  loan.status = overdueDays > 0 ? 'overdue' : 'returned';
   await loan.save();
   if (loan.book) {
     const book = await Book.findOne({ _id: (loan.book as any)._id || loan.book, institutionId });
@@ -108,10 +96,6 @@ export const listLoans = async (query: any = {}, institutionId?: Types.ObjectId)
 export const getLoan = async (id: string, institutionId?: Types.ObjectId) => Loan.findOne({ _id: id, institutionId }).populate('book user issuedBy');
 
 export const listCategories = async (institutionId?: Types.ObjectId) => {
-  const categories = await Book.aggregate([
-    { $match: { institutionId: asObjectId(institutionId) } },
-    { $group: { _id: '$category', count: { $sum: 1 }, available: { $sum: '$copiesAvailable' }, total: { $sum: '$copiesTotal' } } },
-    { $sort: { _id: 1 } },
-  ]);
+  const categories = await Book.aggregate([{ $match: { institutionId: asObjectId(institutionId) } }, { $group: { _id: '$category', count: { $sum: 1 }, available: { $sum: '$copiesAvailable' }, total: { $sum: '$copiesTotal' } } }, { $sort: { _id: 1 } }]);
   return categories.filter((item) => item._id).map((item) => ({ name: item._id, count: item.count, available: item.available, total: item.total }));
 };
