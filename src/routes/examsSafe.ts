@@ -3,10 +3,13 @@ import mongoose from 'mongoose';
 import { authenticate, canManageAcademic } from '../middleware/auth';
 import Exam from '../models/Exam';
 import Subject from '../models/Subject';
+import Student from '../models/Student';
+import Parent from '../models/Parent';
 
 const router = express.Router();
 const examTypes = ['term', 'half-yearly', 'annual', 'midterm', 'final', 'quiz', 'assignment', 'project'];
 const examStatuses = ['draft', 'scheduled', 'approved', 'published', 'completed'];
+const managerRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
 
 const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
 const asDate = (value: any, fallback?: any) => {
@@ -26,15 +29,7 @@ const normalizeSubjectMarks = async (items: any[] = [], institutionId: any) => {
   const ids = [...new Set(valid.map((item) => String(item.subjectId)))];
   const subjects = await Subject.find({ _id: { $in: ids }, institutionId }).select('_id name code classId').lean();
   const subjectIds = new Set(subjects.map((subject: any) => String(subject._id)));
-  return valid
-    .filter((item) => subjectIds.has(String(item.subjectId)))
-    .map((item) => ({
-      subjectId: item.subjectId,
-      date: asDate(item.date),
-      duration: Number(item.duration) || 120,
-      totalMarks: Number(item.totalMarks) || 100,
-      passingMarks: Number(item.passingMarks) || 33,
-    }));
+  return valid.filter((item) => subjectIds.has(String(item.subjectId))).map((item) => ({ subjectId: item.subjectId, date: asDate(item.date), duration: Number(item.duration) || 120, totalMarks: Number(item.totalMarks) || 100, passingMarks: Number(item.passingMarks) || 33 }));
 };
 
 const normalizePayload = async (req: any) => {
@@ -65,12 +60,39 @@ const normalizePayload = async (req: any) => {
   };
 };
 
-router.use(authenticate, canManageAcademic());
+const scopedReadQuery = async (req: any) => {
+  const query: any = { institutionId: req.user.institutionId };
+  if (req.query.classId) query.classId = req.query.classId;
+  if (managerRoles.includes(req.user.role)) return query;
+
+  query.isPublished = true;
+  query.status = { $in: ['published', 'approved', 'scheduled', 'completed'] };
+
+  if (req.user.role === 'student') {
+    const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId sectionId').lean();
+    if (!student) return null;
+    query.classId = student.classId;
+    if (student.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+    return query;
+  }
+
+  if (req.user.role === 'parent') {
+    const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
+    const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true }).select('classId sectionId').lean();
+    if (!children.length) return null;
+    query.classId = { $in: children.map((child: any) => child.classId).filter(Boolean) };
+    return query;
+  }
+
+  return null;
+};
+
+router.use(authenticate);
 
 router.get('/', async (req: any, res) => {
   try {
-    const query: any = { institutionId: req.user.institutionId };
-    if (req.query.classId) query.classId = req.query.classId;
+    const query = await scopedReadQuery(req);
+    if (!query) return res.json({ exams: [] });
     const exams = await populateExam().where(query).sort({ startDate: -1, createdAt: -1 }).lean();
     res.json({ exams });
   } catch (error: any) {
@@ -80,7 +102,9 @@ router.get('/', async (req: any, res) => {
 
 router.get('/:id', async (req: any, res) => {
   try {
-    const exam = await populateExam().where({ _id: req.params.id, institutionId: req.user.institutionId }).findOne().lean();
+    const query = await scopedReadQuery(req);
+    if (!query) return res.status(404).json({ message: 'Exam not found' });
+    const exam = await populateExam().where({ ...query, _id: req.params.id }).findOne().lean();
     if (!exam) return res.status(404).json({ message: 'Exam not found' });
     res.json({ exam });
   } catch (error: any) {
@@ -88,7 +112,7 @@ router.get('/:id', async (req: any, res) => {
   }
 });
 
-router.post('/', async (req: any, res) => {
+router.post('/', canManageAcademic(), async (req: any, res) => {
   try {
     if (!req.body.classId || !isObjectId(req.body.classId)) return res.status(400).json({ message: 'Valid class is required.' });
     const payload = await normalizePayload(req);
@@ -100,17 +124,13 @@ router.post('/', async (req: any, res) => {
   }
 });
 
-router.put('/:id', async (req: any, res) => {
+router.put('/:id', canManageAcademic(), async (req: any, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
     const exists = await Exam.exists({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!exists) return res.status(404).json({ message: 'Exam not found. Please refresh exam list and select the saved exam again.' });
     const payload = await normalizePayload(req);
-    const updatedDoc = await Exam.findOneAndUpdate(
-      { _id: req.params.id, institutionId: req.user.institutionId },
-      { $set: payload },
-      { new: true, runValidators: true, context: 'query' }
-    );
+    const updatedDoc = await Exam.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: payload }, { new: true, runValidators: true, context: 'query' });
     if (!updatedDoc) return res.status(404).json({ message: 'Exam not found after update. Please refresh and try again.' });
     const updated = await populateExam().where({ _id: updatedDoc._id, institutionId: req.user.institutionId }).findOne();
     res.json({ exam: updated, message: 'Exam updated successfully' });
@@ -120,7 +140,7 @@ router.put('/:id', async (req: any, res) => {
   }
 });
 
-router.patch('/:id/public-routine', async (req: any, res) => {
+router.patch('/:id/public-routine', canManageAcademic(), async (req: any, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
     const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).lean();
@@ -129,11 +149,7 @@ router.patch('/:id/public-routine', async (req: any, res) => {
     const ready = subjectMarks.length > 0 && subjectMarks.every((item: any) => item.subjectId && item.date && item.duration);
     if (req.body.isPublished === true && !ready) return res.status(409).json({ message: 'Routine is incomplete. Add subject, date and duration before publishing.' });
     const nextStatus = req.body.isPublished === true && ['draft', 'scheduled', 'approved'].includes(exam.status) ? 'published' : exam.status;
-    const updatedDoc = await Exam.findOneAndUpdate(
-      { _id: req.params.id, institutionId: req.user.institutionId },
-      { $set: { isPublished: req.body.isPublished === true, status: nextStatus } },
-      { new: true, runValidators: true, context: 'query' }
-    );
+    const updatedDoc = await Exam.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: { isPublished: req.body.isPublished === true, status: nextStatus } }, { new: true, runValidators: true, context: 'query' });
     if (!updatedDoc) return res.status(404).json({ message: 'Exam not found after publish update.' });
     const updated = await populateExam().where({ _id: updatedDoc._id, institutionId: req.user.institutionId }).findOne();
     res.json({ exam: updated, message: updatedDoc.isPublished ? 'Exam routine is now public.' : 'Exam routine is now private.' });
@@ -142,7 +158,7 @@ router.patch('/:id/public-routine', async (req: any, res) => {
   }
 });
 
-router.delete('/:id', async (req: any, res) => {
+router.delete('/:id', canManageAcademic(), async (req: any, res) => {
   try {
     const exam = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!exam) return res.status(404).json({ message: 'Exam not found' });
