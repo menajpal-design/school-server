@@ -19,9 +19,16 @@ interface AuthRequest extends Request { user: any; }
 const platformAdminRoles = ['admin', 'super_admin'];
 const authQueryTimeoutMs = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 4000);
 const authQueryMaxTimeMs = Number(process.env.AUTH_QUERY_MAX_TIME_MS || 3000);
-const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(role || '');
-const isPrivilegedRole = (role?: string) => role === 'head';
-const isIdCardLeader = (role?: string) => ['head', 'assistant_head', 'admin', 'super_admin'].includes(role || '');
+const normalizeRole = (role?: string) => {
+  if (!role) return '';
+  const normalized = String(role).toLowerCase().trim().replace(/[\s-]+/g, '_');
+  if (normalized === 'guardian' || normalized === 'parent_guardian' || normalized === 'parent_guardian_role') return 'parent';
+  if (normalized === 'principal' || normalized === 'headmaster') return 'head';
+  return normalized;
+};
+const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(normalizeRole(role));
+const isPrivilegedRole = (role?: string) => normalizeRole(role) === 'head';
+const isIdCardLeader = (role?: string) => ['head', 'assistant_head', 'admin', 'super_admin'].includes(normalizeRole(role));
 const hasPermission = (user: any, permission: string) => Array.isArray(user?.permissions) && (user.permissions.includes(permission) || user.permissions.includes(permission.replace(':', '.')));
 
 const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
@@ -60,7 +67,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
 export const authorize = (...roles: string[]) => (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-  if (roles.includes(req.user.role)) return next();
+  const currentRole = normalizeRole(req.user.role);
+  if (roles.some((role) => normalizeRole(role) === currentRole)) return next();
   return res.status(403).json({ message: 'Access denied.' });
 };
 
@@ -72,14 +80,16 @@ export const canManageIDCard = () => (req: AuthRequest, res: Response, next: Nex
 
 export const canScanIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-  if (['staff', 'finance_officer', 'librarian', 'student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot scan ID cards.' });
-  if (isIdCardLeader(req.user.role) || req.user.role === 'class_teacher' || hasPermission(req.user, 'scan:idcard') || hasPermission(req.user, 'attendance:mark')) return next();
+  const currentRole = normalizeRole(req.user.role);
+  if (['staff', 'finance_officer', 'librarian', 'student', 'parent'].includes(currentRole)) return res.status(403).json({ message: 'Access denied. This role cannot scan ID cards.' });
+  if (isIdCardLeader(req.user.role) || currentRole === 'class_teacher' || hasPermission(req.user, 'scan:idcard') || hasPermission(req.user, 'attendance:mark')) return next();
   return res.status(403).json({ message: 'Access denied. Cannot scan ID cards.' });
 };
 
 export const canDownloadIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-  if (isIdCardLeader(req.user.role) || ['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher', 'staff'].includes(req.user.role)) return next();
+  const currentRole = normalizeRole(req.user.role);
+  if (isIdCardLeader(req.user.role) || ['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher', 'staff'].includes(currentRole)) return next();
   if (hasPermission(req.user, 'download:idcard')) return next();
   return res.status(403).json({ message: 'Access denied. Cannot download ID card.' });
 };
@@ -96,6 +106,22 @@ export const canEditIDCard = () => (req: AuthRequest, res: Response, next: NextF
   return res.status(403).json({ message: 'Access denied. ID card editing is restricted to school leaders/admins.' });
 };
 
-export const canManageFinance = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (isPrivilegedRole(req.user.role) || req.user.role === 'assistant_head' || req.user.role === 'finance_officer' || hasPermission(req.user, 'manage:finance')) return next(); return res.status(403).json({ message: 'Access denied. Finance management only.' }); };
-export const canManageAcademic = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (['admin', 'super_admin'].includes(req.user.role)) return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' }); if (isPrivilegedRole(req.user.role) || ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher'].includes(req.user.role) || hasPermission(req.user, 'manage:academic')) return next(); return res.status(403).json({ message: 'Access denied. Academic management only.' }); };
-export const canPostNotice = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (isPrivilegedRole(req.user.role) || ['assistant_head', 'committee_member', 'staff'].includes(req.user.role) || hasPermission(req.user, 'post:notice')) return next(); return res.status(403).json({ message: 'Access denied. Cannot post notice.' }); };
+export const canManageFinance = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  const currentRole = normalizeRole(req.user.role);
+  if (isPrivilegedRole(req.user.role) || currentRole === 'assistant_head' || currentRole === 'finance_officer' || hasPermission(req.user, 'manage:finance')) return next();
+  return res.status(403).json({ message: 'Access denied. Finance management only.' });
+};
+export const canManageAcademic = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  const currentRole = normalizeRole(req.user.role);
+  if (['admin', 'super_admin'].includes(currentRole)) return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' });
+  if (isPrivilegedRole(req.user.role) || ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher'].includes(currentRole) || hasPermission(req.user, 'manage:academic')) return next();
+  return res.status(403).json({ message: 'Access denied. Academic management only.' });
+};
+export const canPostNotice = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  const currentRole = normalizeRole(req.user.role);
+  if (isPrivilegedRole(req.user.role) || ['assistant_head', 'committee_member', 'staff'].includes(currentRole) || hasPermission(req.user, 'post:notice')) return next();
+  return res.status(403).json({ message: 'Access denied. Cannot post notice.' });
+};

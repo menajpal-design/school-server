@@ -28,7 +28,7 @@ router.get('/', authenticate, async (req: any, res) => {
     const scope = await resolveActorScope(req.user);
     if (blockedRoles.includes(scope.role)) return res.status(403).json({ message: 'Access denied. This role cannot view academic classes.' });
     const classQuery = scopedClassQuery(scope, { institutionId: req.user.institutionId });
-    if (!classQuery) return res.status(403).json({ message: 'Access denied. No class scope found for this user.' });
+    if (!classQuery) return res.json({ classes: [] });
     const [raw, totals] = await Promise.all([
       ClassModel.find(classQuery).sort({ createdAt: -1 }).lean(),
       Student.aggregate([{ $match: { institutionId: req.user.institutionId } }, { $group: { _id: '$classId', totalStudents: { $sum: 1 } } }]),

@@ -33,7 +33,7 @@ router.get('/', authenticate, async (req: any, res) => {
     const scope = await resolveActorScope(req.user);
     if (blockedRoles.includes(scope.role)) return res.status(403).json({ message: 'Access denied. This role cannot view academic subjects.' });
     const query = scopedSubjectQuery(scope, { institutionId: req.user.institutionId });
-    if (!query) return res.status(403).json({ subjects: [], count: 0, message: 'Access denied. No subject scope found for this user.' });
+    if (!query) return res.json({ subjects: [], count: 0 });
     const raw = await Subject.find(query).sort({ createdAt: -1 }).lean();
     const subjects = await enrich(raw);
     res.json({ subjects, count: subjects.length });
