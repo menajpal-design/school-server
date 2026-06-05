@@ -18,11 +18,14 @@ type Action =
 const systemAdminRoles = ['admin', 'super_admin'];
 const schoolLeaderRoles = ['head', 'assistant_head'];
 const headPublishRoles = ['head', 'admin', 'super_admin'];
+const resultApproverRoles = ['assistant_head', 'head', 'admin', 'super_admin'];
+const resultEntryRoles = ['teacher', 'subject_teacher'];
 const teacherRoles = ['teacher', 'subject_teacher', 'class_teacher'];
+const blockedResultRoles = ['student', 'parent', 'staff', 'finance_officer', 'librarian', 'committee_member'];
 
 export const toId = (value: any) => String(value?._id || value || '');
 export const idList = (items: any[] = []) => [...new Set(items.map(toId).filter(Boolean))];
-export const hasPermission = (user: any, permission: string) => Array.isArray(user?.permissions) && user.permissions.includes(permission);
+export const hasPermission = (user: any, permission: string) => Array.isArray(user?.permissions) && (user.permissions.includes(permission) || user.permissions.includes(permission.replace(':', '.')));
 export const isSystemAdmin = (user: any) => systemAdminRoles.includes(user?.role);
 export const isSchoolLeader = (user: any) => schoolLeaderRoles.includes(user?.role) || isSystemAdmin(user);
 export const isHeadPublisher = (user: any) => headPublishRoles.includes(user?.role);
@@ -82,12 +85,11 @@ export async function resolveActorScope(user: any, _tenantConnection?: any) {
 export function canPerform(action: Action, user: any) {
   if (!user) return false;
   if (isSystemAdmin(user)) return true;
-  if (isHeadPublisher(user)) return true;
-  if (hasPermission(user, action) || hasPermission(user, action.replace(':', '.'))) return true;
+  if (hasPermission(user, action)) return true;
   switch (action) {
     case 'result:create':
-    case 'result:update': return teacherRoles.includes(user.role) || user.role === 'assistant_head';
-    case 'result:delete': return user.role === 'assistant_head';
+    case 'result:update': return resultEntryRoles.includes(user.role);
+    case 'result:delete': return user.role === 'head';
     case 'result:approve_assistant': return ['assistant_head', 'head'].includes(user.role);
     case 'result:approve_head':
     case 'result:publish':
@@ -127,13 +129,57 @@ export const requireAction = (action: Action) => (req: any, res: Response, next:
   return next();
 };
 
-export async function canUseClassAndSubject(user: any, classId?: any, subjectId?: any) {
-  if (isSchoolLeader(user)) return true;
+export const resultEntryGuard = async (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (blockedResultRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot enter results.' });
+  if (isHeadPublisher(req.user) || hasPermission(req.user, 'result:create') || hasPermission(req.user, 'result:update') || resultEntryRoles.includes(req.user.role)) return next();
+  return res.status(403).json({ message: 'Access denied. Result entry permission is required.' });
+};
+
+export const resultApproveGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (resultApproverRoles.includes(req.user.role) || hasPermission(req.user, 'result:approve_assistant') || hasPermission(req.user, 'result:approve_head')) return next();
+  return res.status(403).json({ message: 'Access denied. Result approval permission is required.' });
+};
+
+export const resultPublishGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (headPublishRoles.includes(req.user.role) || hasPermission(req.user, 'result:publish')) return next();
+  return res.status(403).json({ message: 'Access denied. Only Head/Admin can publish results.' });
+};
+
+export const resultDeleteGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (headPublishRoles.includes(req.user.role) || hasPermission(req.user, 'result:delete')) return next();
+  return res.status(403).json({ message: 'Access denied. Only Head/Admin can delete results.' });
+};
+
+export async function assignedSubjectResultScope(user: any, classId?: any, subjectId?: any) {
+  if (isHeadPublisher(user) || isSchoolLeader(user)) return { allowed: true, scope: await resolveActorScope(user) };
   const scope = await resolveActorScope(user);
-  if (!teacherRoles.includes(user.role)) return false;
-  if (classId && scope.assignedClassIds.length && !scope.assignedClassIds.includes(toId(classId))) return false;
-  if (subjectId && scope.assignedSubjectIds.length && !scope.assignedSubjectIds.includes(toId(subjectId))) return false;
-  return Boolean(classId || subjectId || scope.assignedClassIds.length || scope.assignedSubjectIds.length);
+  if (!teacherRoles.includes(user.role)) return { allowed: false, scope };
+  const classOk = classId ? scope.assignedClassIds.includes(toId(classId)) : scope.assignedClassIds.length > 0;
+  const subjectOk = subjectId ? scope.assignedSubjectIds.includes(toId(subjectId)) : scope.assignedSubjectIds.length > 0;
+  return { allowed: Boolean(classOk && subjectOk), scope };
+}
+
+export async function ownResultScope(user: any) {
+  const scope = await resolveActorScope(user);
+  if (user?.role !== 'student' || !scope.studentId) return null;
+  return { institutionId: scope.institutionId, studentId: scope.studentId };
+}
+
+export async function childResultScope(user: any, studentId?: any) {
+  const scope = await resolveActorScope(user);
+  if (user?.role !== 'parent' || !scope.childStudentIds.length) return null;
+  const allowedChildIds = scope.childStudentIds.map(String);
+  if (studentId && !allowedChildIds.includes(String(studentId))) return null;
+  return { institutionId: scope.institutionId, studentId: studentId || { $in: scope.childStudentIds } };
+}
+
+export async function canUseClassAndSubject(user: any, classId?: any, subjectId?: any) {
+  const result = await assignedSubjectResultScope(user, classId, subjectId);
+  return result.allowed;
 }
 
 export function scopedClassQuery(scope: any, base: any = {}) {
