@@ -7,9 +7,8 @@ import { authenticate, canManageAcademic } from '../middleware/auth';
 
 const router = express.Router();
 
-type ManagerRole = 'admin' | 'super_admin' | 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'teacher';
-const managerRoles: ManagerRole[] = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
-const teacherRoles: ManagerRole[] = ['class_teacher', 'subject_teacher', 'teacher'];
+const managerRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
+const teacherRoles = ['class_teacher', 'subject_teacher', 'teacher'];
 
 const parseDateOnly = (value?: string) => {
   if (!value) return null;
