@@ -12,6 +12,7 @@ import { sendEmail } from '../utils/email';
 type OwnerType = 'student' | 'teacher' | 'staff' | 'head';
 
 const YEAR = () => new Date().getFullYear();
+const unique = (values: any[]) => Array.from(new Set(values.filter(Boolean).map((value) => String(value))));
 
 function sanitizeFilename(value: string) {
   return String(value || 'card').trim().replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'card';
@@ -92,6 +93,23 @@ function canReadCard(req: any, card: any) {
   const role = req.user?.role;
   if (['admin', 'super_admin', 'head', 'assistant_head', 'staff', 'finance_officer', 'class_teacher', 'subject_teacher', 'teacher'].includes(role)) return true;
   return String(card.ownerId?._id || card.ownerId) === String(req.user?._id || req.user?.id);
+}
+
+async function findStudentCard(student: any, user: any) {
+  const studentUserId = student?.userId?._id || student?.userId;
+  const ownerIds = unique([user?._id, user?.id, studentUserId, student?._id]);
+  const possibleCardNumbers = unique([student?.idCardNumber, student?.rollNumber, user?.username, student?.admissionNumber, student?.registrationNumber]);
+  const clauses: any[] = [{ ownerId: { $in: ownerIds } }];
+  if (possibleCardNumbers.length) clauses.push({ cardNumber: { $in: possibleCardNumbers } }, { barcodeData: { $in: possibleCardNumbers } });
+  return IDCard.findOne({ institutionId: user.institutionId, ownerType: 'student', $or: clauses }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
+}
+
+async function resolveStudentProfileForUser(user: any) {
+  const userIds = unique([user?._id, user?.id]);
+  const lookupValues = unique([user?.username]);
+  const clauses: any[] = [{ userId: { $in: userIds } }];
+  if (lookupValues.length) clauses.push({ rollNumber: { $in: lookupValues } }, { idCardNumber: { $in: lookupValues } });
+  return Student.findOne({ institutionId: user.institutionId, $or: clauses }).populate('userId').populate('classId').populate('sectionId').populate('institutionId');
 }
 
 export const generateStudentIdCard = async (req: Request, res: Response) => {
@@ -230,14 +248,36 @@ export const getMyIdCard = async (req: Request, res: Response) => {
   try {
     const user: any = (req as any).user;
     if (user.role === 'parent') return res.status(403).json({ message: 'Parent accounts must use a child card view, not my-card.' });
-    const ownerIds = [user?._id, user?.id].filter(Boolean).map(String);
+
     if (user.role === 'student') {
-      const student = await Student.findOne({ institutionId: user.institutionId, userId: { $in: ownerIds } }).populate('userId').populate('classId').populate('sectionId').lean();
-      if (student?.userId) ownerIds.push(String((student.userId as any)._id || student.userId));
+      const student = await resolveStudentProfileForUser(user);
+      if (!student) return res.status(404).json({ message: 'Student profile was not found for this login. Please contact school office.' });
+      const card = await findStudentCard(student, user);
+      if (!card) {
+        return res.json({ card: null, student, institution: (student as any).institutionId, message: 'Your ID card is not generated yet. Please contact school office.', generated: false });
+      }
+      return res.json({ card, student, institution: (student as any).institutionId, generated: true });
     }
-    const card = await IDCard.findOne({ institutionId: user.institutionId, ownerId: { $in: Array.from(new Set(ownerIds)) } }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
-    if (!card) return res.status(404).json({ message: user.role === 'student' ? 'No generated ID card was found for this student yet. Please contact office/head to generate your ID card.' : 'No ID card found for current user' });
-    return res.json(card);
+
+    const ownerIds = unique([user?._id, user?.id]);
+    const card = await IDCard.findOne({ institutionId: user.institutionId, ownerId: { $in: ownerIds } }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
+    if (!card) return res.status(404).json({ message: 'No ID card found for current user' });
+    return res.json({ card, generated: true });
+  } catch (error) { return res.status(500).json({ message: 'Server error', error }); }
+};
+
+export const getChildIdCard = async (req: Request, res: Response) => {
+  try {
+    const user: any = (req as any).user;
+    if (user.role !== 'parent') return res.status(403).json({ message: 'Only parent accounts can use child card view.' });
+    const parent = await Parent.findOne({ institutionId: user.institutionId, userId: user._id }).lean();
+    const childIds = (parent?.children || []).map((id: any) => String(id));
+    if (!childIds.includes(String(req.params.studentId))) return res.status(403).json({ message: 'Access denied. This child is not linked to your parent account.' });
+    const student = await Student.findOne({ _id: req.params.studentId, institutionId: user.institutionId }).populate('userId').populate('classId').populate('sectionId').populate('institutionId');
+    if (!student) return res.status(404).json({ message: 'Child student profile not found.' });
+    const card = await findStudentCard(student, user);
+    if (!card) return res.json({ card: null, student, institution: (student as any).institutionId, message: 'This child ID card is not generated yet. Please contact school office.', generated: false });
+    return res.json({ card, student, institution: (student as any).institutionId, generated: true });
   } catch (error) { return res.status(500).json({ message: 'Server error', error }); }
 };
 
