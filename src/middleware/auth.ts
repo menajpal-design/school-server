@@ -19,7 +19,7 @@ interface AuthRequest extends Request { user: any; }
 const platformAdminRoles = ['admin', 'super_admin'];
 const authQueryTimeoutMs = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 4000);
 const authQueryMaxTimeMs = Number(process.env.AUTH_QUERY_MAX_TIME_MS || 3000);
-const normalizeRole = (role?: string) => {
+export const normalizeRole = (role?: string) => {
   if (!role) return '';
   const normalized = String(role).toLowerCase().trim().replace(/[\s-]+/g, '_');
   if (normalized === 'guardian' || normalized === 'parent_guardian' || normalized === 'parent_guardian_role') return 'parent';

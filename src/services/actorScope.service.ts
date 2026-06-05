@@ -3,6 +3,7 @@ import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import { getTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
+import { normalizeRole } from '../middleware/auth';
 
 export type ActorScope = {
   userId: string;
@@ -51,7 +52,7 @@ export async function resolveActorScope(reqOrUser: any): Promise<ActorScope> {
   const user = getReqUser(reqOrUser) || {};
   const institutionId = user.institutionId?._id || user.institutionId;
   const userId = user._id || user.id;
-  const role = String(user.role || '');
+  const role = normalizeRole(user.role);
   const permissions = Array.isArray(user.permissions) ? user.permissions : [];
   const scope: ActorScope = {
     userId: toId(userId),

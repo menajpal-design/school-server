@@ -5,7 +5,7 @@ import Institution from '../models/Institution';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
 import Subject from '../models/Subject';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import { authenticate, canManageAcademic, normalizeRole } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -22,7 +22,7 @@ const resolveSubject = async (req: any) => {
 };
 
 const normalizeBody = async (req: any): Promise<any> => {
-  const role = req.user?.role;
+  const role = normalizeRole(req.user?.role);
   const canApproveDirectly = headApprovalRoles.includes(role);
   const requestedStatus = req.body.status;
   const status = canApproveDirectly ? (requestedStatus || (req.body.isPublic === true ? 'approved' : 'draft')) : 'proposed';
@@ -87,8 +87,9 @@ router.get('/my', async (req: any, res) => {
   try {
     const base: any = { institutionId: req.user.institutionId, isActive: true, status: 'approved', isPublic: true };
     const query = buildFilter(req, base);
+    const userRole = normalizeRole(req.user.role);
 
-    if (req.user.role === 'student') {
+    if (userRole === 'student') {
       const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId sectionId rollNumber').lean();
       if (!student) return res.json({ routines: [], profile: null, message: 'Student profile not found.' });
       query.classId = student.classId;
@@ -97,7 +98,7 @@ router.get('/my', async (req: any, res) => {
       return res.json({ routines, profile: student });
     }
 
-    if (req.user.role === 'parent') {
+    if (userRole === 'parent') {
       const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
       const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true })
         .select('classId sectionId rollNumber userId')
@@ -129,7 +130,7 @@ router.use(canManageAcademic());
 router.get('/', async (req: any, res) => {
   try {
     const base: any = { institutionId: req.user.institutionId };
-    if (teacherProposalRoles.includes(req.user.role)) base.$or = [{ createdBy: req.user._id }, { teacherId: req.user._id }, { status: 'approved', isPublic: true }];
+    if (teacherProposalRoles.includes(normalizeRole(req.user.role))) base.$or = [{ createdBy: req.user._id }, { teacherId: req.user._id }, { status: 'approved', isPublic: true }];
     const query = buildFilter(req, base);
     const routines = await routineQuery().where(query).sort({ dayOfWeek: 1, startTime: 1 }).lean();
     res.json({ routines });
@@ -141,14 +142,15 @@ router.get('/', async (req: any, res) => {
 router.post('/', async (req: any, res) => {
   try {
     const payload: any = { ...(await normalizeBody(req)) };
-    if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') {
+    const userRole = normalizeRole(req.user.role);
+    if (headApprovalRoles.includes(userRole) && payload.status === 'approved') {
       payload.approvedBy = req.user._id;
       payload.approvedAt = new Date();
       payload.isPublic = req.body.isPublic === true;
     }
     const routine = await ClassRoutine.create(payload);
     const created = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
-    res.status(201).json({ routine: created, message: headApprovalRoles.includes(req.user.role) ? 'Class routine created' : 'Class routine proposal submitted for approval' });
+    res.status(201).json({ routine: created, message: headApprovalRoles.includes(userRole) ? 'Class routine created' : 'Class routine proposal submitted for approval' });
   } catch (error: any) { res.status(500).json({ message: error?.message || 'Failed to create class routine', error }); }
 });
 
@@ -158,20 +160,22 @@ router.put('/:id', async (req: any, res) => {
     if (!routine) return res.status(404).json({ message: 'Class routine not found' });
     const userId = String(req.user._id || req.user.id);
     const ownerId = String(routine.createdBy || '');
-    if (!headApprovalRoles.includes(req.user.role) && ownerId !== userId) return res.status(403).json({ message: 'Only the proposal owner or Head/Assistant Head can edit this routine.' });
+    const userRole = normalizeRole(req.user.role);
+    if (!headApprovalRoles.includes(userRole) && ownerId !== userId) return res.status(403).json({ message: 'Only the proposal owner or Head/Assistant Head can edit this routine.' });
     const payload: any = { ...(await normalizeBody(req)) };
     Object.assign(routine, payload);
-    if (headApprovalRoles.includes(req.user.role) && payload.status === 'approved') { routine.approvedBy = req.user._id; routine.approvedAt = new Date(); routine.isPublic = req.body.isPublic === true; }
-    else if (!headApprovalRoles.includes(req.user.role)) { routine.status = 'proposed'; routine.isPublic = false; routine.approvedBy = undefined; routine.approvedAt = undefined; }
+    if (headApprovalRoles.includes(userRole) && payload.status === 'approved') { routine.approvedBy = req.user._id; routine.approvedAt = new Date(); routine.isPublic = req.body.isPublic === true; }
+    else if (!headApprovalRoles.includes(userRole)) { routine.status = 'proposed'; routine.isPublic = false; routine.approvedBy = undefined; routine.approvedAt = undefined; }
     await routine.save();
     const updated = await routineQuery().where({ _id: routine._id, institutionId: req.user.institutionId }).findOne();
-    res.json({ routine: updated, message: headApprovalRoles.includes(req.user.role) ? 'Class routine updated' : 'Class routine proposal updated' });
+    res.json({ routine: updated, message: headApprovalRoles.includes(userRole) ? 'Class routine updated' : 'Class routine proposal updated' });
   } catch (error: any) { res.status(500).json({ message: error?.message || 'Failed to update class routine', error }); }
 });
 
 router.patch('/:id/approval', async (req: any, res) => {
   try {
-    if (!headApprovalRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only Head or Assistant Head can approve routine proposals.' });
+    const userRole = normalizeRole(req.user.role);
+    if (!headApprovalRoles.includes(userRole)) return res.status(403).json({ message: 'Only Head or Assistant Head can approve routine proposals.' });
     const status = req.body.status;
     if (!['approved', 'rejected', 'proposed'].includes(status)) return res.status(400).json({ message: 'Invalid approval status.' });
     const update: any = { status, approvalNote: req.body.approvalNote, isPublic: status === 'approved' ? req.body.isPublic === true : false };
@@ -186,7 +190,8 @@ router.patch('/:id/approval', async (req: any, res) => {
 
 router.patch('/:id/public', async (req: any, res) => {
   try {
-    if (!headApprovalRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only Head or Assistant Head can publish routine.' });
+    const userRole = normalizeRole(req.user.role);
+    if (!headApprovalRoles.includes(userRole)) return res.status(403).json({ message: 'Only Head or Assistant Head can publish routine.' });
     const routine = await ClassRoutine.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId, status: 'approved' }, { isPublic: req.body.isPublic === true }, { new: true });
     if (!routine) return res.status(404).json({ message: 'Approved class routine not found' });
     res.json({ routine, message: routine.isPublic ? 'Class routine is public' : 'Class routine is private' });
@@ -199,7 +204,8 @@ router.delete('/:id', async (req: any, res) => {
     if (!routine) return res.status(404).json({ message: 'Class routine not found' });
     const userId = String(req.user._id || req.user.id);
     const ownerId = String(routine.createdBy || '');
-    if (!headApprovalRoles.includes(req.user.role) && ownerId !== userId) return res.status(403).json({ message: 'Only owner or Head/Assistant Head can delete this routine.' });
+    const userRole = normalizeRole(req.user.role);
+    if (!headApprovalRoles.includes(userRole) && ownerId !== userId) return res.status(403).json({ message: 'Only owner or Head/Assistant Head can delete this routine.' });
     await routine.deleteOne();
     res.json({ message: 'Class routine deleted' });
   } catch (error) { res.status(500).json({ message: 'Failed to delete class routine', error }); }

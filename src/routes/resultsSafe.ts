@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, normalizeRole } from '../middleware/auth';
 import Exam from '../models/Exam';
 import Result from '../models/Result';
 import Student from '../models/Student';
@@ -103,8 +103,9 @@ router.use(authenticate);
 
 router.get('/', async (req: any, res) => {
   try {
-    if (['student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Use /api/academic/results/me for own or linked child results.' });
-    if (!entryRoles.includes(req.user.role) && !['assistant_head'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot access result management.' });
+    const userRole = normalizeRole(req.user.role);
+    if (['student', 'parent'].includes(userRole)) return res.status(403).json({ message: 'Use /api/academic/results/me for own or linked child results.' });
+    if (!entryRoles.includes(userRole) && !['assistant_head'].includes(userRole)) return res.status(403).json({ message: 'Access denied. This role cannot access result management.' });
     if (req.query.classId || req.query.examId || req.query.subjectId) {
       if (!(await assertEntryScope(req, res, req.query.classId, req.query.subjectId))) return;
       return res.json(await getResultContext(req));

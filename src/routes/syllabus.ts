@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, normalizeRole } from '../middleware/auth';
 import Syllabus from '../models/Syllabus';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
@@ -7,7 +7,7 @@ import Parent from '../models/Parent';
 const router = express.Router();
 
 const manageRoles = ['head', 'assistant_head', 'admin', 'super_admin', 'subject_teacher', 'class_teacher'];
-const canManage = (role: string) => manageRoles.includes(role);
+const canManage = (role: string) => manageRoles.includes(normalizeRole(role));
 
 const buildVisibilityQuery = async (req: any) => {
   const query: any = { institutionId: req.user.institutionId };
@@ -17,11 +17,13 @@ const buildVisibilityQuery = async (req: any) => {
   if (req.query.term) query.term = req.query.term;
   if (req.query.academicYear) query.academicYear = req.query.academicYear;
 
-  if (!canManage(req.user.role)) {
+  const userRole = normalizeRole(req.user.role);
+
+  if (!canManage(userRole)) {
     query.status = 'published';
   }
 
-  if (req.user.role === 'student') {
+  if (userRole === 'student') {
     const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('classId sectionId subjects').lean();
     if (student) {
       query.classId = student.classId;
@@ -29,7 +31,7 @@ const buildVisibilityQuery = async (req: any) => {
     }
   }
 
-  if (req.user.role === 'parent') {
+  if (userRole === 'parent') {
     const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
     const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] } }).select('classId sectionId').lean();
     if (children.length) {

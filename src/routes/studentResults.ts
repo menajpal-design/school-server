@@ -1,6 +1,6 @@
 import express from 'express';
 import mongoose from 'mongoose';
-import { authenticate } from '../middleware/auth';
+import { authenticate, normalizeRole } from '../middleware/auth';
 import Result from '../models/Result';
 import Student from '../models/Student';
 import Institution from '../models/Institution';
@@ -94,16 +94,17 @@ const shapeRow = (result: any) => {
 
 router.get('/', authenticate, async (req: any, res) => {
   try {
-    if (!['student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can access personal results from this endpoint.' });
+    const userRole = normalizeRole(req.user.role);
+    if (!['student', 'parent'].includes(userRole)) return res.status(403).json({ message: 'Only students and parents can access personal results from this endpoint.' });
     const institutionId = req.user.institutionId;
     const M = await models(req);
     const studentQuery: any = { institutionId, isActive: true };
-    if (req.user.role === 'student') studentQuery.userId = req.user._id;
+    if (userRole === 'student') studentQuery.userId = req.user._id;
     else if (req.query.studentId) { studentQuery._id = req.query.studentId; studentQuery.parentId = req.user._id; }
     else studentQuery.parentId = req.user._id;
 
     let student = await (M.Student as any).findOne(studentQuery).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
-    if (!student && req.user.role === 'student') student = await (M.Student as any).findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
+    if (!student && userRole === 'student') student = await (M.Student as any).findOne({ institutionId, userId: req.user._id }).populate('userId', 'name email phone avatar gender').populate('classId', 'name grade academicYear').populate('sectionId', 'name').lean();
     if (!student) return res.status(404).json({ message: 'Student profile/result not found for current user.' });
 
     const baseQuery: any = { institutionId, studentId: student._id, workflowStatus: { $in: ['approved', 'published'] } };
