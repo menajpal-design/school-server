@@ -106,14 +106,12 @@ router.post('/', async (req: any, res) => {
     if (!applicantRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
 
     let student: any = null;
-    if (req.body.studentId) {
-      const query: any = { _id: req.body.studentId, institutionId: req.user.institutionId, isActive: { $ne: false } };
-      if (req.user.role === 'student') query.userId = req.user._id;
-      if (req.user.role === 'parent') {
-        const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
-        query._id = { $in: parent?.children || [] };
-      }
-      student = await Student.findOne(query);
+    if (req.user.role === 'parent') {
+      if (!req.body.studentId) return res.status(400).json({ message: 'Please select a child for leave application.' });
+      const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+      student = await Student.findOne({ _id: req.body.studentId, institutionId: req.user.institutionId, isActive: { $ne: false }, _id: { $in: parent?.children || [] } });
+    } else if (req.body.studentId) {
+      student = await Student.findOne({ _id: req.body.studentId, institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } });
     } else {
       student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } });
     }
@@ -125,21 +123,7 @@ router.post('/', async (req: any, res) => {
     if (endDate < startDate) return res.status(400).json({ message: 'End date cannot be before start date.' });
     if (!req.body.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ message: 'Leave reason is required.' });
 
-    const leave = await LeaveApplication.create({
-      studentId: student._id,
-      userId: student.userId,
-      applicantType: req.user.role === 'parent' ? 'parent' : 'student',
-      classId: student.classId,
-      sectionId: student.sectionId,
-      startDate,
-      endDate,
-      totalDays: countDays(startDate, endDate),
-      reason: String(req.body.reason || '').trim(),
-      attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
-      guardianNote: String(req.body.guardianNote || '').trim() || undefined,
-      status: 'pending',
-      institutionId: req.user.institutionId,
-    });
+    const leave = await LeaveApplication.create({ studentId: student._id, userId: student.userId, applicantType: req.user.role === 'parent' ? 'parent' : 'student', classId: student.classId, sectionId: student.sectionId, startDate, endDate, totalDays: countDays(startDate, endDate), reason: String(req.body.reason || '').trim(), attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined, guardianNote: String(req.body.guardianNote || '').trim() || undefined, status: 'pending', institutionId: req.user.institutionId });
 
     const created = await populateLeave().where({ _id: leave._id }).findOne();
     res.status(201).json({ leave: created, message: 'Leave application submitted.' });
