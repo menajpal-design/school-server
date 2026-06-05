@@ -7,11 +7,10 @@ import Loan from '../models/Loan';
 const DEFAULT_FINE_PER_DAY = Number(process.env.LIBRARY_FINE_PER_DAY || '10');
 const asObjectId = (value: any) => (typeof value === 'string' && mongoose.Types.ObjectId.isValid(value) ? new mongoose.Types.ObjectId(value) : value);
 
-const buildQrPayload = (book: any) => JSON.stringify({ type: 'library-book', bookId: String(book._id), qrCodeValue: book.qrCodeValue, title: book.title });
-
 const attachBookQrCode = async (book: any) => {
   if (!book) return book;
-  const qrCodeDataUrl = await QRCode.toDataURL(buildQrPayload(book), { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+  const payload = JSON.stringify({ type: 'library-book', bookId: String(book._id), qrCodeValue: book.qrCodeValue, title: book.title });
+  const qrCodeDataUrl = await QRCode.toDataURL(payload, { margin: 1, width: 220, errorCorrectionLevel: 'M' });
   const plain = typeof book.toObject === 'function' ? book.toObject() : book;
   return { ...plain, qrCodeDataUrl };
 };
@@ -31,7 +30,15 @@ const buildBookQuery = (query: any = {}, institutionId?: any) => {
 export const createBook = async (data: Partial<IBook>, userId?: Types.ObjectId, institutionId?: Types.ObjectId) => {
   const total = Math.max(0, Number(data.copiesTotal ?? 1));
   const available = Math.max(0, Math.min(total, Number(data.copiesAvailable ?? total)));
-  const book = new Book({ ...data, copiesTotal: total, copiesAvailable: available, status: available > 0 ? 'available' : 'unavailable', qrCodeValue: data.qrCodeValue || `LIB-${randomUUID()}`, institutionId, createdBy: userId });
+  const book = new Book({
+    ...data,
+    copiesTotal: total,
+    copiesAvailable: available,
+    status: available > 0 ? 'available' : 'unavailable',
+    qrCodeValue: data.qrCodeValue || `LIB-${randomUUID()}`,
+    institutionId,
+    createdBy: userId,
+  });
   return attachBookQrCode(await book.save());
 };
 
@@ -40,7 +47,8 @@ export const updateBook = async (id: string, data: Partial<IBook>, institutionId
   if (payload.copiesTotal !== undefined) payload.copiesTotal = Math.max(0, Number(payload.copiesTotal));
   if (payload.copiesAvailable !== undefined) payload.copiesAvailable = Math.max(0, Number(payload.copiesAvailable));
   if (payload.copiesTotal !== undefined && payload.copiesAvailable !== undefined) payload.copiesAvailable = Math.min(payload.copiesAvailable, payload.copiesTotal);
-  return attachBookQrCode(await Book.findOneAndUpdate({ _id: id, institutionId }, payload, { new: true }));
+  const book = await Book.findOneAndUpdate({ _id: id, institutionId }, payload, { new: true });
+  return attachBookQrCode(book);
 };
 
 export const listBooks = async (query: any = {}, institutionId?: Types.ObjectId) => {
@@ -96,6 +104,10 @@ export const listLoans = async (query: any = {}, institutionId?: Types.ObjectId)
 export const getLoan = async (id: string, institutionId?: Types.ObjectId) => Loan.findOne({ _id: id, institutionId }).populate('book user issuedBy');
 
 export const listCategories = async (institutionId?: Types.ObjectId) => {
-  const categories = await Book.aggregate([{ $match: { institutionId: asObjectId(institutionId) } }, { $group: { _id: '$category', count: { $sum: 1 }, available: { $sum: '$copiesAvailable' }, total: { $sum: '$copiesTotal' } } }, { $sort: { _id: 1 } }]);
+  const categories = await Book.aggregate([
+    { $match: { institutionId: asObjectId(institutionId) } },
+    { $group: { _id: '$category', count: { $sum: 1 }, available: { $sum: '$copiesAvailable' }, total: { $sum: '$copiesTotal' } } },
+    { $sort: { _id: 1 } },
+  ]);
   return categories.filter((item) => item._id).map((item) => ({ name: item._id, count: item.count, available: item.available, total: item.total }));
 };
