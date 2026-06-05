@@ -2,55 +2,89 @@ import express from 'express';
 import Homework from '../models/Homework';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
+import Teacher from '../models/Teacher';
 import { authenticate, canManageAcademic } from '../middleware/auth';
 
 const router = express.Router();
 
-const isAcademicTeacherRole = (role?: string) => ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'].includes(role || '');
+const managerRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
+const teacherRoles = ['class_teacher', 'subject_teacher', 'teacher'];
 
-const buildTeacherQuery = (req: any) => ({
-  institutionId: req.user.institutionId,
-});
+const parseDateOnly = (value?: string) => {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : new Date(date.getFullYear(), date.getMonth(), date.getDate());
+};
+
+const dayRange = (value?: string) => {
+  const start = parseDateOnly(value);
+  if (!start) return null;
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+  return { start, end };
+};
+
+const getTeacher = (req: any) => Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).lean();
+
+const applyFilters = (query: any, req: any) => {
+  if (req.query.date) {
+    const range = dayRange(String(req.query.date));
+    if (range) query.dueDate = { $gte: range.start, $lt: range.end };
+  }
+  if (req.query.subject) query.subject = new RegExp(String(req.query.subject).trim(), 'i');
+  if (req.query.classId) query.classId = req.query.classId;
+  if (req.query.sectionId) query.$or = [{ sectionId: req.query.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+  return query;
+};
+
+const populateHomework = (query: any) => Homework.find(query)
+  .populate('classId', 'name grade')
+  .populate('sectionId', 'name')
+  .populate('createdBy', 'name email role')
+  .sort({ dueDate: 1, createdAt: -1 })
+  .lean();
+
+const canManageHomeworkClass = async (req: any, classId: any) => {
+  if (['admin', 'super_admin', 'head', 'assistant_head'].includes(req.user.role)) return true;
+  if (!teacherRoles.includes(req.user.role)) return false;
+  const teacher = await getTeacher(req);
+  const assignedClasses = (teacher?.assignedClasses || []).map((id: any) => String(id));
+  return assignedClasses.includes(String(classId));
+};
 
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const role = req.user.role;
+    const base: any = { institutionId: req.user.institutionId };
 
-    if (isAcademicTeacherRole(role)) {
-      const homework = await Homework.find(buildTeacherQuery(req))
-        .populate('classId', 'name grade')
-        .populate('createdBy', 'name email role')
-        .sort({ dueDate: 1, createdAt: -1 })
-        .lean();
+    if (managerRoles.includes(role)) {
+      const query = applyFilters(base, req);
+      if (teacherRoles.includes(role)) {
+        const teacher = await getTeacher(req);
+        query.classId = { $in: teacher?.assignedClasses || [] };
+      }
+      const homework = await populateHomework(query);
       return res.json({ homework });
     }
 
     if (role === 'student') {
-      const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId').lean();
-      if (!student?.classId) {
-        return res.json({ homework: [] });
-      }
-      const homework = await Homework.find({ institutionId: req.user.institutionId, classId: student.classId, isPublished: true })
-        .populate('classId', 'name grade')
-        .populate('createdBy', 'name email role')
-        .sort({ dueDate: 1, createdAt: -1 })
-        .lean();
+      const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId sectionId').lean();
+      if (!student?.classId) return res.json({ homework: [] });
+      const query: any = { institutionId: req.user.institutionId, classId: student.classId, isPublished: true };
+      if (student.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+      applyFilters(query, req);
+      const homework = await populateHomework(query);
       return res.json({ homework });
     }
 
     if (role === 'parent') {
       const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('children').lean();
-      const childIds = Array.isArray(parent?.children) ? parent.children : [];
-      const students = await Student.find({ institutionId: req.user.institutionId, _id: { $in: childIds }, isActive: true }).select('classId').lean();
-      const classIds = [...new Set(students.map((student) => String(student.classId)).filter(Boolean))];
-      if (!classIds.length) {
-        return res.json({ homework: [] });
-      }
-      const homework = await Homework.find({ institutionId: req.user.institutionId, classId: { $in: classIds }, isPublished: true })
-        .populate('classId', 'name grade')
-        .populate('createdBy', 'name email role')
-        .sort({ dueDate: 1, createdAt: -1 })
-        .lean();
+      const students = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true }).select('classId sectionId').lean();
+      const classIds = [...new Set(students.map((student: any) => String(student.classId)).filter(Boolean))];
+      if (!classIds.length) return res.json({ homework: [] });
+      const query: any = { institutionId: req.user.institutionId, classId: { $in: classIds }, isPublished: true };
+      applyFilters(query, req);
+      const homework = await populateHomework(query);
       return res.json({ homework });
     }
 
@@ -62,35 +96,28 @@ router.get('/', authenticate, async (req: any, res) => {
 
 router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
   try {
-    const { title, description, subject, classId, dueDate } = req.body || {};
-
-    if (!title || !String(title).trim()) {
-      return res.status(400).json({ message: 'Title is required.' });
-    }
-    if (!classId) {
-      return res.status(400).json({ message: 'Class is required.' });
-    }
-    if (!dueDate) {
-      return res.status(400).json({ message: 'Due date is required.' });
-    }
+    if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot create homework.' });
+    const { title, description, subject, classId, sectionId, dueDate, assignedDate } = req.body || {};
+    if (!title || !String(title).trim()) return res.status(400).json({ message: 'Title is required.' });
+    if (!classId) return res.status(400).json({ message: 'Class is required.' });
+    if (!dueDate) return res.status(400).json({ message: 'Due date is required.' });
+    if (!(await canManageHomeworkClass(req, classId))) return res.status(403).json({ message: 'Access denied. You can create homework only for assigned class.' });
 
     const homework = await Homework.create({
       title: String(title).trim(),
       description: description ? String(description).trim() : undefined,
       subject: subject ? String(subject).trim() : undefined,
       classId,
-      dueDate: new Date(dueDate),
+      sectionId: sectionId || undefined,
+      dueDate: parseDateOnly(dueDate) || new Date(dueDate),
+      assignedDate: parseDateOnly(assignedDate) || new Date(),
       createdBy: req.user._id,
       institutionId: req.user.institutionId,
       isPublished: true,
     });
 
-    const created = await Homework.findById(homework._id)
-      .populate('classId', 'name grade')
-      .populate('createdBy', 'name email role')
-      .lean();
-
-    res.status(201).json({ homework: created });
+    const created = await Homework.findById(homework._id).populate('classId', 'name grade').populate('sectionId', 'name').populate('createdBy', 'name email role').lean();
+    res.status(201).json({ homework: created, message: 'Homework created successfully.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to create homework', error });
   }
@@ -98,15 +125,11 @@ router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
 
 router.delete('/:id', authenticate, canManageAcademic(), async (req: any, res) => {
   try {
+    if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot delete homework.' });
     const homework = await Homework.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
-    if (!homework) {
-      return res.status(404).json({ message: 'Homework not found' });
-    }
-
-    if (!['head', 'assistant_head'].includes(req.user.role) && String(homework.createdBy) !== String(req.user._id)) {
-      return res.status(403).json({ message: 'Only the owner or Head/Assistant Head can delete this homework.' });
-    }
-
+    if (!homework) return res.status(404).json({ message: 'Homework not found' });
+    if (!(await canManageHomeworkClass(req, homework.classId))) return res.status(403).json({ message: 'Access denied. You can delete homework only for assigned class.' });
+    if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role) && String(homework.createdBy) !== String(req.user._id)) return res.status(403).json({ message: 'Only the owner or Head/Assistant Head can delete this homework.' });
     await homework.deleteOne();
     res.json({ message: 'Homework deleted' });
   } catch (error) {
