@@ -52,6 +52,12 @@ const canManageHomeworkClass = async (req: any, classId: any) => {
   return assignedClasses.length === 0 || assignedClasses.includes(String(classId));
 };
 
+const homeworkWriteGuard = async (req: any, res: any, next: any) => {
+  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot manage homework.' });
+  if (['admin', 'super_admin'].includes(req.user.role)) return next();
+  return canManageAcademic()(req, res, next);
+};
+
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const role = req.user.role;
@@ -88,11 +94,7 @@ router.get('/', authenticate, async (req: any, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load homework', error }); }
 });
 
-router.post('/', authenticate, async (req: any, res, next) => {
-  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot create homework.' });
-  if (['admin', 'super_admin'].includes(req.user.role)) return next();
-  return canManageAcademic()(req, res, next);
-}, async (req: any, res) => {
+router.post('/', authenticate, homeworkWriteGuard, async (req: any, res) => {
   try {
     const { title, description, subject, classId, sectionId, dueDate, assignedDate } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ message: 'Title is required.' });
@@ -105,11 +107,7 @@ router.post('/', authenticate, async (req: any, res, next) => {
   } catch (error) { res.status(500).json({ message: 'Failed to create homework', error }); }
 });
 
-router.delete('/:id', authenticate, async (req: any, res, next) => {
-  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot delete homework.' });
-  if (['admin', 'super_admin'].includes(req.user.role)) return next();
-  return canManageAcademic()(req, res, next);
-}, async (req: any, res) => {
+router.delete('/:id', authenticate, homeworkWriteGuard, async (req: any, res) => {
   try {
     const homework = await Homework.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!homework) return res.status(404).json({ message: 'Homework not found' });
