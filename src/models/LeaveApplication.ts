@@ -1,9 +1,10 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface ILeaveApplication extends Document {
-  studentId: mongoose.Types.ObjectId;
+  studentId?: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
-  applicantType: 'student' | 'parent';
+  applicantType: 'student' | 'parent' | 'teacher' | 'staff';
+  employeeType?: 'teacher' | 'staff';
   classId?: mongoose.Types.ObjectId;
   sectionId?: mongoose.Types.ObjectId;
   startDate: Date;
@@ -25,9 +26,10 @@ export interface ILeaveApplication extends Document {
 }
 
 const LeaveApplicationSchema = new Schema({
-  studentId: { type: Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
+  studentId: { type: Schema.Types.ObjectId, ref: 'Student', index: true },
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  applicantType: { type: String, enum: ['student', 'parent'], default: 'student', index: true },
+  applicantType: { type: String, enum: ['student', 'parent', 'teacher', 'staff'], default: 'student', index: true },
+  employeeType: { type: String, enum: ['teacher', 'staff'] },
   classId: { type: Schema.Types.ObjectId, ref: 'Class', index: true },
   sectionId: { type: Schema.Types.ObjectId, ref: 'Section', index: true },
   startDate: { type: Date, required: true, index: true },
@@ -48,6 +50,7 @@ const LeaveApplicationSchema = new Schema({
 
 LeaveApplicationSchema.index({ institutionId: 1, status: 1, startDate: 1, endDate: 1 });
 LeaveApplicationSchema.index({ studentId: 1, startDate: 1, endDate: 1 });
+LeaveApplicationSchema.index({ userId: 1, applicantType: 1, startDate: 1, endDate: 1 });
 LeaveApplicationSchema.index({ applicantType: 1, institutionId: 1 });
 
 export default mongoose.model<ILeaveApplication>('LeaveApplication', LeaveApplicationSchema);
