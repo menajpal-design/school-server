@@ -13,6 +13,9 @@ router.get('/books/:id', ctrl.getBook);
 router.put('/books/:id', ctrl.updateBook);
 router.delete('/books/:id', ctrl.deleteBook);
 
+// Categories
+router.get('/categories', ctrl.listCategories);
+
 // Loans
 router.post('/loans/issue', ctrl.issueBook);
 router.post('/loans/return', ctrl.returnBook);
