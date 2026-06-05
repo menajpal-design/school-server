@@ -56,6 +56,78 @@ const buildUserListQuery = (req: any) => {
 };
 
 router.use(authenticate);
+
+// === Routes accessible by broader roles (placed BEFORE global authorize) ===
+
+// Get subordinate users (teachers, staff, class_teachers etc. also need this)
+router.get('/subordinates/list', async (req: any, res: any) => {
+  try {
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
+    const institutionId = getTenantIdFromReq(req);
+
+    const roleHierarchy: Record<string, string[]> = {
+      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
+      'class_teacher': ['student', 'parent'],
+      'subject_teacher': ['student', 'parent'],
+      'finance_officer': ['student', 'parent'],
+    };
+
+    const visibleRoles = roleHierarchy[userRole] || [];
+    if (!visibleRoles.length) return res.json({ users: [] });
+
+    const query: any = { $or: [{ role: { $in: visibleRoles } }, { _id: userId }] };
+    if (!isPlatformAdmin(userRole) && institutionId) query.institutionId = institutionId;
+
+    const subordinates = await User.find(query)
+      .select('_id name username email role phone isActive createdAt')
+      .sort({ role: 1, name: 1 })
+      .limit(500);
+
+    res.json({ users: subordinates });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch subordinates', error });
+  }
+});
+
+// View credentials for a specific user
+router.get('/view-credentials/:id', async (req: any, res: any) => {
+  try {
+    const targetUserId = req.params.id;
+    const userRole = req.user?.role;
+    const institutionId = getTenantIdFromReq(req);
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) return res.status(404).json({ message: 'User not found' });
+
+    const roleHierarchy: Record<string, string[]> = {
+      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
+      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
+      'class_teacher': ['student', 'parent'],
+      'subject_teacher': ['student', 'parent'],
+      'finance_officer': ['student', 'parent'],
+    };
+
+    const canSee = roleHierarchy[userRole]?.includes(targetUser.role);
+    if (!canSee || (!isPlatformAdmin(userRole) && targetUser.institutionId.toString() !== String(institutionId))) {
+      return res.status(403).json({ message: 'You do not have permission to view this user credentials' });
+    }
+
+    res.json({
+      user: { _id: targetUser._id, name: targetUser.name, email: targetUser.email, username: targetUser.username, role: targetUser.role, phone: targetUser.phone },
+      credentials: { username: targetUser.username, email: targetUser.email, note: 'Password cannot be displayed for security reasons. Use "Reset Password" button to generate a temporary password.' },
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to view credentials', error });
+  }
+});
+
+// === Admin/Head-only routes ===
 router.use(authorize('head', 'admin', 'super_admin'));
 
 router.get('/', (req, res) => {
@@ -161,100 +233,6 @@ router.put('/permissions', async (req, res) => {
     res.json({ message: 'Permissions updated', matrix });
   } catch (error) {
     res.status(500).json({ message: 'Failed to update permissions', error });
-  }
-});
-
-// Get subordinate users (those that current user can manage)
-router.get('/subordinates/list', async (req, res) => {
-  try {
-    const userRole = req.user?.role;
-    const userId = req.user?.id;
-    const institutionId = getTenantIdFromReq(req);
-
-    // Define role hierarchy - who can see whom
-    const roleHierarchy: Record<string, string[]> = {
-      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
-      'class_teacher': ['student', 'parent'],
-      'subject_teacher': ['student', 'parent'],
-      'finance_officer': ['student', 'parent'],
-    };
-
-    const visibleRoles = roleHierarchy[userRole] || [];
-
-    if (!visibleRoles.length) {
-      return res.json({ users: [] });
-    }
-
-    const query: any = {};
-    // include subordinates as well as the requesting user
-    query.$or = [{ role: { $in: visibleRoles } }, { _id: userId }];
-    if (!isPlatformAdmin(userRole) && institutionId) {
-      query.institutionId = institutionId;
-    }
-
-    const subordinates = await User.find(query)
-      .select('_id name username email role phone isActive createdAt')
-      .sort({ role: 1, name: 1 })
-      .limit(500);
-
-    res.json({ users: subordinates });
-  } catch (error) {
-    console.error('Error fetching subordinates:', error);
-    res.status(500).json({ message: 'Failed to fetch subordinates', error });
-  }
-});
-
-// View credentials for a specific user
-router.get('/view-credentials/:id', async (req, res) => {
-  try {
-    const targetUserId = req.params.id;
-    const requestingUserId = req.user?.id;
-    const userRole = req.user?.role;
-    const institutionId = getTenantIdFromReq(req);
-
-    // Check if requesting user has permission
-    const targetUser = await User.findById(targetUserId);
-    if (!targetUser) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Check hierarchy permission
-    const roleHierarchy: Record<string, string[]> = {
-      'super_admin': ['admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'admin': ['head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'head': ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'],
-      'assistant_head': ['class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent'],
-      'class_teacher': ['student', 'parent'],
-      'subject_teacher': ['student', 'parent'],
-      'finance_officer': ['student', 'parent'],
-    };
-
-    const canSee = roleHierarchy[userRole]?.includes(targetUser.role);
-    if (!canSee || (!isPlatformAdmin(userRole) && targetUser.institutionId.toString() !== String(institutionId))) {
-      return res.status(403).json({ message: 'You do not have permission to view this user credentials' });
-    }
-
-    res.json({
-      user: {
-        _id: targetUser._id,
-        name: targetUser.name,
-        email: targetUser.email,
-        username: targetUser.username,
-        role: targetUser.role,
-        phone: targetUser.phone,
-      },
-      credentials: {
-        username: targetUser.username,
-        email: targetUser.email,
-        note: 'Password cannot be displayed for security reasons. Use "Reset Password" button to generate a temporary password.',
-      },
-    });
-  } catch (error) {
-    console.error('Error viewing credentials:', error);
-    res.status(500).json({ message: 'Failed to view credentials', error });
   }
 });
 

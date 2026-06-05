@@ -7,8 +7,9 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/', getNotifications);
-router.patch('/:id/read', markAsRead);
+// IMPORTANT: /read-all must be registered BEFORE /:id/read to prevent route shadowing
 router.patch('/read-all', markAllRead);
+router.patch('/:id/read', markAsRead);
 router.post('/mark-read', markAsRead);
 router.post('/mark-all', markAllRead);
 

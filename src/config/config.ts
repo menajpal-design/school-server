@@ -109,7 +109,7 @@ export const getConfig = (): Config => {
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
     mobileUrl: process.env.MOBILE_URL || 'http://localhost:8081',
     androidUrl: process.env.ANDROID_URL || 'http://localhost:8082',
-    staticServerUrl: process.env.SERVER_URL || 'http://localhost:5000',
+    staticServerUrl: process.env.SERVER_URL || 'http://159.65.227.91:5000',
     allowedOrigins: process.env.ALLOWED_ORIGINS || '',
     mainDomain: process.env.MAIN_DOMAIN || '',
     cookieDomain: process.env.COOKIE_DOMAIN || process.env.MAIN_DOMAIN || '',

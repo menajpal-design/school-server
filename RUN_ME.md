@@ -52,7 +52,7 @@ mongod
 cd server
 npm run dev
 ```
-👉 Server runs at `http://localhost:5000`
+👉 Server runs at `http://159.65.227.91:5000`
 
 **Terminal 2 - Web Frontend:**
 ```bash
@@ -135,7 +135,7 @@ npm run dev
 
 **Expected output:**
 ```
-✓ Server running at http://localhost:5000
+✓ Server running at http://159.65.227.91:5000
 ✓ MongoDB connected
 ```
 
@@ -222,7 +222,7 @@ If it says "demo user already exists" - that's fine, database is already seeded.
 
 ## 📚 API Endpoints
 
-All endpoints are at `http://localhost:5000/api`
+All endpoints are at `http://159.65.227.91:5000/api`
 
 ### Authentication
 - `POST /auth/register` - Create new account

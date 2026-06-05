@@ -6,6 +6,23 @@ import { authenticate } from '../middleware/auth';
 const router = Router();
 const emailNotificationsEnabled = process.env.ENABLE_EMAIL_NOTIFICATIONS === 'true';
 
+// Get all messages for the current user (inbox + sent combined)
+router.get('/', authenticate, async (req: any, res: any) => {
+  try {
+    const messages = await Message.find({
+      $or: [{ toUserId: req.user.id }, { fromUserId: req.user.id }],
+    }).sort({ createdAt: -1 }).limit(100);
+
+    res.json({
+      success: true,
+      messages,
+      unreadCount: messages.filter((m) => !m.isRead && m.toUserId === req.user.id).length,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
+  }
+});
+
 // Get inbox messages
 router.get('/inbox', authenticate, async (req: any, res: any) => {
   try {

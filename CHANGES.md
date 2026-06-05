@@ -177,7 +177,7 @@ school_n/
 
 ## API Endpoints Used
 
-All endpoints use: `http://localhost:5000/api`
+All endpoints use: `http://159.65.227.91:5000/api`
 
 - `POST /auth/register` - Register new user
   - Body: { name, email, password, phone, role, institutionId }
