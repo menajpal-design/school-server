@@ -1,7 +1,7 @@
 import express from 'express';
 import { generateStudentIdCard, generateTeacherIdCard, generateStaffIdCard, bulkGenerateIdCards, downloadIdCard, emailIdCard, verifyByQRCode, renewIdCard, idCardStats, getAllIdCards, getIdCardById, getMyIdCard, getChildIdCard, searchIdCardOwners, generateIdCardRecord, renderCardPdf } from '../controllers/idCard';
 import { authenticate } from '../middleware/auth';
-import { requireAction, resolveActorScope } from '../services/permissionPolicy';
+import { resolveActorScope } from '../services/permissionPolicy';
 import IDCard from '../models/IDCard';
 import Student from '../models/Student';
 import Teacher from '../models/Teacher';
@@ -75,7 +75,7 @@ router.get('/owners/search', authenticate, idCardGenerateGuard, searchIdCardOwne
 router.post('/', authenticate, idCardGenerateGuard, generateIdCardRecord);
 router.post('/generate', authenticate, idCardGenerateGuard, generateIdCardRecord);
 router.post('/bulk', authenticate, idCardGenerateGuard, bulkGenerateIdCards);
-router.post('/render-pdf', authenticate, idCardReadGuard, renderCardPdf);
+router.post('/render-pdf', authenticate, renderCardPdf);
 router.get('/:id/download', authenticate, idCardReadGuard, downloadIdCard);
 router.post('/:id/email', authenticate, idCardManageGuard, emailIdCard);
 router.post('/verify', authenticate, idCardScanGuard, verifyByQRCode);
