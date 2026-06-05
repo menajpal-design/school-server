@@ -7,8 +7,9 @@ import { authenticate, canManageAcademic } from '../middleware/auth';
 
 const router = express.Router();
 
-const managerRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
-const teacherRoles = ['class_teacher', 'subject_teacher', 'teacher'];
+type ManagerRole = 'admin' | 'super_admin' | 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'teacher';
+const managerRoles: ManagerRole[] = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
+const teacherRoles: ManagerRole[] = ['class_teacher', 'subject_teacher', 'teacher'];
 
 const parseDateOnly = (value?: string) => {
   if (!value) return null;
@@ -24,6 +25,7 @@ const dayRange = (value?: string) => {
   return { start, end };
 };
 
+const roleIn = (role: string, roles: readonly string[]) => roles.includes(role);
 const getTeacher = (req: any) => Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).lean();
 
 const applyFilters = (query: any, req: any, options: { allowClass?: boolean; allowSection?: boolean } = {}) => {
@@ -46,15 +48,15 @@ const assignedClassesForTeacher = async (req: any) => {
 };
 
 const canManageHomeworkClass = async (req: any, classId: any) => {
-  if (['admin', 'super_admin', 'head', 'assistant_head'].includes(req.user.role)) return true;
-  if (!teacherRoles.includes(req.user.role)) return false;
+  if (roleIn(req.user.role, ['admin', 'super_admin', 'head', 'assistant_head'])) return true;
+  if (!roleIn(req.user.role, teacherRoles)) return false;
   const assignedClasses = await assignedClassesForTeacher(req);
   return assignedClasses.length === 0 || assignedClasses.includes(String(classId));
 };
 
 const homeworkWriteGuard = async (req: any, res: any, next: any) => {
-  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot manage homework.' });
-  if (['admin', 'super_admin'].includes(req.user.role)) return next();
+  if (!roleIn(req.user.role, managerRoles)) return res.status(403).json({ message: 'Access denied. Students and parents cannot manage homework.' });
+  if (roleIn(req.user.role, ['admin', 'super_admin'])) return next();
   return canManageAcademic()(req, res, next);
 };
 
@@ -62,9 +64,9 @@ router.get('/', authenticate, async (req: any, res) => {
   try {
     const role = req.user.role;
     const base: any = { institutionId: req.user.institutionId };
-    if (managerRoles.includes(role)) {
+    if (roleIn(role, managerRoles)) {
       const query = applyFilters(base, req, { allowClass: true, allowSection: true });
-      if (teacherRoles.includes(role)) {
+      if (roleIn(role, teacherRoles)) {
         const assignedClasses = await assignedClassesForTeacher(req);
         if (assignedClasses.length) query.classId = { $in: assignedClasses };
       }
@@ -112,7 +114,7 @@ router.delete('/:id', authenticate, homeworkWriteGuard, async (req: any, res) =>
     const homework = await Homework.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!homework) return res.status(404).json({ message: 'Homework not found' });
     if (!(await canManageHomeworkClass(req, homework.classId))) return res.status(403).json({ message: 'Access denied. You can delete homework only for assigned class.' });
-    if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role) && String(homework.createdBy) !== String(req.user._id)) return res.status(403).json({ message: 'Only the owner or Head/Assistant Head can delete this homework.' });
+    if (!roleIn(req.user.role, ['head', 'assistant_head', 'admin', 'super_admin']) && String(homework.createdBy) !== String(req.user._id)) return res.status(403).json({ message: 'Only the owner or Head/Assistant Head can delete this homework.' });
     await homework.deleteOne();
     res.json({ message: 'Homework deleted' });
   } catch (error) { res.status(500).json({ message: 'Failed to delete homework', error }); }
