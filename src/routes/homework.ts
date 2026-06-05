@@ -40,12 +40,16 @@ const applyFilters = (query: any, req: any, options: { allowClass?: boolean; all
 
 const populateHomework = (query: any) => Homework.find(query).populate('classId', 'name grade').populate('sectionId', 'name').populate('createdBy', 'name email role').sort({ dueDate: 1, createdAt: -1 }).lean();
 
+const assignedClassesForTeacher = async (req: any) => {
+  const teacher = await getTeacher(req);
+  return (teacher?.assignedClasses || []).map((id: any) => String(id));
+};
+
 const canManageHomeworkClass = async (req: any, classId: any) => {
   if (['admin', 'super_admin', 'head', 'assistant_head'].includes(req.user.role)) return true;
   if (!teacherRoles.includes(req.user.role)) return false;
-  const teacher = await getTeacher(req);
-  const assignedClasses = (teacher?.assignedClasses || []).map((id: any) => String(id));
-  return assignedClasses.includes(String(classId));
+  const assignedClasses = await assignedClassesForTeacher(req);
+  return assignedClasses.length === 0 || assignedClasses.includes(String(classId));
 };
 
 router.get('/', authenticate, async (req: any, res) => {
@@ -55,8 +59,8 @@ router.get('/', authenticate, async (req: any, res) => {
     if (managerRoles.includes(role)) {
       const query = applyFilters(base, req, { allowClass: true, allowSection: true });
       if (teacherRoles.includes(role)) {
-        const teacher = await getTeacher(req);
-        query.classId = { $in: teacher?.assignedClasses || [] };
+        const assignedClasses = await assignedClassesForTeacher(req);
+        if (assignedClasses.length) query.classId = { $in: assignedClasses };
       }
       const homework = await populateHomework(query);
       return res.json({ homework });
