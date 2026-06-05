@@ -5,10 +5,11 @@ import Student from '../models/Student';
 import Attendance from '../models/Attendance';
 import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
+import { resolveActorScope } from '../services/permissionPolicy';
 
 const router = express.Router();
 const approvalRoles = ['head', 'assistant_head', 'class_teacher', 'admin', 'super_admin'];
-const applicantRoles = ['student', 'parent'];
+const applicantRoles = ['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher', 'staff', 'finance_officer', 'librarian'];
 
 const parseDateOnly = (value?: string) => {
   if (!value) return new Date();
@@ -57,15 +58,48 @@ const getOwnStudentIds = async (req: any) => {
 
 const getAssignedClassIds = async (req: any) => {
   if (req.user.role !== 'class_teacher') return [];
-  const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('assignedClasses').lean();
-  return (teacher?.assignedClasses || []).map((id: any) => String(id));
+  const scope = await resolveActorScope(req.user);
+  return scope.assignedClassIds.map(String);
 };
 
 const canReviewLeave = async (req: any, leave: any) => {
+  if (String(leave.userId?._id || leave.userId) === String(req.user._id)) return false;
   if (['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role)) return true;
   if (req.user.role !== 'class_teacher') return false;
+  if (leave.applicantType !== 'student' && leave.applicantType !== 'parent') return false;
   const assignedClassIds = await getAssignedClassIds(req);
   return assignedClassIds.includes(String(leave.classId?._id || leave.classId));
+};
+
+const markStudentLeaveAttendance = async (req: any, leave: any, status: string, dates: Date[]) => {
+  const student: any = leave.studentId;
+  if (!student?._id) return;
+  if (status === 'approved') {
+    for (const date of dates) {
+      await Attendance.findOneAndUpdate(
+        { institutionId: req.user.institutionId, studentId: student._id, date },
+        { institutionId: req.user.institutionId, studentId: student._id, userId: student.userId, userType: 'student', classId: student.classId, sectionId: student.sectionId, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+  } else {
+    await Attendance.deleteMany({ institutionId: req.user.institutionId, studentId: student._id, date: { $in: dates }, status: 'leave' });
+  }
+};
+
+const markEmployeeLeaveAttendance = async (req: any, leave: any, status: string, dates: Date[]) => {
+  const userType = leave.employeeType === 'teacher' ? 'teacher' : 'staff';
+  if (status === 'approved') {
+    for (const date of dates) {
+      await Attendance.findOneAndUpdate(
+        { institutionId: req.user.institutionId, userId: leave.userId, userType, date },
+        { institutionId: req.user.institutionId, userId: leave.userId, userType, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+  } else {
+    await Attendance.deleteMany({ institutionId: req.user.institutionId, userId: leave.userId, userType, date: { $in: dates }, status: 'leave' });
+  }
 };
 
 router.use(authenticate);
@@ -87,11 +121,14 @@ router.get('/', async (req: any, res) => {
 
     if (req.user.role === 'class_teacher') {
       const assignedClassIds = await getAssignedClassIds(req);
-      query.classId = { $in: assignedClassIds };
+      query.$or = [{ classId: { $in: assignedClassIds } }, { userId: req.user._id }];
       if (!req.query.status) query.status = 'pending';
     } else if (!approvalRoles.includes(req.user.role)) {
-      const ownIds = await getOwnStudentIds(req);
-      query.studentId = { $in: ownIds };
+      if (['teacher', 'subject_teacher', 'staff', 'finance_officer', 'librarian'].includes(req.user.role)) query.userId = req.user._id;
+      else {
+        const ownIds = await getOwnStudentIds(req);
+        query.studentId = { $in: ownIds };
+      }
     }
 
     const leaves = await populateLeave().where(query).sort({ createdAt: -1 }).lean();
@@ -103,7 +140,29 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    if (!applicantRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
+    if (!applicantRoles.includes(req.user.role)) return res.status(403).json({ message: 'This role cannot apply for leave.' });
+    const startDate = toDateValue(req.body.startDate);
+    const endDate = toDateValue(req.body.endDate || req.body.startDate);
+    if (endDate < startDate) return res.status(400).json({ message: 'End date cannot be before start date.' });
+    if (!req.body.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ message: 'Leave reason is required.' });
+
+    if (['teacher', 'subject_teacher', 'class_teacher', 'staff', 'finance_officer', 'librarian'].includes(req.user.role)) {
+      const employeeType = ['teacher', 'subject_teacher', 'class_teacher'].includes(req.user.role) ? 'teacher' : 'staff';
+      const leave = await LeaveApplication.create({
+        userId: req.user._id,
+        applicantType: employeeType,
+        employeeType,
+        startDate,
+        endDate,
+        totalDays: countDays(startDate, endDate),
+        reason: String(req.body.reason || '').trim(),
+        attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
+        status: 'pending',
+        institutionId: req.user.institutionId,
+      });
+      const created = await populateLeave().where({ _id: leave._id, institutionId: req.user.institutionId }).findOne();
+      return res.status(201).json({ leave: created, message: 'Leave application submitted.' });
+    }
 
     let student: any = null;
     if (req.user.role === 'parent') {
@@ -119,11 +178,6 @@ router.post('/', async (req: any, res) => {
     }
 
     if (!student) return res.status(404).json({ message: 'Student profile not found for leave application.' });
-
-    const startDate = toDateValue(req.body.startDate);
-    const endDate = toDateValue(req.body.endDate || req.body.startDate);
-    if (endDate < startDate) return res.status(400).json({ message: 'End date cannot be before start date.' });
-    if (!req.body.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ message: 'Leave reason is required.' });
 
     const leave = await LeaveApplication.create({
       studentId: student._id,
@@ -141,7 +195,7 @@ router.post('/', async (req: any, res) => {
       institutionId: req.user.institutionId,
     });
 
-    const created = await populateLeave().where({ _id: leave._id }).findOne();
+    const created = await populateLeave().where({ _id: leave._id, institutionId: req.user.institutionId }).findOne();
     res.status(201).json({ leave: created, message: 'Leave application submitted.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to submit leave application', error });
@@ -154,7 +208,7 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
     if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ message: 'Invalid leave status.' });
     const leave: any = await LeaveApplication.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).populate('studentId');
     if (!leave) return res.status(404).json({ message: 'Leave application not found.' });
-    if (!(await canReviewLeave(req, leave))) return res.status(403).json({ message: 'Access denied. You cannot review leave outside your scope.' });
+    if (!(await canReviewLeave(req, leave))) return res.status(403).json({ message: 'Access denied. You cannot review this leave.' });
 
     leave.status = status;
     leave.reviewNote = req.body.reviewNote || '';
@@ -165,21 +219,11 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
     leave.approvedAt = status === 'approved' ? new Date() : undefined;
     await leave.save();
 
-    const student: any = leave.studentId;
     const leaveDates = buildDateList(leave.startDate, leave.endDate);
-    if (status === 'approved') {
-      for (const date of leaveDates) {
-        await Attendance.findOneAndUpdate(
-          { institutionId: req.user.institutionId, studentId: student._id, date },
-          { institutionId: req.user.institutionId, studentId: student._id, userId: student.userId, userType: 'student', classId: student.classId, sectionId: student.sectionId, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-      }
-    } else {
-      await Attendance.deleteMany({ institutionId: req.user.institutionId, studentId: student._id, date: { $in: leaveDates }, status: 'leave' });
-    }
+    if (leave.studentId) await markStudentLeaveAttendance(req, leave, status, leaveDates);
+    else await markEmployeeLeaveAttendance(req, leave, status, leaveDates);
 
-    const updated = await populateLeave().where({ _id: leave._id }).findOne();
+    const updated = await populateLeave().where({ _id: leave._id, institutionId: req.user.institutionId }).findOne();
     res.json({ leave: updated, message: status === 'approved' ? 'Leave approved and attendance marked as leave.' : status === 'rejected' ? 'Leave rejected.' : 'Leave returned to pending.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to review leave application', error });
