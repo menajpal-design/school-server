@@ -7,6 +7,7 @@ import Teacher from '../models/Teacher';
 import { requireAction, resolveActorScope, scopedSubjectQuery } from '../services/permissionPolicy';
 
 const router = express.Router();
+const blockedRoles = ['staff', 'finance_officer', 'librarian', 'committee_member'];
 
 const deriveCode = (value: any) => {
   const text = String(value || '').trim();
@@ -30,8 +31,9 @@ async function enrich(subjects: any[]) {
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const scope = await resolveActorScope(req.user);
+    if (blockedRoles.includes(scope.role)) return res.status(403).json({ message: 'Access denied. This role cannot view academic subjects.' });
     const query = scopedSubjectQuery(scope, { institutionId: req.user.institutionId });
-    if (!query) return res.status(['student', 'parent', 'teacher', 'class_teacher', 'subject_teacher'].includes(req.user.role) ? 200 : 403).json({ subjects: [], count: 0, message: 'No scoped subjects available.' });
+    if (!query) return res.status(403).json({ subjects: [], count: 0, message: 'Access denied. No subject scope found for this user.' });
     const raw = await Subject.find(query).sort({ createdAt: -1 }).lean();
     const subjects = await enrich(raw);
     res.json({ subjects, count: subjects.length });
@@ -46,22 +48,8 @@ router.post('/', authenticate, requireAction('subject:create'), async (req: any,
     if (!items.length) return res.status(400).json({ message: 'Subject name and class are required.' });
     const created: any[] = [];
     for (const item of items) {
-      const payload = {
-        name: String(item.name || '').trim(),
-        code: String(item.code || deriveCode(item.name)).trim().toUpperCase(),
-        type: ['core', 'elective', 'optional'].includes(String(item.type)) ? item.type : 'core',
-        classId: item.classId,
-        teacherId: item.teacherId || undefined,
-        description: item.description || '',
-        creditHours: Number(item.creditHours) || 1,
-        isActive: item.isActive !== false,
-        institutionId: req.user.institutionId,
-      };
-      const subject = await Subject.findOneAndUpdate(
-        { institutionId: req.user.institutionId, classId: payload.classId, code: payload.code },
-        { $set: payload },
-        { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
-      );
+      const payload = { name: String(item.name || '').trim(), code: String(item.code || deriveCode(item.name)).trim().toUpperCase(), type: ['core', 'elective', 'optional'].includes(String(item.type)) ? item.type : 'core', classId: item.classId, teacherId: item.teacherId || undefined, description: item.description || '', creditHours: Number(item.creditHours) || 1, isActive: item.isActive !== false, institutionId: req.user.institutionId };
+      const subject = await Subject.findOneAndUpdate({ institutionId: req.user.institutionId, classId: payload.classId, code: payload.code }, { $set: payload }, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
       await ClassModel.findOneAndUpdate({ _id: subject.classId, institutionId: req.user.institutionId }, { $addToSet: { subjects: subject._id } }).catch(() => undefined);
       if (subject.teacherId) await Teacher.findOneAndUpdate({ userId: subject.teacherId, institutionId: req.user.institutionId }, { $addToSet: { subjects: subject._id, assignedClasses: subject.classId } }).catch(() => undefined);
       created.push(subject);
@@ -77,17 +65,7 @@ router.post('/', authenticate, requireAction('subject:create'), async (req: any,
 
 router.put('/:id', authenticate, requireAction('subject:update'), async (req: any, res) => {
   try {
-    const payload = {
-      name: String(req.body.name || '').trim(),
-      code: String(req.body.code || deriveCode(req.body.name)).toUpperCase(),
-      type: ['core', 'elective', 'optional'].includes(String(req.body.type)) ? req.body.type : 'core',
-      classId: req.body.classId,
-      teacherId: req.body.teacherId || undefined,
-      description: req.body.description || '',
-      creditHours: Number(req.body.creditHours) || 1,
-      isActive: req.body.isActive !== false,
-      institutionId: req.user.institutionId,
-    };
+    const payload = { name: String(req.body.name || '').trim(), code: String(req.body.code || deriveCode(req.body.name)).toUpperCase(), type: ['core', 'elective', 'optional'].includes(String(req.body.type)) ? req.body.type : 'core', classId: req.body.classId, teacherId: req.body.teacherId || undefined, description: req.body.description || '', creditHours: Number(req.body.creditHours) || 1, isActive: req.body.isActive !== false, institutionId: req.user.institutionId };
     const subject: any = await Subject.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: payload }, { new: true, runValidators: true });
     if (!subject) return res.status(404).json({ message: 'Subject not found' });
     await ClassModel.findOneAndUpdate({ _id: subject.classId, institutionId: req.user.institutionId }, { $addToSet: { subjects: subject._id } }).catch(() => undefined);
