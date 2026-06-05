@@ -7,43 +7,29 @@ import getTenantIdFromReq from '../utils/tenant';
 import { sendSMS } from '../utils/sms';
 
 const router = Router();
+const smsMonitoringRoles = ['admin', 'super_admin', 'head'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SMS DIAGNOSTIC — tells you exactly why SMS is failing
-// GET /institution/sms-diagnostic
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/sms-diagnostic', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+router.get('/sms-diagnostic', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const tenantId = getTenantIdFromReq(req);
     const institution = await Institution.findById(tenantId).select('settings billing name').lean();
     const settings: any = (institution as any)?.settings || {};
     const billing: any = (institution as any)?.billing || {};
-
-    // Check each failure point
     const globalEnabled = process.env.SMS_ENABLED !== 'false';
     const smsEnabled = typeof settings.smsEnabled === 'boolean' ? settings.smsEnabled : globalEnabled;
-
     const rawKey = String(settings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '').trim();
     const isPlaceholder = !rawKey || rawKey.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
     const hasValidKey = !isPlaceholder;
-
     const provider = String(settings.smsProvider || process.env.SMS_PROVIDER || 'anoncify').toLowerCase();
     const apiUrl = String(settings.smsApiUrl || process.env.SMS_API_URL || 'https://anoncify.xyz/api/sms').trim();
-
     const smsBalance = Number(billing.smsBalance ?? 0);
     const hasCredits = smsBalance > 0;
-
-    // Recent SMS logs (last 10)
-    const recentLogs = await SmsLog.find({ institutionId: tenantId })
-      .sort({ sentAt: -1 }).limit(10).lean();
-
-    const failureReasons = recentLogs
-      .filter((log: any) => log.status === 'failed')
-      .map((log: any) => log.failureReason || log.errorMessage)
-      .filter(Boolean);
-
+    const recentLogs = await SmsLog.find({ institutionId: tenantId }).sort({ sentAt: -1 }).limit(10).lean();
+    const failureReasons = recentLogs.filter((log: any) => log.status === 'failed').map((log: any) => log.failureReason || log.errorMessage).filter(Boolean);
     const uniqueFailures = [...new Set(failureReasons)];
-
     const diagnosis = {
       institutionName: (institution as any)?.name,
       smsEnabled,
@@ -56,255 +42,106 @@ router.get('/sms-diagnostic', authenticate, authorize('admin', 'super_admin', 'h
       hasCredits,
       recentLogCount: recentLogs.length,
       recentFailures: uniqueFailures,
-      verdict: !smsEnabled ? '❌ SMS is DISABLED' :
-               !hasValidKey ? '❌ NO VALID API KEY — set it via POST /institution/sms-settings' :
-               provider !== 'anoncify' ? `❌ Unknown provider: ${provider}` :
-               !hasCredits && smsBalance === 0 ? '✅ Config OK — SMS will work (no package needed, unlimited mode)' :
-               '✅ SMS should be working',
+      verdict: !smsEnabled ? '❌ SMS is DISABLED' : !hasValidKey ? '❌ NO VALID API KEY — set it via POST /institution/sms-settings' : provider !== 'anoncify' ? `❌ Unknown provider: ${provider}` : !hasCredits && smsBalance === 0 ? '✅ Config OK — SMS will work (no package needed, unlimited mode)' : '✅ SMS should be working',
       fix: !hasValidKey ? 'Call POST /institution/sms-settings with { "smsApiKey": "your-real-key" }' : undefined,
     };
-
     res.json({ diagnosis, recentLogs });
   } catch (error) {
     res.status(500).json({ message: 'Diagnostic failed', error });
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET SMS SETTINGS for this institution
-// GET /institution/sms-settings
-// ─────────────────────────────────────────────────────────────────────────────
-router.get('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+router.get('/sms-settings', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const tenantId = getTenantIdFromReq(req);
     const institution = await Institution.findById(tenantId).select('settings').lean();
     const settings: any = (institution as any)?.settings || {};
-    res.json({
-      smsEnabled: settings.smsEnabled ?? true,
-      smsProvider: settings.smsProvider || 'anoncify',
-      smsApiUrl: settings.smsApiUrl || 'https://anoncify.xyz/api/sms',
-      // Mask the key — only show first 4 chars
-      smsApiKeyMasked: settings.smsApiKey
-        ? `${String(settings.smsApiKey).slice(0, 4)}${'*'.repeat(Math.max(String(settings.smsApiKey).length - 4, 0))}`
-        : '(not set)',
-      smsApiKeySet: Boolean(settings.smsApiKey),
-    });
+    res.json({ smsEnabled: settings.smsEnabled ?? true, smsProvider: settings.smsProvider || 'anoncify', smsApiUrl: settings.smsApiUrl || 'https://anoncify.xyz/api/sms', smsApiKeyMasked: settings.smsApiKey ? `${String(settings.smsApiKey).slice(0, 4)}${'*'.repeat(Math.max(String(settings.smsApiKey).length - 4, 0))}` : '(not set)', smsApiKeySet: Boolean(settings.smsApiKey) });
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch SMS settings', error });
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SAVE SMS SETTINGS — set institution-level API key (overrides .env)
-// POST /institution/sms-settings
-// Body: { smsApiKey, smsEnabled, smsProvider, smsApiUrl }
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+router.post('/sms-settings', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const tenantId = getTenantIdFromReq(req);
     const institution = await Institution.findById(tenantId);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
-
     const update: Record<string, any> = {};
     if (req.body.smsApiKey !== undefined) update['settings.smsApiKey'] = String(req.body.smsApiKey || '').trim();
     if (req.body.smsEnabled !== undefined) update['settings.smsEnabled'] = Boolean(req.body.smsEnabled);
     if (req.body.smsProvider !== undefined) update['settings.smsProvider'] = String(req.body.smsProvider || 'anoncify').toLowerCase();
     if (req.body.smsApiUrl !== undefined) update['settings.smsApiUrl'] = String(req.body.smsApiUrl || '').trim();
-
     if (!Object.keys(update).length) return res.status(400).json({ message: 'No SMS settings provided to update' });
-
     await Institution.findByIdAndUpdate(tenantId, { $set: update });
-
     res.json({ message: 'SMS settings saved successfully', updated: Object.keys(update) });
   } catch (error) {
     res.status(500).json({ message: 'Failed to save SMS settings', error });
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TEST SMS — send a test message to verify configuration
-// POST /institution/sms-test
-// Body: { phone }
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+router.post('/sms-test', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const tenantId = getTenantIdFromReq(req);
     const phone = String(req.body?.phone || '').trim();
     if (!phone) return res.status(400).json({ message: 'phone number required in body' });
-
-    const result = await sendSMS({
-      to: phone,
-      message: 'EASY SCHOOL SMS test message. If you receive this, SMS is working correctly.',
-      institutionId: tenantId,
-      type: 'notification',
-      purpose: 'sms_test',
-      recipientName: 'Test',
-      recipientPhone: phone,
-    });
-
+    const result = await sendSMS({ to: phone, message: 'EASY SCHOOL SMS test message. If you receive this, SMS is working correctly.', institutionId: tenantId, type: 'notification', purpose: 'sms_test', recipientName: 'Test', recipientPhone: phone });
     res.json({ sent: result, phone, message: result ? '✅ SMS sent successfully' : '❌ SMS failed — check /institution/sms-diagnostic' });
   } catch (error) {
     res.status(500).json({ message: 'SMS test failed', error });
   }
 });
 
-
-
-// Get all SMS logs for an institution (Admin, Head, Assistant Head, Finance Officer)
-router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
+router.get('/sms-monitoring', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const { status, parentId, studentId, type, startDate, endDate } = req.query;
-    const userId = (req as any).user?.id;
-    
-    // Resolve tenant/institution id
     const tenantId = getTenantIdFromReq(req);
     if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
-
     const filter: any = { institutionId: tenantId };
-
-    if (status) {
-      filter.status = status;
-    }
-    if (parentId) {
-      filter.parentId = parentId;
-    }
-    if (studentId) {
-      filter.studentId = studentId;
-    }
-    if (type) {
-      filter.type = type;
-    }
+    if (status) filter.status = status;
+    if (parentId) filter.parentId = parentId;
+    if (studentId) filter.studentId = studentId;
+    if (type) filter.type = type;
     if (startDate || endDate) {
       filter.sentAt = {};
-      if (startDate) {
-        filter.sentAt.$gte = new Date(startDate as string);
-      }
-      if (endDate) {
-        filter.sentAt.$lte = new Date(endDate as string);
-      }
+      if (startDate) filter.sentAt.$gte = new Date(startDate as string);
+      if (endDate) filter.sentAt.$lte = new Date(endDate as string);
     }
-
-    const smsLogs = await SmsLog.find(filter)
-      .populate('parentId', 'userId')
-      .populate('studentId', 'name')
-      .sort({ sentAt: -1 })
-      .limit(500);
-
-    // Enrich with parent user details
-    const enrichedLogs = await Promise.all(
-      smsLogs.map(async (log) => {
-        const logObj = log.toObject();
-        if (logObj.parentId) {
-          const parent = await Parent.findById(logObj.parentId).populate('userId', 'name email phone');
-          // logObj.parentDetails = parent; // TODO: fix type issues
-        }
-        return logObj;
-      })
-    );
-
-    res.json({
-      total: smsLogs.length,
-      data: enrichedLogs,
-    });
+    const smsLogs = await SmsLog.find(filter).populate('parentId', 'userId').populate('studentId', 'name').sort({ sentAt: -1 }).limit(500);
+    const enrichedLogs = await Promise.all(smsLogs.map(async (log) => log.toObject()));
+    res.json({ total: smsLogs.length, data: enrichedLogs });
   } catch (error) {
     console.error('Error fetching SMS logs:', error);
     res.status(500).json({ error: 'Failed to fetch SMS logs' });
   }
 });
 
-// Get SMS logs for a specific parent
-router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
+router.get('/sms-monitoring/parent/:parentId', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const { parentId } = req.params;
     const tenantId = getTenantIdFromReq(req);
-    const user = (req as any).user;
-
     const parent = await Parent.findById(parentId);
-    if (!parent) {
-      return res.status(404).json({ error: 'Parent not found' });
-    }
-
-    const smsLogs = await SmsLog.find({
-      institutionId: tenantId,
-      parentId,
-    })
-      .populate('studentId', 'name')
-      .sort({ sentAt: -1 });
-
-    const summaryByStatus = {
-      sent: 0,
-      failed: 0,
-      delivered: 0,
-      pending: 0,
-    };
-
-    smsLogs.forEach((log) => {
-      summaryByStatus[log.status as keyof typeof summaryByStatus]++;
-    });
-
-    res.json({
-      parent: {
-        id: parent._id,
-        children: parent.children || [],
-      },
-      summary: summaryByStatus,
-      logs: smsLogs,
-    });
+    if (!parent) return res.status(404).json({ error: 'Parent not found' });
+    const smsLogs = await SmsLog.find({ institutionId: tenantId, parentId }).populate('studentId', 'name').sort({ sentAt: -1 });
+    const summaryByStatus = { sent: 0, failed: 0, delivered: 0, pending: 0 };
+    smsLogs.forEach((log) => { summaryByStatus[log.status as keyof typeof summaryByStatus]++; });
+    res.json({ parent: { id: parent._id, children: parent.children || [] }, summary: summaryByStatus, logs: smsLogs });
   } catch (error) {
     console.error('Error fetching parent SMS logs:', error);
     res.status(500).json({ error: 'Failed to fetch parent SMS logs' });
   }
 });
 
-// Get SMS statistics for dashboard
-router.get('/sms-monitoring/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
+router.get('/sms-monitoring/stats', authenticate, authorize(...smsMonitoringRoles), async (req: Request, res: Response) => {
   try {
     const { days = 30 } = req.query;
     const tenantId = getTenantIdFromReq(req);
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days as string));
-
-    const stats = await SmsLog.aggregate([
-      {
-        $match: {
-          institutionId: tenantId,
-          sentAt: { $gte: startDate },
-        },
-      },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    const typeBreakdown = await SmsLog.aggregate([
-      {
-        $match: {
-          institutionId: tenantId,
-          sentAt: { $gte: startDate },
-        },
-      },
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    const totalSent = await SmsLog.countDocuments({
-      institutionId: tenantId,
-      sentAt: { $gte: startDate },
-    });
-
-    res.json({
-      period: `Last ${days} days`,
-      totalSent,
-      statusBreakdown: stats,
-      typeBreakdown,
-    });
+    const stats = await SmsLog.aggregate([{ $match: { institutionId: tenantId, sentAt: { $gte: startDate } } }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
+    const typeBreakdown = await SmsLog.aggregate([{ $match: { institutionId: tenantId, sentAt: { $gte: startDate } } }, { $group: { _id: '$type', count: { $sum: 1 } } }]);
+    const totalSent = await SmsLog.countDocuments({ institutionId: tenantId, sentAt: { $gte: startDate } });
+    res.json({ period: `Last ${days} days`, totalSent, statusBreakdown: stats, typeBreakdown });
   } catch (error) {
     console.error('Error fetching SMS stats:', error);
     res.status(500).json({ error: 'Failed to fetch SMS statistics' });
