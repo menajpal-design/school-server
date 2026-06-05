@@ -17,7 +17,7 @@ import studentResultRoutes from './routes/studentResults';
 import resultRoutes from './routes/resultsSafe';
 import academicClassRoutes from './routes/academicClasses';
 import academicSubjectRoutes from './routes/subjectsSafe';
-import academicExamRoutes from './routes/examsSafe';
+import academicExamRoutes from './routes/examsScoped';
 import syllabusRoutes from './routes/syllabus';
 import classRoutineRoutes from './routes/classRoutine';
 import homeworkRoutes from './routes/homework';
