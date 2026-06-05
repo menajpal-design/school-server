@@ -6,6 +6,9 @@ const router = Router();
 
 router.use(authenticate);
 
+// Categories and summaries
+router.get('/categories', ctrl.getCategories);
+
 // Books
 router.post('/books', ctrl.createBook);
 router.get('/books', ctrl.listBooks);
