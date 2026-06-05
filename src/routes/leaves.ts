@@ -4,9 +4,11 @@ import LeaveApplication from '../models/LeaveApplication';
 import Student from '../models/Student';
 import Attendance from '../models/Attendance';
 import Parent from '../models/Parent';
+import Teacher from '../models/Teacher';
 
 const router = express.Router();
-const approvalRoles = ['head', 'assistant_head', 'admin', 'super_admin'];
+const approvalRoles = ['head', 'assistant_head', 'class_teacher', 'admin', 'super_admin'];
+const applicantRoles = ['student', 'parent'];
 
 const parseDateOnly = (value?: string) => {
   if (!value) return new Date();
@@ -55,6 +57,19 @@ const getOwnStudentIds = async (req: any) => {
   return [];
 };
 
+const getAssignedClassIds = async (req: any) => {
+  if (req.user.role !== 'class_teacher') return [];
+  const teacher = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('assignedClasses').lean();
+  return (teacher?.assignedClasses || []).map((id: any) => String(id));
+};
+
+const canReviewLeave = async (req: any, leave: any) => {
+  if (['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role)) return true;
+  if (req.user.role !== 'class_teacher') return false;
+  const assignedClassIds = await getAssignedClassIds(req);
+  return assignedClassIds.includes(String(leave.classId?._id || leave.classId));
+};
+
 router.use(authenticate);
 
 router.get('/', async (req: any, res) => {
@@ -71,7 +86,10 @@ router.get('/', async (req: any, res) => {
       query.endDate = { $gte: start };
     }
 
-    if (!approvalRoles.includes(req.user.role)) {
+    if (req.user.role === 'class_teacher') {
+      const assignedClassIds = await getAssignedClassIds(req);
+      query.classId = { $in: assignedClassIds };
+    } else if (!approvalRoles.includes(req.user.role)) {
       const ownIds = await getOwnStudentIds(req);
       query.studentId = { $in: ownIds };
     }
@@ -85,8 +103,8 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    if (!['student', 'parent', 'head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Only students/parents can apply for leave.' });
+    if (!applicantRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
     }
 
     let student: any = null;
@@ -119,35 +137,24 @@ router.post('/', async (req: any, res) => {
       totalDays: countDays(startDate, endDate),
       reason: req.body.reason,
       guardianNote: req.body.guardianNote,
-      status: approvalRoles.includes(req.user.role) && req.body.status === 'approved' ? 'approved' : 'pending',
-      reviewedBy: approvalRoles.includes(req.user.role) && req.body.status === 'approved' ? req.user._id : undefined,
-      reviewedAt: approvalRoles.includes(req.user.role) && req.body.status === 'approved' ? new Date() : undefined,
+      status: 'pending',
       institutionId: req.user.institutionId,
     });
 
-    if (leave.status === 'approved') {
-      for (const date of buildDateList(startDate, endDate)) {
-        await Attendance.findOneAndUpdate(
-          { institutionId: req.user.institutionId, studentId: student._id, date },
-          { institutionId: req.user.institutionId, studentId: student._id, userId: student.userId, userType: 'student', classId: student.classId, sectionId: student.sectionId, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-      }
-    }
-
     const created = await populateLeave().where({ _id: leave._id }).findOne();
-    res.status(201).json({ leave: created, message: leave.status === 'approved' ? 'Leave approved and attendance marked as leave.' : 'Leave application submitted.' });
+    res.status(201).json({ leave: created, message: 'Leave application submitted.' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to submit leave application', error });
   }
 });
 
-router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant_head'), async (req: any, res) => {
+router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant_head', 'class_teacher'), async (req: any, res) => {
   try {
     const status = req.body.status;
     if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ message: 'Invalid leave status.' });
     const leave: any = await LeaveApplication.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).populate('studentId');
     if (!leave) return res.status(404).json({ message: 'Leave application not found.' });
+    if (!(await canReviewLeave(req, leave))) return res.status(403).json({ message: 'Access denied. You cannot review leave outside your scope.' });
 
     leave.status = status;
     leave.reviewNote = req.body.reviewNote || '';
@@ -155,8 +162,8 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
     leave.reviewedAt = new Date();
     await leave.save();
 
+    const student: any = leave.studentId;
     if (status === 'approved') {
-      const student: any = leave.studentId;
       for (const date of buildDateList(leave.startDate, leave.endDate)) {
         await Attendance.findOneAndUpdate(
           { institutionId: req.user.institutionId, studentId: student._id, date },
@@ -164,6 +171,8 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
       }
+    } else {
+      await Attendance.deleteMany({ institutionId: req.user.institutionId, studentId: student._id, date: { $in: buildDateList(leave.startDate, leave.endDate) }, status: 'leave' });
     }
 
     const updated = await populateLeave().where({ _id: leave._id }).findOne();
