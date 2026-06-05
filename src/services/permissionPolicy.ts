@@ -6,7 +6,7 @@ import Staff from '../models/Staff';
 
 type Action =
   | 'result:create' | 'result:update' | 'result:delete' | 'result:approve_assistant' | 'result:approve_head' | 'result:publish'
-  | 'exam:create' | 'exam:update' | 'exam:delete' | 'exam:publish'
+  | 'exam:create' | 'exam:update' | 'exam:delete' | 'exam:approve' | 'exam:publish'
   | 'class:create' | 'class:update' | 'class:delete'
   | 'subject:create' | 'subject:update' | 'subject:delete'
   | 'syllabus:create' | 'syllabus:update' | 'syllabus:delete'
@@ -17,6 +17,7 @@ type Action =
 
 const systemAdminRoles = ['admin', 'super_admin'];
 const schoolLeaderRoles = ['head', 'assistant_head'];
+const schoolLeaderAdminRoles = ['assistant_head', 'head', 'admin', 'super_admin'];
 const headPublishRoles = ['head', 'admin', 'super_admin'];
 const resultApproverRoles = ['assistant_head', 'head', 'admin', 'super_admin'];
 const resultEntryRoles = ['teacher', 'subject_teacher'];
@@ -68,12 +69,13 @@ export function canPerform(action: Action, user: any) {
     case 'result:delete': return user.role === 'head';
     case 'result:approve_assistant': return ['assistant_head', 'head'].includes(user.role);
     case 'result:approve_head':
-    case 'result:publish':
-    case 'exam:publish':
-    case 'routine:publish': return user.role === 'head';
+    case 'result:publish': return user.role === 'head';
     case 'exam:create':
     case 'exam:update':
-    case 'exam:delete':
+    case 'exam:delete': return ['head', 'assistant_head'].includes(user.role);
+    case 'exam:approve': return ['assistant_head', 'head'].includes(user.role);
+    case 'exam:publish':
+    case 'routine:publish': return ['head', 'assistant_head'].includes(user.role);
     case 'class:create':
     case 'class:update':
     case 'class:delete':
@@ -105,30 +107,69 @@ export const resultApproveGuard = (req: any, res: Response, next: NextFunction) 
 export const resultPublishGuard = (req: any, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (headPublishRoles.includes(req.user.role) || hasPermission(req.user, 'result:publish')) return next(); return res.status(403).json({ message: 'Access denied. Only Head/Admin can publish results.' }); };
 export const resultDeleteGuard = (req: any, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (headPublishRoles.includes(req.user.role) || hasPermission(req.user, 'result:delete')) return next(); return res.status(403).json({ message: 'Access denied. Only Head/Admin can delete results.' }); };
 
+export const examManageGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (schoolLeaderAdminRoles.includes(req.user.role) || hasPermission(req.user, 'exam:create') || hasPermission(req.user, 'exam:update') || hasPermission(req.user, 'exam:delete')) return next();
+  return res.status(403).json({ message: 'Access denied. Exam management is restricted to school leaders/admins.' });
+};
+
+export const examPublishGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (schoolLeaderAdminRoles.includes(req.user.role) || hasPermission(req.user, 'exam:publish') || hasPermission(req.user, 'routine:publish')) return next();
+  return res.status(403).json({ message: 'Access denied. Exam routine publishing is restricted to school leaders/admins.' });
+};
+
+export const examApproveGuard = (req: any, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (schoolLeaderAdminRoles.includes(req.user.role) || hasPermission(req.user, 'exam:approve')) return next();
+  return res.status(403).json({ message: 'Access denied. Exam approval is restricted to school leaders/admins.' });
+};
+
+export async function teacherAssignedExamScope(user: any, base: any = {}) {
+  const scope = await resolveActorScope(user);
+  if (!['teacher', 'subject_teacher'].includes(user?.role)) return null;
+  if (!scope.assignedClassIds.length && !scope.assignedSubjectIds.length) return null;
+  const or: any[] = [];
+  if (scope.assignedClassIds.length) or.push({ classId: { $in: scope.assignedClassIds } });
+  if (scope.assignedSubjectIds.length) or.push({ subjectId: { $in: scope.assignedSubjectIds } }, { 'subjectMarks.subjectId': { $in: scope.assignedSubjectIds } });
+  return { ...base, $or: or };
+}
+
+export async function classTeacherExamScope(user: any, base: any = {}) {
+  const scope = await resolveActorScope(user);
+  if (user?.role !== 'class_teacher') return null;
+  if (!scope.assignedClassIds.length) return null;
+  return { ...base, classId: { $in: scope.assignedClassIds } };
+}
+
+export async function publishedOwnClassExamScope(user: any, base: any = {}) {
+  const scope = await resolveActorScope(user);
+  if (user?.role !== 'student' || !scope.assignedClassIds.length) return null;
+  return { ...base, classId: { $in: scope.assignedClassIds }, isPublished: true };
+}
+
+export async function childClassExamScope(user: any, base: any = {}) {
+  const scope = await resolveActorScope(user);
+  if (user?.role !== 'parent' || !scope.assignedClassIds.length) return null;
+  return { ...base, classId: { $in: scope.assignedClassIds }, isPublished: true };
+}
+
+export async function examReadScope(user: any, base: any = {}) {
+  if (!user) return null;
+  if (blockedAcademicDataRoles.includes(user.role)) return null;
+  if (isSchoolLeader(user) || isSystemAdmin(user)) return base;
+  if (['teacher', 'subject_teacher'].includes(user.role)) return teacherAssignedExamScope(user, base);
+  if (user.role === 'class_teacher') return classTeacherExamScope(user, base);
+  if (user.role === 'student') return publishedOwnClassExamScope(user, base);
+  if (user.role === 'parent') return childClassExamScope(user, base);
+  return null;
+}
+
 export async function assignedSubjectResultScope(user: any, classId?: any, subjectId?: any) { if (isHeadPublisher(user) || isSchoolLeader(user)) return { allowed: true, scope: await resolveActorScope(user) }; const scope = await resolveActorScope(user); if (!teacherRoles.includes(user.role)) return { allowed: false, scope }; const classOk = classId ? scope.assignedClassIds.includes(toId(classId)) : scope.assignedClassIds.length > 0; const subjectOk = subjectId ? scope.assignedSubjectIds.includes(toId(subjectId)) : scope.assignedSubjectIds.length > 0; return { allowed: Boolean(classOk && subjectOk), scope }; }
 export async function ownResultScope(user: any) { const scope = await resolveActorScope(user); if (user?.role !== 'student' || !scope.studentId) return null; return { institutionId: scope.institutionId, studentId: scope.studentId }; }
 export async function childResultScope(user: any, studentId?: any) { const scope = await resolveActorScope(user); if (user?.role !== 'parent' || !scope.childStudentIds.length) return null; const allowedChildIds = scope.childStudentIds.map(String); if (studentId && !allowedChildIds.includes(String(studentId))) return null; return { institutionId: scope.institutionId, studentId: studentId || { $in: scope.childStudentIds } }; }
 export async function canUseClassAndSubject(user: any, classId?: any, subjectId?: any) { const result = await assignedSubjectResultScope(user, classId, subjectId); return result.allowed; }
 
-export function scopedClassQuery(scope: any, base: any = {}) {
-  if (scope.isSchoolLeader || scope.isSystemAdmin) return base;
-  if (blockedAcademicDataRoles.includes(scope.role)) return null;
-  if (['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher'].includes(scope.role) && scope.assignedClassIds.length) return { ...base, _id: { $in: scope.assignedClassIds } };
-  return null;
-}
-
-export function scopedSubjectQuery(scope: any, base: any = {}) {
-  if (scope.isSchoolLeader || scope.isSystemAdmin) return base;
-  if (blockedAcademicDataRoles.includes(scope.role)) return null;
-  if (['student', 'parent', 'class_teacher'].includes(scope.role)) {
-    if (!scope.assignedClassIds.length) return null;
-    return { ...base, classId: { $in: scope.assignedClassIds } };
-  }
-  if (['teacher', 'subject_teacher'].includes(scope.role)) {
-    if (!scope.assignedSubjectIds.length) return null;
-    return { ...base, _id: { $in: scope.assignedSubjectIds } };
-  }
-  return null;
-}
-
+export function scopedClassQuery(scope: any, base: any = {}) { if (scope.isSchoolLeader || scope.isSystemAdmin) return base; if (blockedAcademicDataRoles.includes(scope.role)) return null; if (['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher'].includes(scope.role) && scope.assignedClassIds.length) return { ...base, _id: { $in: scope.assignedClassIds } }; return null; }
+export function scopedSubjectQuery(scope: any, base: any = {}) { if (scope.isSchoolLeader || scope.isSystemAdmin) return base; if (blockedAcademicDataRoles.includes(scope.role)) return null; if (['student', 'parent', 'class_teacher'].includes(scope.role)) { if (!scope.assignedClassIds.length) return null; return { ...base, classId: { $in: scope.assignedClassIds } }; } if (['teacher', 'subject_teacher'].includes(scope.role)) { if (!scope.assignedSubjectIds.length) return null; return { ...base, _id: { $in: scope.assignedSubjectIds } }; } return null; }
 export function scopedExamQuery(scope: any, base: any = {}) { if (scope.isSchoolLeader || scope.isSystemAdmin) return base; const query = { ...base }; if (['student', 'parent'].includes(scope.role)) { if (!scope.assignedClassIds.length) return null; query.classId = { $in: scope.assignedClassIds }; query.isPublished = true; return query; } if (scope.assignedClassIds.length) query.classId = { $in: scope.assignedClassIds }; if (!query.classId) return null; return query; }
