@@ -79,7 +79,7 @@ export const returnBook = async (loanId: string, institutionId?: Types.ObjectId)
   loan.returnedAt = now;
   const overdueDays = now > loan.dueDate ? Math.ceil((now.getTime() - loan.dueDate.getTime()) / (24 * 60 * 60 * 1000)) : 0;
   loan.fine = overdueDays * DEFAULT_FINE_PER_DAY;
-  loan.status = overdueDays > 0 ? 'overdue' : 'returned';
+  loan.status = 'returned';
   await loan.save();
   if (loan.book) {
     const book = await Book.findOne({ _id: (loan.book as any)._id || loan.book, institutionId });
