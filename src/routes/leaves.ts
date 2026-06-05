@@ -5,11 +5,14 @@ import Student from '../models/Student';
 import Attendance from '../models/Attendance';
 import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
+import Staff from '../models/Staff';
 import { resolveActorScope } from '../services/permissionPolicy';
 
 const router = express.Router();
 const approvalRoles = ['head', 'assistant_head', 'class_teacher', 'admin', 'super_admin'];
 const applicantRoles = ['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher', 'staff', 'finance_officer', 'librarian'];
+const teacherRoles = ['teacher', 'subject_teacher', 'class_teacher'];
+const staffRoles = ['staff', 'finance_officer', 'librarian'];
 
 const parseDateOnly = (value?: string) => {
   if (!value) return new Date();
@@ -17,13 +20,9 @@ const parseDateOnly = (value?: string) => {
   if (!match) return new Date(value);
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 };
-
-const toDateValue = (value?: string) => {
-  const date = parseDateOnly(value);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-};
-
+const toDateValue = (value?: string) => { const date = parseDateOnly(value); return new Date(date.getFullYear(), date.getMonth(), date.getDate()); };
 const countDays = (start: Date, end: Date) => Math.max(1, Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+const idOf = (value: any) => String(value?._id || value || '');
 
 const populateLeave = () => LeaveApplication.find()
   .populate({ path: 'studentId', populate: { path: 'userId', select: 'name email avatar' } })
@@ -37,10 +36,7 @@ const buildDateList = (start: Date, end: Date) => {
   const dates: Date[] = [];
   const current = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const finish = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-  while (current <= finish) {
-    dates.push(new Date(current));
-    current.setDate(current.getDate() + 1);
-  }
+  while (current <= finish) { dates.push(new Date(current)); current.setDate(current.getDate() + 1); }
   return dates;
 };
 
@@ -63,12 +59,12 @@ const getAssignedClassIds = async (req: any) => {
 };
 
 const canReviewLeave = async (req: any, leave: any) => {
-  if (String(leave.userId?._id || leave.userId) === String(req.user._id)) return false;
+  if (idOf(leave.userId) === idOf(req.user._id)) return false;
   if (['head', 'assistant_head', 'admin', 'super_admin'].includes(req.user.role)) return true;
   if (req.user.role !== 'class_teacher') return false;
   if (leave.applicantType !== 'student' && leave.applicantType !== 'parent') return false;
   const assignedClassIds = await getAssignedClassIds(req);
-  return assignedClassIds.includes(String(leave.classId?._id || leave.classId));
+  return assignedClassIds.includes(idOf(leave.classId));
 };
 
 const markStudentLeaveAttendance = async (req: any, leave: any, status: string, dates: Date[]) => {
@@ -89,11 +85,14 @@ const markStudentLeaveAttendance = async (req: any, leave: any, status: string, 
 
 const markEmployeeLeaveAttendance = async (req: any, leave: any, status: string, dates: Date[]) => {
   const userType = leave.employeeType === 'teacher' ? 'teacher' : 'staff';
+  const employeeModel = userType === 'teacher' ? Teacher : Staff;
+  const employee = await employeeModel.findOne({ institutionId: req.user.institutionId, userId: leave.userId }).select('_id userId').lean();
+  const employeeId = employee?._id;
   if (status === 'approved') {
     for (const date of dates) {
       await Attendance.findOneAndUpdate(
         { institutionId: req.user.institutionId, userId: leave.userId, userType, date },
-        { institutionId: req.user.institutionId, userId: leave.userId, userType, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
+        { institutionId: req.user.institutionId, userId: leave.userId, employeeId, userType, employeeType: userType, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
     }
@@ -124,7 +123,7 @@ router.get('/', async (req: any, res) => {
       query.$or = [{ classId: { $in: assignedClassIds } }, { userId: req.user._id }];
       if (!req.query.status) query.status = 'pending';
     } else if (!approvalRoles.includes(req.user.role)) {
-      if (['teacher', 'subject_teacher', 'staff', 'finance_officer', 'librarian'].includes(req.user.role)) query.userId = req.user._id;
+      if ([...teacherRoles, ...staffRoles].includes(req.user.role)) query.userId = req.user._id;
       else {
         const ownIds = await getOwnStudentIds(req);
         query.studentId = { $in: ownIds };
@@ -146,22 +145,14 @@ router.post('/', async (req: any, res) => {
     if (endDate < startDate) return res.status(400).json({ message: 'End date cannot be before start date.' });
     if (!req.body.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ message: 'Leave reason is required.' });
 
-    if (['teacher', 'subject_teacher', 'class_teacher', 'staff', 'finance_officer', 'librarian'].includes(req.user.role)) {
-      const employeeType = ['teacher', 'subject_teacher', 'class_teacher'].includes(req.user.role) ? 'teacher' : 'staff';
-      const leave = await LeaveApplication.create({
-        userId: req.user._id,
-        applicantType: employeeType,
-        employeeType,
-        startDate,
-        endDate,
-        totalDays: countDays(startDate, endDate),
-        reason: String(req.body.reason || '').trim(),
-        attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
-        status: 'pending',
-        institutionId: req.user.institutionId,
-      });
+    if ([...teacherRoles, ...staffRoles].includes(req.user.role)) {
+      const employeeType = teacherRoles.includes(req.user.role) ? 'teacher' : 'staff';
+      const employee = employeeType === 'teacher'
+        ? await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('_id').lean()
+        : await Staff.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('_id').lean();
+      const leave = await LeaveApplication.create({ userId: req.user._id, applicantType: employeeType, employeeType, startDate, endDate, totalDays: countDays(startDate, endDate), reason: String(req.body.reason || '').trim(), attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined, status: 'pending', institutionId: req.user.institutionId });
       const created = await populateLeave().where({ _id: leave._id, institutionId: req.user.institutionId }).findOne();
-      return res.status(201).json({ leave: created, message: 'Leave application submitted.' });
+      return res.status(201).json({ leave: { ...(created as any)?.toObject?.() || created, employeeId: employee?._id }, message: 'Leave application submitted.' });
     }
 
     let student: any = null;
@@ -176,25 +167,8 @@ router.post('/', async (req: any, res) => {
     } else {
       student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } });
     }
-
     if (!student) return res.status(404).json({ message: 'Student profile not found for leave application.' });
-
-    const leave = await LeaveApplication.create({
-      studentId: student._id,
-      userId: student.userId,
-      applicantType: req.user.role === 'parent' ? 'parent' : 'student',
-      classId: student.classId,
-      sectionId: student.sectionId,
-      startDate,
-      endDate,
-      totalDays: countDays(startDate, endDate),
-      reason: String(req.body.reason || '').trim(),
-      attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
-      guardianNote: String(req.body.guardianNote || '').trim() || undefined,
-      status: 'pending',
-      institutionId: req.user.institutionId,
-    });
-
+    const leave = await LeaveApplication.create({ studentId: student._id, userId: student.userId, applicantType: req.user.role === 'parent' ? 'parent' : 'student', classId: student.classId, sectionId: student.sectionId, startDate, endDate, totalDays: countDays(startDate, endDate), reason: String(req.body.reason || '').trim(), attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined, guardianNote: String(req.body.guardianNote || '').trim() || undefined, status: 'pending', institutionId: req.user.institutionId });
     const created = await populateLeave().where({ _id: leave._id, institutionId: req.user.institutionId }).findOne();
     res.status(201).json({ leave: created, message: 'Leave application submitted.' });
   } catch (error) {
