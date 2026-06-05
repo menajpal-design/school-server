@@ -6,333 +6,96 @@ import { resolveTenantStorageContext, runWithTenantStorage } from '../config/ten
 
 const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
   if (!tenantContext || !user?._id) return;
-
   const plainUser = typeof user.toObject === 'function' ? user.toObject({ depopulate: true, versionKey: false }) : user;
-  const payload = {
-    ...plainUser,
-    _id: plainUser._id,
-    institutionId: plainUser.institutionId?._id || plainUser.institutionId,
-  };
-
+  const payload = { ...plainUser, _id: plainUser._id, institutionId: plainUser.institutionId?._id || plainUser.institutionId };
   try {
     await runWithTenantStorage(tenantContext, async () => {
-      await User.findOneAndUpdate(
-        { _id: payload._id },
-        { $set: payload },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      ).maxTimeMS(5000).exec();
+      await User.findOneAndUpdate({ _id: payload._id }, { $set: payload }, { upsert: true, new: true, setDefaultsOnInsert: true }).maxTimeMS(5000).exec();
     });
-  } catch (error) {
-    console.warn('Tenant auth sync failed:', (error as any)?.message || error);
-  }
+  } catch (error) { console.warn('Tenant auth sync failed:', (error as any)?.message || error); }
 };
 
-interface AuthRequest extends Request {
-  user: any;
-}
-
+interface AuthRequest extends Request { user: any; }
 const platformAdminRoles = ['admin', 'super_admin'];
 const authQueryTimeoutMs = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 4000);
 const authQueryMaxTimeMs = Number(process.env.AUTH_QUERY_MAX_TIME_MS || 3000);
-
 const isPlatformAdminRole = (role?: string) => platformAdminRoles.includes(role || '');
 const isPrivilegedRole = (role?: string) => role === 'head';
+const isIdCardLeader = (role?: string) => ['head', 'assistant_head', 'admin', 'super_admin'].includes(role || '');
+const hasPermission = (user: any, permission: string) => Array.isArray(user?.permissions) && (user.permissions.includes(permission) || user.permissions.includes(permission.replace(':', '.')));
 
 const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out`)), authQueryTimeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), authQueryTimeoutMs); })]); }
+  finally { if (timer) clearTimeout(timer); }
 };
 
 const expireInstitutionSnapshotIfNeeded = (institution: any) => {
-  if (!institution) {
-    return institution;
-  }
-
+  if (!institution) return institution;
   const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
-  if (!expiresAt || institution.billing.billingStatus === 'expired') {
-    return institution;
-  }
-
+  if (!expiresAt || institution.billing.billingStatus === 'expired') return institution;
   if (new Date(expiresAt) <= new Date()) {
     institution.isActive = false;
-    institution.billing = {
-      ...institution.billing,
-      billingStatus: 'expired',
-    };
-
-    Institution.updateOne(
-      { _id: institution._id },
-      { $set: { isActive: false, 'billing.billingStatus': 'expired' } }
-    ).maxTimeMS(authQueryMaxTimeMs).exec().catch((error) => {
-      console.warn('Institution expiry update failed:', error?.message || error);
-    });
+    institution.billing = { ...institution.billing, billingStatus: 'expired' };
+    Institution.updateOne({ _id: institution._id }, { $set: { isActive: false, 'billing.billingStatus': 'expired' } }).maxTimeMS(authQueryMaxTimeMs).exec().catch((error) => console.warn('Institution expiry update failed:', error?.message || error));
   }
-
   return institution;
 };
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    let token = req.header('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      // Fallback: read from cookie named in env or default
-      const authCookieName = process.env.AUTH_COOKIE_NAME || 'es_token';
-      const cookieHeader = req.headers.cookie || '';
-      const match = cookieHeader.split(';').map(s => s.trim()).find((c) => c.startsWith(`${authCookieName}=`));
-      if (match) token = decodeURIComponent(match.split('=')[1] || '');
-    }
-
-    if (!token) {
-      return res.status(401).json({ message: 'Access denied. No token provided.' });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
-    const selectedInstitutionId = req.header('x-institution-id');
-    const tokenInstitutionId = decoded.institutionId ? String(decoded.institutionId) : '';
-
-    // Prefer subdomain-resolved institution (set by tenant middleware) when available
-    let institution = (req as any).institution || (tokenInstitutionId
-      ? await withAuthTimeout(
-        Institution.findById(tokenInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
-        'Auth institution lookup'
-      )
-      : null);
-
-    let tenantContext = resolveTenantStorageContext(institution);
-
-    const findUser = async () => withAuthTimeout(
-      User.findById(decoded.id).select('-password').lean().maxTimeMS(authQueryMaxTimeMs).exec(),
-      'Auth user lookup'
-    );
-
-    let user = tenantContext
-      ? await (async () => {
-          try {
-            return await runWithTenantStorage(tenantContext, findUser);
-          } catch (error) {
-            console.warn('Tenant auth lookup failed, falling back to central DB:', (error as any)?.message || error);
-            return null;
-          }
-        })()
-      : await findUser();
-
-    if (!user && tenantContext) {
-      user = await findUser();
-    }
-
-    if (tenantContext && user) {
-      await syncUserToTenantStorage(tenantContext, user);
-    }
-
-    if (!user || !user.isActive) {
-      return res.status(401).json({ message: 'Invalid token or user inactive.' });
-    }
-
-    if (!institution && user.institutionId) {
-      institution = await withAuthTimeout(
-        Institution.findById(user.institutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
-        'Auth institution lookup'
-      );
-    }
-
-    if (institution && user && !platformAdminRoles.includes(user.role)) {
-      if (String(user.institutionId) !== String(institution._id)) {
-        return res.status(403).json({ message: 'আপনি এই প্রতিষ্ঠানের সাবডোমেনে প্রবেশ করতে পারবেন না।' });
-      }
-    }
-
-    if (selectedInstitutionId && platformAdminRoles.includes(user.role)) {
-      const selectedInstitution = await withAuthTimeout(
-        Institution.findById(selectedInstitutionId).lean().maxTimeMS(authQueryMaxTimeMs).exec(),
-        'Selected institution lookup'
-      );
-      if (selectedInstitution) {
-        institution = selectedInstitution;
-      }
-    }
-
-    tenantContext = resolveTenantStorageContext(institution);
-    institution = expireInstitutionSnapshotIfNeeded(institution);
-    const platformAdmin = isPlatformAdminRole(user.role);
-    const schoolActive = institution?.isActive !== false;
-    const allowedInactivePaths = ['/api/auth/profile', '/api/institution/profile', '/api/institution/billing/payment', '/api/institution/billing/stripe/checkout', '/api/institution/plans'];
-    const isDevelopment = (process.env.NODE_ENV || 'development') !== 'production';
-    if (!isDevelopment && !platformAdmin && !schoolActive && !allowedInactivePaths.includes(req.path) && !allowedInactivePaths.includes(req.originalUrl.split('?')[0])) {
-      const message = user.role === 'head' ? 'আপনার অনুমতি নেই, আগে বিল পরিশোধ করুন।' : 'আপনার প্রতিষ্ঠান প্রধানের সাথে যোগাযোগ করুন।';
-      return res.status(403).json({ message });
-    }
-    const requestUser = {
-      ...user,
-      institutionId: institution?._id || user.institutionId,
-      institution,
-    };
-
-    req.user = requestUser;
-    (req as any).institution = institution;
-    runWithTenantStorage(tenantContext, () => next(), requestUser, institution);
-  } catch (error: any) {
-    const message = error?.name === 'JsonWebTokenError' || error?.name === 'TokenExpiredError'
-      ? 'Invalid token.'
-      : error?.message || 'Authentication failed.';
-    const status = message === 'Invalid token.' ? 401 : 500;
-    res.status(status).json({ message });
-  }
-};
-
-export const authorize = (...roles: string[]) => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Authentication required.' });
-    }
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ message: 'Access denied. Insufficient permissions.' });
-    }
-
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    if (!token) return res.status(401).json({ message: 'Authentication required.' });
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
+    const user = await withAuthTimeout(User.findById(decoded.id).populate('institutionId').lean().exec(), 'Auth user lookup');
+    if (!user || user.isActive === false) return res.status(401).json({ message: 'Invalid or inactive user.' });
+    const institution = expireInstitutionSnapshotIfNeeded((user as any).institutionId);
+    req.user = { ...user, id: String((user as any)._id), institutionId: institution?._id || (user as any).institutionId, institution };
+    const tenantContext = resolveTenantStorageContext(institution, req.headers.host || '');
+    await syncUserToTenantStorage(tenantContext, req.user);
     next();
-  };
+  } catch (error: any) { return res.status(401).json({ message: 'Invalid token.' }); }
 };
 
-export const checkPermission = (permission: string) => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Authentication required.' });
-    }
-    // Head bypass
-    if (isPrivilegedRole(req.user.role)) return next();
-
-    if (!Array.isArray(req.user.permissions) || !req.user.permissions.includes(permission)) {
-      return res.status(403).json({ message: 'Access denied. Permission required.' });
-    }
-
-    next();
-  };
+export const authorize = (...roles: string[]) => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (roles.includes(req.user.role)) return next();
+  return res.status(403).json({ message: 'Access denied.' });
 };
 
-export const canAccessOwnData = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-
-    // Head can access all
-    if (isPrivilegedRole(req.user.role)) return next();
-
-    const targetId = req.params.id || req.body.userId || req.query.userId;
-    if (!targetId) return res.status(400).json({ message: 'Target id required.' });
-    if (String(req.user._id || req.user.id) === String(targetId)) return next();
-    if (req.user.role === 'parent' && Array.isArray(req.user.children) && req.user.children.map(String).includes(String(targetId))) return next();
-    return res.status(403).json({ message: 'Access denied. Can only access own data.' });
-  };
+export const canManageIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (isIdCardLeader(req.user.role) || hasPermission(req.user, 'manage:idcard')) return next();
+  return res.status(403).json({ message: 'Access denied. ID card management is restricted to school leaders/admins.' });
 };
 
-export const canAccessAssignedArea = (areaParam = 'areaId') => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-
-    if (isPrivilegedRole(req.user.role)) return next();
-    if (req.user.role === 'assistant_head') {
-      const area = req.params[areaParam] || req.body[areaParam] || req.query[areaParam];
-      if (!area) return res.status(400).json({ message: 'Area id required.' });
-      if (Array.isArray(req.user.assignedAreas) && req.user.assignedAreas.map(String).includes(String(area))) return next();
-    }
-    return res.status(403).json({ message: 'Access denied. Assigned area required.' });
-  };
+export const canScanIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (['staff', 'finance_officer', 'librarian', 'student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot scan ID cards.' });
+  if (isIdCardLeader(req.user.role) || req.user.role === 'class_teacher' || hasPermission(req.user, 'scan:idcard') || hasPermission(req.user, 'attendance:mark')) return next();
+  return res.status(403).json({ message: 'Access denied. Cannot scan ID cards.' });
 };
 
-export const canManageIDCard = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'finance_officer', 'staff']
-    if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:idcard'))) return next();
-    return res.status(403).json({ message: 'Access denied. Manage ID cards.' });
-  };
+export const canDownloadIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (isIdCardLeader(req.user.role) || ['student', 'parent', 'teacher', 'subject_teacher', 'class_teacher', 'staff'].includes(req.user.role)) return next();
+  if (hasPermission(req.user, 'download:idcard')) return next();
+  return res.status(403).json({ message: 'Access denied. Cannot download ID card.' });
 };
 
-export const canScanIDCard = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (['student', 'parent', 'admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'This role cannot scan or mark attendance.' });
-    }
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff'];
-    const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-    const scanPermissions = ['scan:idcard', 'manage:idcard', 'manage:academic', 'manage:finance'];
-    if (allowed.includes(req.user.role) || scanPermissions.some((permission) => permissions.includes(permission))) return next();
-    return res.status(403).json({ message: 'Access denied. Cannot scan ID cards.' });
-  };
+export const canGenerateIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (isIdCardLeader(req.user.role) || hasPermission(req.user, 'generate:idcard')) return next();
+  return res.status(403).json({ message: 'Access denied. ID card generation is restricted to school leaders/admins.' });
 };
 
-export const canDownloadIDCard = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    if (['assistant_head', 'class_teacher', 'subject_teacher', 'staff', 'student', 'teacher', 'parent'].includes(req.user.role)) return next();
-    const targetId = req.params.id || req.query.id || req.body.userId;
-    if (String(req.user._id || req.user.id) === String(targetId)) return next();
-    if (req.user.role === 'parent' && Array.isArray(req.user.children) && req.user.children.map(String).includes(String(targetId))) return next();
-    if (Array.isArray(req.user.permissions) && req.user.permissions.includes('download:idcard')) return next();
-    return res.status(403).json({ message: 'Access denied. Cannot download ID card.' });
-  };
+export const canEditIDCard = () => (req: AuthRequest, res: Response, next: NextFunction) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  if (isIdCardLeader(req.user.role) || hasPermission(req.user, 'edit:idcard')) return next();
+  return res.status(403).json({ message: 'Access denied. ID card editing is restricted to school leaders/admins.' });
 };
 
-export const canGenerateIDCard = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'staff', 'finance_officer', 'class_teacher']
-    if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('generate:idcard'))) return next();
-    return res.status(403).json({ message: 'Access denied. Cannot generate ID card.' });
-  };
-};
-
-export const canEditIDCard = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'staff']
-    if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('edit:idcard'))) return next();
-    return res.status(403).json({ message: 'Access denied. Cannot edit ID card.' });
-  };
-};
-
-export const canManageFinance = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    if (req.user.role === 'assistant_head') return next();
-    if (req.user.role === 'finance_officer' || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:finance'))) return next();
-    return res.status(403).json({ message: 'Access denied. Finance management only.' });
-  };
-};
-
-export const canManageAcademic = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (['admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' });
-    }
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher']
-    if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) return next();
-    return res.status(403).json({ message: 'Access denied. Academic management only.' });
-  };
-};
-
-export const canPostNotice = () => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-    if (isPrivilegedRole(req.user.role)) return next();
-    const allowed = ['assistant_head', 'committee_member', 'staff']
-    if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('post:notice'))) return next();
-    return res.status(403).json({ message: 'Access denied. Cannot post notice.' });
-  };
-};
+export const canManageFinance = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (isPrivilegedRole(req.user.role) || req.user.role === 'assistant_head' || req.user.role === 'finance_officer' || hasPermission(req.user, 'manage:finance')) return next(); return res.status(403).json({ message: 'Access denied. Finance management only.' }); };
+export const canManageAcademic = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (['admin', 'super_admin'].includes(req.user.role)) return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' }); if (isPrivilegedRole(req.user.role) || ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher'].includes(req.user.role) || hasPermission(req.user, 'manage:academic')) return next(); return res.status(403).json({ message: 'Access denied. Academic management only.' }); };
+export const canPostNotice = () => (req: AuthRequest, res: Response, next: NextFunction) => { if (!req.user) return res.status(401).json({ message: 'Authentication required.' }); if (isPrivilegedRole(req.user.role) || ['assistant_head', 'committee_member', 'staff'].includes(req.user.role) || hasPermission(req.user, 'post:notice')) return next(); return res.status(403).json({ message: 'Access denied. Cannot post notice.' }); };
