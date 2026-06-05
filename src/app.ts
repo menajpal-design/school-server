@@ -13,6 +13,7 @@ import teacherRoutes from './routes/teachersDirect';
 import staffRoutes from './routes/staffDirect';
 import academicRoutes from './routes/academic';
 import studentResultRoutes from './routes/studentResults';
+import resultRoutes from './routes/resultsSafe';
 import academicClassRoutes from './routes/academicClasses';
 import academicSubjectRoutes from './routes/subjectsSafe';
 import academicExamRoutes from './routes/examsSafe';
@@ -80,7 +81,6 @@ const isAllowedOrigin = (origin?: string): boolean => {
 };
 const setCorsHeaders = (req: Request, res: Response) => {
   const origin = req.headers.origin as string | undefined;
-  // For credentials requests, MUST echo the exact origin (never use *)
   if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Vary', 'Origin');
@@ -99,19 +99,16 @@ app.use('/api/institution/billing/stripe/webhook', express.raw({ type: 'applicat
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '50mb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.RATE_LIMIT_MAX || 300), standardHeaders: true, legacyHeaders: false }));
-// Resolve tenant (subdomain -> institution) before other guards and auth
 app.use(resolveTenant);
 app.use(storageConfigGuard);
 app.use(attachRequestId);
 app.use(requestLogger as any);
 app.use(sanitizeRequest);
 app.use(cookieParser);
-// CSRF token endpoint (no auth required). Enable CSRF protection only in production.
 app.use('/api/csrf', csrfRoutes);
 if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
   app.use(csrfProtection);
 } else {
-  // In development disable CSRF middleware to simplify local testing (tokens still issued)
   console.log('⚠️ CSRF protection disabled in development mode');
 }
 app.use('/api/auth', authRoutes);
@@ -126,6 +123,7 @@ app.use('/api/academic/classes', academicClassRoutes);
 app.use('/api/academic/subjects', academicSubjectRoutes);
 app.use('/api/academic/exams', academicExamRoutes);
 app.use('/api/academic/results/me', studentResultRoutes);
+app.use('/api/academic/results', resultRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/syllabus', syllabusRoutes);
 app.use('/api/class-routines', classRoutineRoutes);
