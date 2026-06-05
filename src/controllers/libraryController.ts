@@ -4,15 +4,17 @@ import Book from '../models/Book';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
 
-const managerRoles = ['head', 'assistant_head', 'admin', 'super_admin', 'librarian', 'staff'];
+const managerRoles = ['head', 'assistant_head', 'admin', 'super_admin', 'librarian'];
 const teacherRoles = ['teacher', 'class_teacher', 'subject_teacher'];
+const viewRoles = [...managerRoles, ...teacherRoles, 'finance_officer', 'staff', 'student', 'parent'];
 const normalizeRole = (role?: string) => {
   const normalized = String(role || '').toLowerCase().replace(/[\s-]+/g, '_');
   if (normalized === 'guardian' || normalized === 'parent_guardian') return 'parent';
+  if (normalized === 'library' || normalized === 'library_admin') return 'librarian';
   return normalized;
 };
 const canManageLibrary = (role?: string) => managerRoles.includes(normalizeRole(role));
-const canViewLibrary = (role?: string) => canManageLibrary(role) || teacherRoles.includes(normalizeRole(role)) || ['student', 'parent'].includes(normalizeRole(role));
+const canViewLibrary = (role?: string) => viewRoles.includes(normalizeRole(role));
 
 const institutionQuery = (req: any) => ({ institutionId: req.user?.institutionId });
 
@@ -29,9 +31,9 @@ const scopedBookQuery = (req: any) => {
   }
   if (category) query.category = category;
 
-  if (role === 'student' || role === 'parent') {
+  if (!canManageLibrary(role)) {
     query.status = { $ne: 'archived' };
-    query.copiesAvailable = { $gt: 0 };
+    if (role === 'student' || role === 'parent') query.copiesAvailable = { $gt: 0 };
     return query;
   }
 
@@ -50,10 +52,7 @@ const scopedBookQuery = (req: any) => {
 const linkedChildScope = async (req: any) => {
   const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
   const students = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: { $ne: false } }).select('_id userId').lean();
-  return {
-    studentIds: students.map((student: any) => student._id),
-    userIds: students.map((student: any) => student.userId).filter(Boolean),
-  };
+  return { studentIds: students.map((student: any) => student._id), userIds: students.map((student: any) => student.userId).filter(Boolean) };
 };
 
 const scopedLoanQuery = async (req: any) => {
@@ -61,10 +60,8 @@ const scopedLoanQuery = async (req: any) => {
   const query: any = { ...institutionQuery(req) };
   if (req.query?.status) query.status = req.query.status;
   if (req.query?.bookId) query.book = req.query.bookId;
-
-  if (role === 'student' || teacherRoles.includes(role)) {
-    query.user = req.user._id || req.user.id;
-  } else if (role === 'parent') {
+  if (role === 'student' || teacherRoles.includes(role) || role === 'staff' || role === 'finance_officer') query.user = req.user._id || req.user.id;
+  else if (role === 'parent') {
     const scope = await linkedChildScope(req);
     query.$or = [{ user: { $in: scope.userIds } }, { studentId: { $in: scope.studentIds } }];
   }
@@ -73,7 +70,7 @@ const scopedLoanQuery = async (req: any) => {
 
 const assertManager = (req: any, res: Response) => {
   if (canManageLibrary(req.user?.role)) return true;
-  res.status(403).json({ message: 'Access denied. Students, parents, and teachers cannot manage library records.' });
+  res.status(403).json({ message: 'Access denied. Only Head/Assistant Head/Admin/Super Admin/Librarian can manage library records.' });
   return false;
 };
 
@@ -104,11 +101,7 @@ export const getBook = async (req: Request, res: Response) => {
   const request: any = req;
   if (!canViewLibrary(request.user?.role)) return res.status(403).json({ message: 'Access denied.' });
   const query: any = { _id: req.params.id, ...institutionQuery(request) };
-  const role = normalizeRole(request.user?.role);
-  if (role === 'student' || role === 'parent') {
-    query.status = { $ne: 'archived' };
-    query.copiesAvailable = { $gt: 0 };
-  }
+  if (!canManageLibrary(request.user?.role)) query.status = { $ne: 'archived' };
   const book = await libSvc.getBook(query);
   if (!book) return res.status(404).json({ message: 'Book not found' });
   res.json(book);
