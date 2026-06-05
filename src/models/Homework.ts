@@ -22,7 +22,7 @@ const HomeworkSchema: Schema = new Schema({
   classId: { type: Schema.Types.ObjectId, ref: 'Class', required: true, index: true },
   sectionId: { type: Schema.Types.ObjectId, ref: 'Section', index: true },
   dueDate: { type: Date, required: true, index: true },
-  assignedDate: { type: Date, default: () => new Date(), index: true },
+  assignedDate: { type: Date, default: Date.now, index: true },
   createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true, index: true },
   isPublished: { type: Boolean, default: true, index: true },
