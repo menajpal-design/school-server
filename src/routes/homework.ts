@@ -3,6 +3,7 @@ import Homework from '../models/Homework';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
+import Subject from '../models/Subject';
 import { authenticate, canManageAcademic } from '../middleware/auth';
 
 const router = express.Router();
@@ -21,7 +22,32 @@ const getTeacher = (req: any) => Teacher.findOne({ institutionId: req.user.insti
 const applyFilters = (query: any, req: any, options: { allowClass?: boolean; allowSection?: boolean } = {}) => { const { allowClass = true, allowSection = true } = options; if (req.query.date) { const range = dayRange(String(req.query.date)); if (range) query.dueDate = { $gte: range.start, $lt: range.end }; } if (req.query.subject) query.subject = new RegExp(String(req.query.subject).trim(), 'i'); if (allowClass && req.query.classId) query.classId = req.query.classId; if (allowSection && req.query.sectionId) query.$or = [{ sectionId: req.query.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }]; return query; };
 const populateHomework = (query: any) => Homework.find(query).populate('classId', 'name grade').populate('sectionId', 'name').populate('createdBy', 'name email role').sort({ dueDate: 1, createdAt: -1 }).lean();
 const assignedClassesForTeacher = async (req: any) => { const teacher = await getTeacher(req); return (teacher?.assignedClasses || []).map((id: any) => String(id)); };
-const canManageHomeworkClass = async (req: any, classId: any) => { if (roleIn(req.user.role, ['admin', 'super_admin', 'head', 'assistant_head'])) return true; if (!roleIn(req.user.role, teacherRoles)) return false; const assignedClasses = await assignedClassesForTeacher(req); return assignedClasses.length === 0 || assignedClasses.includes(String(classId)); };
+const canManageHomeworkClassAndSubject = async (req: any, classId: any, subjectName: string) => {
+  const role = req.user.role;
+  if (roleIn(role, ['admin', 'super_admin', 'head', 'assistant_head'])) return true;
+  if (!roleIn(role, teacherRoles)) return false;
+  const teacher = await getTeacher(req);
+  if (!teacher) return false;
+
+  const assignedClasses = (teacher.assignedClasses || []).map((id: any) => String(id));
+  if (!assignedClasses.includes(String(classId))) return false;
+
+  const assignedSubjectIds = (teacher.subjects || []).map((id: any) => String(id));
+  if (!assignedSubjectIds.length) return false;
+
+  if (!subjectName || !subjectName.trim()) return false;
+  const escapedSubjectName = subjectName.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+  const matchedSubject = await Subject.findOne({
+    _id: { $in: assignedSubjectIds },
+    classId: classId,
+    $or: [
+      { name: { $regex: new RegExp(`^${escapedSubjectName}$`, 'i') } },
+      { code: { $regex: new RegExp(`^${escapedSubjectName}$`, 'i') } }
+    ]
+  }).lean();
+
+  return !!matchedSubject;
+};
 const homeworkWriteGuard = async (req: any, res: Response, next: NextFunction) => { if (!roleIn(req.user.role, managerRoles)) return res.status(403).json({ message: 'Access denied. Students and parents cannot manage homework.' }); if (roleIn(req.user.role, ['admin', 'super_admin'])) return next(); return canManageAcademic()(req, res, next); };
 
 router.get('/', authenticate, async (req: any, res) => {
@@ -30,7 +56,7 @@ router.get('/', authenticate, async (req: any, res) => {
     const base: any = { institutionId: req.user.institutionId };
     if (roleIn(role, managerRoles)) {
       const query = applyFilters(base, req, { allowClass: true, allowSection: true });
-      if (roleIn(role, teacherRoles)) { const assignedClasses = await assignedClassesForTeacher(req); if (assignedClasses.length) query.classId = { $in: assignedClasses }; }
+      if (roleIn(role, teacherRoles)) { const assignedClasses = await assignedClassesForTeacher(req); query.classId = { $in: assignedClasses }; }
       const homework = await populateHomework(query);
       return res.json({ homework });
     }
@@ -63,7 +89,7 @@ router.post('/', authenticate, homeworkWriteGuard, async (req: any, res) => {
     if (!title || !String(title).trim()) return res.status(400).json({ message: 'Title is required.' });
     if (!classId) return res.status(400).json({ message: 'Class is required.' });
     if (!dueDate) return res.status(400).json({ message: 'Due date is required.' });
-    if (!(await canManageHomeworkClass(req, classId))) return res.status(403).json({ message: 'Access denied. You can create homework only for assigned class.' });
+    if (!(await canManageHomeworkClassAndSubject(req, classId, subject || ''))) return res.status(403).json({ message: 'Access denied. You can create homework only for your assigned class and subject.' });
     const homework = await Homework.create({ title: String(title).trim(), description: description ? String(description).trim() : undefined, subject: subject ? String(subject).trim() : undefined, classId, sectionId: sectionId || undefined, dueDate: parseDateOnly(dueDate) || new Date(dueDate), assignedDate: parseDateOnly(assignedDate) || new Date(), createdBy: req.user._id, institutionId: req.user.institutionId, isPublished: true });
     const created = await Homework.findById(homework._id).populate('classId', 'name grade').populate('sectionId', 'name').populate('createdBy', 'name email role').lean();
     return res.status(201).json({ homework: created, message: 'Homework created successfully.' });
@@ -74,7 +100,7 @@ router.delete('/:id', authenticate, homeworkWriteGuard, async (req: any, res) =>
   try {
     const homework = await Homework.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!homework) return res.status(404).json({ message: 'Homework not found' });
-    if (!(await canManageHomeworkClass(req, homework.classId))) return res.status(403).json({ message: 'Access denied. You can delete homework only for assigned class.' });
+    if (!(await canManageHomeworkClassAndSubject(req, homework.classId, homework.subject || ''))) return res.status(403).json({ message: 'Access denied. You can delete homework only for assigned class and subject.' });
     if (!roleIn(req.user.role, ['head', 'assistant_head', 'admin', 'super_admin']) && String(homework.createdBy) !== String(req.user._id)) return res.status(403).json({ message: 'Only the owner or Head/Assistant Head can delete this homework.' });
     await homework.deleteOne();
     return res.json({ message: 'Homework deleted' });

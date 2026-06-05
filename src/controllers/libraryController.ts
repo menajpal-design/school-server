@@ -3,7 +3,7 @@ import * as libSvc from '../services/libraryService';
 import Student from '../models/Student';
 import Parent from '../models/Parent';
 
-const manageRoles = ['head', 'assistant_head', 'admin', 'super_admin', 'librarian'];
+const manageRoles = ['head', 'assistant_head', 'admin', 'super_admin', 'librarian', 'staff'];
 const teacherRoles = ['teacher', 'class_teacher', 'subject_teacher'];
 const readerRoles = ['student', 'parent', 'staff', 'finance_officer', ...teacherRoles];
 const canManageLibrary = (role?: string) => manageRoles.includes(role || '');

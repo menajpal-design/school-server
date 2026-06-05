@@ -15,7 +15,7 @@ type Action =
 const systemAdminRoles = ['admin', 'super_admin'];
 const schoolLeaderRoles = ['head', 'assistant_head'];
 const schoolLeaderAdminRoles = ['assistant_head', 'head', 'admin', 'super_admin'];
-const headPublishRoles = ['head', 'admin', 'super_admin'];
+const headPublishRoles = ['head', 'assistant_head', 'admin', 'super_admin'];
 const resultApproverRoles = ['assistant_head', 'head', 'admin', 'super_admin'];
 const resultEntryRoles = ['teacher', 'subject_teacher'];
 const teacherRoles = ['teacher', 'subject_teacher', 'class_teacher'];
@@ -43,7 +43,7 @@ export function canPerform(action: Action, user: any) {
     case 'result:delete': return user.role === 'head';
     case 'result:approve_assistant': return ['assistant_head', 'head'].includes(user.role);
     case 'result:approve_head':
-    case 'result:publish': return user.role === 'head';
+    case 'result:publish': return ['head', 'assistant_head'].includes(user.role);
     case 'exam:create':
     case 'exam:update':
     case 'exam:delete': return ['head', 'assistant_head'].includes(user.role);
@@ -67,7 +67,7 @@ export function canPerform(action: Action, user: any) {
     case 'attendance:mark': return ['head', 'assistant_head', 'class_teacher'].includes(user.role);
     case 'leave:create': return ['student', 'parent', 'teacher', 'class_teacher', 'subject_teacher', 'staff', 'finance_officer', 'librarian'].includes(user.role);
     case 'leave:approve': return ['head', 'assistant_head', 'class_teacher'].includes(user.role);
-    case 'library:manage': return ['head', 'assistant_head', 'librarian'].includes(user.role);
+    case 'library:manage': return ['head', 'assistant_head', 'librarian', 'staff'].includes(user.role);
     case 'idcard:generate':
     case 'idcard:manage': return ['head', 'assistant_head'].includes(user.role);
     case 'idcard:scan': return ['head', 'assistant_head', 'class_teacher'].includes(user.role);

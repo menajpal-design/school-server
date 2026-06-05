@@ -52,7 +52,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     if (!user || user.isActive === false) return res.status(401).json({ message: 'Invalid or inactive user.' });
     const institution = expireInstitutionSnapshotIfNeeded((user as any).institutionId);
     req.user = { ...user, id: String((user as any)._id), institutionId: institution?._id || (user as any).institutionId, institution };
-    const tenantContext = resolveTenantStorageContext(institution, req.headers.host || '');
+    const tenantContext = resolveTenantStorageContext(institution);
     await syncUserToTenantStorage(tenantContext, req.user);
     next();
   } catch (error: any) { return res.status(401).json({ message: 'Invalid token.' }); }

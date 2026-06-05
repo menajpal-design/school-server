@@ -49,7 +49,7 @@ const maskRecursive = (value: any, keyName = ''): any => {
   }, {});
 };
 
-const mergePreservingMaskedSecrets = (incoming: any = {}, current: any = {}) => {
+const mergePreservingMaskedSecrets = (incoming: any = {}, current: any = {}): any => {
   if (Array.isArray(incoming)) return incoming.map((item, index) => mergePreservingMaskedSecrets(item, current?.[index] || {}));
   if (!incoming || typeof incoming !== 'object') return isMasked(incoming) ? current : incoming;
   const output: any = { ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}) };

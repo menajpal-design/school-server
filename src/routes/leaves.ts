@@ -86,7 +86,7 @@ const markStudentLeaveAttendance = async (req: any, leave: any, status: string, 
 const markEmployeeLeaveAttendance = async (req: any, leave: any, status: string, dates: Date[]) => {
   const userType = leave.employeeType === 'teacher' ? 'teacher' : 'staff';
   const employeeModel = userType === 'teacher' ? Teacher : Staff;
-  const employee = await employeeModel.findOne({ institutionId: req.user.institutionId, userId: leave.userId }).select('_id userId').lean();
+  const employee = await (employeeModel as any).findOne({ institutionId: req.user.institutionId, userId: leave.userId }).select('_id userId').lean();
   const employeeId = employee?._id;
   if (status === 'approved') {
     for (const date of dates) {
