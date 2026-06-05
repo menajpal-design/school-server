@@ -22,16 +22,14 @@ const toDateValue = (value?: string) => {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 };
 
-const countDays = (start: Date, end: Date) => {
-  const diff = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  return Math.max(1, diff + 1);
-};
+const countDays = (start: Date, end: Date) => Math.max(1, Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
 
 const populateLeave = () => LeaveApplication.find()
   .populate({ path: 'studentId', populate: { path: 'userId', select: 'name email avatar' } })
   .populate('userId', 'name email avatar role')
   .populate('classId', 'name grade')
   .populate('sectionId', 'name')
+  .populate('approvedBy', 'name role')
   .populate('reviewedBy', 'name role');
 
 const buildDateList = (start: Date, end: Date) => {
@@ -81,7 +79,8 @@ router.get('/', async (req: any, res) => {
     if (req.query.studentId) query.studentId = req.query.studentId;
     if (req.query.startDate || req.query.endDate) {
       const start = req.query.startDate ? toDateValue(String(req.query.startDate)) : new Date(2000, 0, 1);
-      const end = req.query.endDate ? new Date(toDateValue(String(req.query.endDate)).getFullYear(), toDateValue(String(req.query.endDate)).getMonth(), toDateValue(String(req.query.endDate)).getDate() + 1) : new Date(2999, 0, 1);
+      const endBase = req.query.endDate ? toDateValue(String(req.query.endDate)) : new Date(2999, 0, 1);
+      const end = new Date(endBase.getFullYear(), endBase.getMonth(), endBase.getDate() + 1);
       query.startDate = { $lt: end };
       query.endDate = { $gte: start };
     }
@@ -89,6 +88,7 @@ router.get('/', async (req: any, res) => {
     if (req.user.role === 'class_teacher') {
       const assignedClassIds = await getAssignedClassIds(req);
       query.classId = { $in: assignedClassIds };
+      if (!req.query.status) query.status = 'pending';
     } else if (!approvalRoles.includes(req.user.role)) {
       const ownIds = await getOwnStudentIds(req);
       query.studentId = { $in: ownIds };
@@ -103,13 +103,11 @@ router.get('/', async (req: any, res) => {
 
 router.post('/', async (req: any, res) => {
   try {
-    if (!applicantRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
-    }
+    if (!applicantRoles.includes(req.user.role)) return res.status(403).json({ message: 'Only students and parents can apply for leave.' });
 
     let student: any = null;
     if (req.body.studentId) {
-      const query: any = { _id: req.body.studentId, institutionId: req.user.institutionId };
+      const query: any = { _id: req.body.studentId, institutionId: req.user.institutionId, isActive: { $ne: false } };
       if (req.user.role === 'student') query.userId = req.user._id;
       if (req.user.role === 'parent') {
         const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
@@ -117,7 +115,7 @@ router.post('/', async (req: any, res) => {
       }
       student = await Student.findOne(query);
     } else {
-      student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id });
+      student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } });
     }
 
     if (!student) return res.status(404).json({ message: 'Student profile not found for leave application.' });
@@ -130,13 +128,15 @@ router.post('/', async (req: any, res) => {
     const leave = await LeaveApplication.create({
       studentId: student._id,
       userId: student.userId,
+      applicantType: req.user.role === 'parent' ? 'parent' : 'student',
       classId: student.classId,
       sectionId: student.sectionId,
       startDate,
       endDate,
       totalDays: countDays(startDate, endDate),
-      reason: req.body.reason,
-      guardianNote: req.body.guardianNote,
+      reason: String(req.body.reason || '').trim(),
+      attachmentUrl: String(req.body.attachmentUrl || '').trim() || undefined,
+      guardianNote: String(req.body.guardianNote || '').trim() || undefined,
       status: 'pending',
       institutionId: req.user.institutionId,
     });
@@ -160,11 +160,15 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
     leave.reviewNote = req.body.reviewNote || '';
     leave.reviewedBy = req.user._id;
     leave.reviewedAt = new Date();
+    leave.rejectedReason = status === 'rejected' ? (req.body.rejectedReason || req.body.reviewNote || '') : undefined;
+    leave.approvedBy = status === 'approved' ? req.user._id : undefined;
+    leave.approvedAt = status === 'approved' ? new Date() : undefined;
     await leave.save();
 
     const student: any = leave.studentId;
+    const leaveDates = buildDateList(leave.startDate, leave.endDate);
     if (status === 'approved') {
-      for (const date of buildDateList(leave.startDate, leave.endDate)) {
+      for (const date of leaveDates) {
         await Attendance.findOneAndUpdate(
           { institutionId: req.user.institutionId, studentId: student._id, date },
           { institutionId: req.user.institutionId, studentId: student._id, userId: student.userId, userType: 'student', classId: student.classId, sectionId: student.sectionId, date, status: 'leave', notes: `Approved leave: ${leave.reason}`, markedBy: req.user._id, markedAt: new Date() },
@@ -172,7 +176,7 @@ router.patch('/:id/review', authorize('admin', 'super_admin', 'head', 'assistant
         );
       }
     } else {
-      await Attendance.deleteMany({ institutionId: req.user.institutionId, studentId: student._id, date: { $in: buildDateList(leave.startDate, leave.endDate) }, status: 'leave' });
+      await Attendance.deleteMany({ institutionId: req.user.institutionId, studentId: student._id, date: { $in: leaveDates }, status: 'leave' });
     }
 
     const updated = await populateLeave().where({ _id: leave._id }).findOne();
