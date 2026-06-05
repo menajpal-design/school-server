@@ -1,8 +1,9 @@
 import express from 'express';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 import ClassModel from '../models/Class';
 import Section from '../models/Section';
 import Student from '../models/Student';
+import { requireAction, resolveActorScope, scopedClassQuery } from '../services/permissionPolicy';
 
 const router = express.Router();
 const currentYear = () => String(new Date().getFullYear());
@@ -11,7 +12,7 @@ const cleanGrade = (name: any) => String(name || '').match(/\d+/)?.[0] || String
 const cleanSections = (v: any) => (Array.isArray(v) && v.length ? v : [{ name: 'A', capacity: 30, currentStudents: 0, isActive: true }])
   .filter((s: any) => String(s?.name || '').trim())
   .map((s: any) => ({ name: String(s.name).trim(), capacity: Number(s.capacity) || 30, currentStudents: Number(s.currentStudents) || 0, isActive: s.isActive !== false }));
-const message = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => x?.message).join(', ') : e?.message || 'Class API failed';
+const message = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => (x as any)?.message).join(', ') : e?.message || 'Class API failed';
 
 async function withSections(items: any[]) {
   const ids = items.flatMap((x: any) => Array.isArray(x.sections) ? x.sections : []).map(String);
@@ -21,10 +22,13 @@ async function withSections(items: any[]) {
   return items.map((x: any) => ({ ...x, sections: (x.sections || []).map((id: any) => map.get(String(id))).filter(Boolean) }));
 }
 
-router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
+router.get('/', authenticate, async (req: any, res) => {
   try {
+    const scope = await resolveActorScope(req.user);
+    const classQuery = scopedClassQuery(scope, { institutionId: req.user.institutionId });
+    if (!classQuery) return res.json({ classes: [] });
     const [raw, totals] = await Promise.all([
-      ClassModel.find({ institutionId: req.user.institutionId }).sort({ createdAt: -1 }).lean(),
+      ClassModel.find(classQuery).sort({ createdAt: -1 }).lean(),
       Student.aggregate([{ $match: { institutionId: req.user.institutionId } }, { $group: { _id: '$classId', totalStudents: { $sum: 1 } } }]),
     ]);
     const classes = await withSections(raw);
@@ -35,7 +39,7 @@ router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
+router.post('/', authenticate, requireAction('class:create'), async (req: any, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : Array.isArray(req.body?.items) ? req.body.items : [req.body];
     const created: any[] = [];
