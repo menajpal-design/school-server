@@ -88,9 +88,12 @@ router.get('/', authenticate, async (req: any, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load homework', error }); }
 });
 
-router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
+router.post('/', authenticate, async (req: any, res, next) => {
+  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot create homework.' });
+  if (['admin', 'super_admin'].includes(req.user.role)) return next();
+  return canManageAcademic()(req, res, next);
+}, async (req: any, res) => {
   try {
-    if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot create homework.' });
     const { title, description, subject, classId, sectionId, dueDate, assignedDate } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ message: 'Title is required.' });
     if (!classId) return res.status(400).json({ message: 'Class is required.' });
@@ -102,9 +105,12 @@ router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to create homework', error }); }
 });
 
-router.delete('/:id', authenticate, canManageAcademic(), async (req: any, res) => {
+router.delete('/:id', authenticate, async (req: any, res, next) => {
+  if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot delete homework.' });
+  if (['admin', 'super_admin'].includes(req.user.role)) return next();
+  return canManageAcademic()(req, res, next);
+}, async (req: any, res) => {
   try {
-    if (!managerRoles.includes(req.user.role)) return res.status(403).json({ message: 'Access denied. Students and parents cannot delete homework.' });
     const homework = await Homework.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!homework) return res.status(404).json({ message: 'Homework not found' });
     if (!(await canManageHomeworkClass(req, homework.classId))) return res.status(403).json({ message: 'Access denied. You can delete homework only for assigned class.' });
