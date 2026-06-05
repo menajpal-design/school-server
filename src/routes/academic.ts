@@ -10,9 +10,19 @@ import Teacher from '../models/Teacher';
 import Attendance from '../models/Attendance';
 import IDCard from '../models/IDCard';
 import Institution from '../models/Institution';
+import Parent from '../models/Parent';
 import { sendResultSMS } from '../utils/sms';
 
 const router = express.Router();
+
+const allowAcademicOrViewers = (req: any, res: any, next: any) => {
+  if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
+  const allowed = ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher', 'head', 'student', 'parent'];
+  if (allowed.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) {
+    return next();
+  }
+  return res.status(403).json({ message: 'Access denied.' });
+};
 
 const populateClassQuery = () =>
   ClassModel.find()
@@ -572,13 +582,13 @@ router.get('/', authenticate, canManageAcademic(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load academic data', error }));
 });
 
-router.get('/classes', authenticate, canManageAcademic(), (req, res) => {
+router.get('/classes', authenticate, allowAcademicOrViewers, (req, res) => {
   getClassesWithTotals(req.user.institutionId)
     .then((classes) => res.json({ classes }))
     .catch((error) => res.status(500).json({ message: 'Failed to load classes', error }));
 });
 
-router.get('/classes/:id', authenticate, canManageAcademic(), (req, res) => {
+router.get('/classes/:id', authenticate, allowAcademicOrViewers, (req, res) => {
   populateClassQuery()
     .where({ _id: req.params.id, institutionId: req.user.institutionId })
     .findOne()
@@ -589,7 +599,7 @@ router.get('/classes/:id', authenticate, canManageAcademic(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load class', error }));
 });
 
-router.get('/subjects', authenticate, canManageAcademic(), (req, res) => {
+router.get('/subjects', authenticate, allowAcademicOrViewers, (req, res) => {
   populateSubjectQuery()
     .where({ institutionId: req.user.institutionId })
     .sort({ createdAt: -1 })
@@ -597,7 +607,7 @@ router.get('/subjects', authenticate, canManageAcademic(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load subjects', error }));
 });
 
-router.get('/subjects/:id', authenticate, canManageAcademic(), (req, res) => {
+router.get('/subjects/:id', authenticate, allowAcademicOrViewers, (req, res) => {
   populateSubjectQuery()
     .where({ _id: req.params.id, institutionId: req.user.institutionId })
     .findOne()
@@ -608,23 +618,65 @@ router.get('/subjects/:id', authenticate, canManageAcademic(), (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load subject', error }));
 });
 
-router.get('/exams', authenticate, canManageAcademic(), (req, res) => {
-  populateExamQuery()
-    .where({ institutionId: req.user.institutionId })
-    .sort({ createdAt: -1 })
-    .then((exams) => res.json({ exams }))
-    .catch((error) => res.status(500).json({ message: 'Failed to load exams', error }));
+router.get('/exams', authenticate, allowAcademicOrViewers, async (req: any, res) => {
+  try {
+    const isAcademic = ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher', 'head'].includes(req.user.role);
+    const query: any = { institutionId: req.user.institutionId };
+    
+    if (!isAcademic) {
+      query.isPublished = true;
+      if (req.user.role === 'student') {
+        const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('classId').lean();
+        if (student) {
+          query.classId = student.classId;
+        } else {
+          return res.json({ exams: [] });
+        }
+      } else if (req.user.role === 'parent') {
+        const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
+        const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] } }).select('classId').lean();
+        if (children.length) {
+          query.classId = { $in: children.map((c) => c.classId).filter(Boolean) };
+        } else {
+          return res.json({ exams: [] });
+        }
+      }
+    }
+
+    const exams = await populateExamQuery()
+      .where(query)
+      .sort({ createdAt: -1 });
+    res.json({ exams });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load exams', error });
+  }
 });
 
-router.get('/exams/:id', authenticate, canManageAcademic(), (req, res) => {
-  populateExamQuery()
-    .where({ _id: req.params.id, institutionId: req.user.institutionId })
-    .findOne()
-    .then((exam) => {
-      if (!exam) return res.status(404).json({ message: 'Exam not found' });
-      res.json({ exam });
-    })
-    .catch((error) => res.status(500).json({ message: 'Failed to load exam', error }));
+router.get('/exams/:id', authenticate, allowAcademicOrViewers, async (req: any, res) => {
+  try {
+    const isAcademic = ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher', 'head'].includes(req.user.role);
+    const query: any = { _id: req.params.id, institutionId: req.user.institutionId };
+    
+    if (!isAcademic) {
+      query.isPublished = true;
+      if (req.user.role === 'student') {
+        const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('classId').lean();
+        if (student) query.classId = student.classId;
+        else return res.status(404).json({ message: 'Exam not found' });
+      } else if (req.user.role === 'parent') {
+        const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
+        const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] } }).select('classId').lean();
+        if (children.length) query.classId = { $in: children.map((c) => c.classId).filter(Boolean) };
+        else return res.status(404).json({ message: 'Exam not found' });
+      }
+    }
+
+    const exam = await populateExamQuery().where(query).findOne();
+    if (!exam) return res.status(404).json({ message: 'Exam not found' });
+    res.json({ exam });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load exam', error });
+  }
 });
 
 router.patch('/exams/:id/public-routine', authenticate, canManageAcademic(), async (req, res) => {
