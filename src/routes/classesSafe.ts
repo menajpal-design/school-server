@@ -9,15 +9,16 @@ const router = express.Router();
 const currentYear = () => String(new Date().getFullYear());
 const cleanShift = (v: any) => ['morning', 'day', 'evening'].includes(String(v)) ? String(v) : 'day';
 const cleanGrade = (name: any) => String(name || '').match(/\d+/)?.[0] || String(name || 'General').trim() || 'General';
-const cleanSections = (v: any) => (Array.isArray(v) && v.length ? v : [{ name: 'A', capacity: 30, currentStudents: 0, isActive: true }])
-  .filter((s: any) => String(s?.name || '').trim())
-  .map((s: any) => ({ name: String(s.name).trim(), capacity: Number(s.capacity) || 30, currentStudents: Number(s.currentStudents) || 0, isActive: s.isActive !== false }));
+const cleanSections = (v: any) => (Array.isArray(v) && v.length ? v : [{ name: 'A', capacity: 30, currentStudents: 0, isActive: true }]).filter((s: any) => String(s?.name || '').trim()).map((s: any) => ({ name: String(s.name).trim(), capacity: Number(s.capacity) || 30, currentStudents: Number(s.currentStudents) || 0, isActive: s.isActive !== false }));
 const message = (e: any) => e?.name === 'ValidationError' ? Object.values(e.errors || {}).map((x: any) => (x as any)?.message).join(', ') : e?.message || 'Class API failed';
+const blockedRoles = ['staff', 'finance_officer', 'librarian', 'committee_member'];
 
-async function withSections(items: any[]) {
+async function withSections(items: any[], allowedSectionIds: string[] = []) {
   const ids = items.flatMap((x: any) => Array.isArray(x.sections) ? x.sections : []).map(String);
   if (!ids.length) return items;
-  const sections = await Section.find({ _id: { $in: ids } }).select('name capacity currentStudents isActive classId').lean();
+  const query: any = { _id: { $in: ids } };
+  if (allowedSectionIds.length) query._id = { $in: ids.filter((id: string) => allowedSectionIds.includes(id)) };
+  const sections = await Section.find(query).select('name capacity currentStudents isActive classId').lean();
   const map = new Map(sections.map((x: any) => [String(x._id), x]));
   return items.map((x: any) => ({ ...x, sections: (x.sections || []).map((id: any) => map.get(String(id))).filter(Boolean) }));
 }
@@ -25,13 +26,14 @@ async function withSections(items: any[]) {
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const scope = await resolveActorScope(req.user);
+    if (blockedRoles.includes(scope.role)) return res.status(403).json({ message: 'Access denied. This role cannot view academic classes.' });
     const classQuery = scopedClassQuery(scope, { institutionId: req.user.institutionId });
-    if (!classQuery) return res.json({ classes: [] });
+    if (!classQuery) return res.status(403).json({ message: 'Access denied. No class scope found for this user.' });
     const [raw, totals] = await Promise.all([
       ClassModel.find(classQuery).sort({ createdAt: -1 }).lean(),
       Student.aggregate([{ $match: { institutionId: req.user.institutionId } }, { $group: { _id: '$classId', totalStudents: { $sum: 1 } } }]),
     ]);
-    const classes = await withSections(raw);
+    const classes = await withSections(raw, scope.isSchoolLeader || scope.isSystemAdmin ? [] : scope.assignedSectionIds);
     const count = new Map(totals.map((x: any) => [String(x._id), x.totalStudents]));
     res.json({ classes: classes.map((x: any) => ({ ...x, totalStudents: count.get(String(x._id)) || 0, status: x.isActive ? 'active' : 'inactive' })) });
   } catch (e: any) {
