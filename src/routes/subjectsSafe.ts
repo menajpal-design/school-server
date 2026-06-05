@@ -1,9 +1,10 @@
 import express from 'express';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 import Subject from '../models/Subject';
 import ClassModel from '../models/Class';
 import User from '../models/User';
 import Teacher from '../models/Teacher';
+import { requireAction, resolveActorScope, scopedSubjectQuery } from '../services/permissionPolicy';
 
 const router = express.Router();
 
@@ -26,9 +27,12 @@ async function enrich(subjects: any[]) {
   return plain.map((raw: any) => ({ ...raw, classId: classMap.get(String(raw.classId?._id || raw.classId || '')) || raw.classId, teacherId: teacherMap.get(String(raw.teacherId?._id || raw.teacherId || '')) || raw.teacherId }));
 }
 
-router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
+router.get('/', authenticate, async (req: any, res) => {
   try {
-    const raw = await Subject.find({ institutionId: req.user.institutionId }).sort({ createdAt: -1 }).lean();
+    const scope = await resolveActorScope(req.user);
+    const query = scopedSubjectQuery(scope, { institutionId: req.user.institutionId });
+    if (!query) return res.status(['student', 'parent', 'teacher', 'class_teacher', 'subject_teacher'].includes(req.user.role) ? 200 : 403).json({ subjects: [], count: 0, message: 'No scoped subjects available.' });
+    const raw = await Subject.find(query).sort({ createdAt: -1 }).lean();
     const subjects = await enrich(raw);
     res.json({ subjects, count: subjects.length });
   } catch (error: any) {
@@ -36,7 +40,7 @@ router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
+router.post('/', authenticate, requireAction('subject:create'), async (req: any, res) => {
   try {
     const items = normalizeItems(req.body).filter((item: any) => String(item?.name || '').trim() && item?.classId);
     if (!items.length) return res.status(400).json({ message: 'Subject name and class are required.' });
@@ -71,7 +75,7 @@ router.post('/', authenticate, canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.put('/:id', authenticate, canManageAcademic(), async (req: any, res) => {
+router.put('/:id', authenticate, requireAction('subject:update'), async (req: any, res) => {
   try {
     const payload = {
       name: String(req.body.name || '').trim(),
@@ -95,7 +99,7 @@ router.put('/:id', authenticate, canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.delete('/:id', authenticate, canManageAcademic(), async (req: any, res) => {
+router.delete('/:id', authenticate, requireAction('subject:delete'), async (req: any, res) => {
   try {
     const subject: any = await Subject.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!subject) return res.status(404).json({ message: 'Subject not found' });
