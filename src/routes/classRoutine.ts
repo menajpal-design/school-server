@@ -99,13 +99,18 @@ router.get('/my', async (req: any, res) => {
 
     if (req.user.role === 'parent') {
       const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
-      const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true }).select('classId sectionId rollNumber userId').lean();
+      const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true })
+        .select('classId sectionId rollNumber userId')
+        .populate('userId', 'name')
+        .populate('classId', 'name')
+        .populate('sectionId', 'name')
+        .lean();
       if (!children.length) return res.json({ routines: [], children: [], message: 'No child profile found.' });
       const or: any[] = [];
       children.forEach((child: any) => {
-        or.push({ classId: child.classId, sectionId: child.sectionId });
-        or.push({ classId: child.classId, sectionId: { $exists: false } });
-        or.push({ classId: child.classId, sectionId: null });
+        or.push({ classId: child.classId?._id || child.classId, sectionId: child.sectionId?._id || child.sectionId });
+        or.push({ classId: child.classId?._id || child.classId, sectionId: { $exists: false } });
+        or.push({ classId: child.classId?._id || child.classId, sectionId: null });
       });
       query.$or = or;
       const routines = await routineQuery().where(query).sort({ dayOfWeek: 1, startTime: 1 }).lean();
