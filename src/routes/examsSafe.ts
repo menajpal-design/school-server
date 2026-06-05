@@ -1,15 +1,13 @@
 import express from 'express';
 import mongoose from 'mongoose';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 import Exam from '../models/Exam';
 import Subject from '../models/Subject';
-import Student from '../models/Student';
-import Parent from '../models/Parent';
+import { requireAction, resolveActorScope, scopedExamQuery } from '../services/permissionPolicy';
 
 const router = express.Router();
 const examTypes = ['term', 'half-yearly', 'annual', 'midterm', 'final', 'quiz', 'assignment', 'project'];
 const examStatuses = ['draft', 'scheduled', 'approved', 'published', 'completed'];
-const managerRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher'];
 
 const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
 const asDate = (value: any, fallback?: any) => {
@@ -38,53 +36,14 @@ const normalizePayload = async (req: any) => {
   const endDate = subjectMarks[subjectMarks.length - 1]?.date || asDate(req.body.endDate || req.body.startDate);
   const firstSubject = subjectMarks[0]?.subjectId;
   const isPublished = req.body.isPublished === true && subjectMarks.length > 0;
-  return {
-    name: String(req.body.name || 'Exam').trim(),
-    type: examTypes.includes(String(req.body.type)) ? req.body.type : 'term',
-    classId: req.body.classId,
-    sectionId: req.body.sectionId || undefined,
-    subjectId: firstSubject || undefined,
-    startDate,
-    endDate,
-    date: startDate,
-    duration: subjectMarks[0]?.duration || Number(req.body.duration) || 120,
-    totalMarks: subjectMarks[0]?.totalMarks || Number(req.body.totalMarks) || 100,
-    passingMarks: subjectMarks[0]?.passingMarks || Number(req.body.passingMarks) || 33,
-    subjectMarks,
-    approvalRequired: req.body.approvalRequired === true,
-    status: examStatuses.includes(String(req.body.status)) ? req.body.status : (isPublished ? 'published' : 'scheduled'),
-    syllabus: req.body.syllabus || '',
-    instructions: req.body.instructions || '',
-    isPublished,
-    institutionId: req.user.institutionId,
-  };
+  return { name: String(req.body.name || 'Exam').trim(), type: examTypes.includes(String(req.body.type)) ? req.body.type : 'term', classId: req.body.classId, sectionId: req.body.sectionId || undefined, subjectId: firstSubject || undefined, startDate, endDate, date: startDate, duration: subjectMarks[0]?.duration || Number(req.body.duration) || 120, totalMarks: subjectMarks[0]?.totalMarks || Number(req.body.totalMarks) || 100, passingMarks: subjectMarks[0]?.passingMarks || Number(req.body.passingMarks) || 33, subjectMarks, approvalRequired: req.body.approvalRequired === true, status: examStatuses.includes(String(req.body.status)) ? req.body.status : (isPublished ? 'published' : 'scheduled'), syllabus: req.body.syllabus || '', instructions: req.body.instructions || '', isPublished, institutionId: req.user.institutionId };
 };
 
 const scopedReadQuery = async (req: any) => {
-  const query: any = { institutionId: req.user.institutionId };
-  if (req.query.classId) query.classId = req.query.classId;
-  if (managerRoles.includes(req.user.role)) return query;
-
-  query.isPublished = true;
-  query.status = { $in: ['published', 'approved', 'scheduled', 'completed'] };
-
-  if (req.user.role === 'student') {
-    const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId sectionId').lean();
-    if (!student) return null;
-    query.classId = student.classId;
-    if (student.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
-    return query;
-  }
-
-  if (req.user.role === 'parent') {
-    const parent = await Parent.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).select('children').lean();
-    const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] }, isActive: true }).select('classId sectionId').lean();
-    if (!children.length) return null;
-    query.classId = { $in: children.map((child: any) => child.classId).filter(Boolean) };
-    return query;
-  }
-
-  return null;
+  const scope = await resolveActorScope(req.user);
+  const base: any = { institutionId: req.user.institutionId };
+  if (req.query.classId) base.classId = req.query.classId;
+  return scopedExamQuery(scope, base);
 };
 
 router.use(authenticate);
@@ -112,7 +71,7 @@ router.get('/:id', async (req: any, res) => {
   }
 });
 
-router.post('/', canManageAcademic(), async (req: any, res) => {
+router.post('/', requireAction('exam:create'), async (req: any, res) => {
   try {
     if (!req.body.classId || !isObjectId(req.body.classId)) return res.status(400).json({ message: 'Valid class is required.' });
     const payload = await normalizePayload(req);
@@ -124,7 +83,7 @@ router.post('/', canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.put('/:id', canManageAcademic(), async (req: any, res) => {
+router.put('/:id', requireAction('exam:update'), async (req: any, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
     const exists = await Exam.exists({ _id: req.params.id, institutionId: req.user.institutionId });
@@ -140,7 +99,7 @@ router.put('/:id', canManageAcademic(), async (req: any, res) => {
   }
 });
 
-router.patch('/:id/public-routine', canManageAcademic(), async (req: any, res) => {
+router.patch('/:id/public-routine', requireAction('exam:publish'), async (req: any, res) => {
   try {
     if (!isObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid exam id.' });
     const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).lean();
@@ -158,7 +117,7 @@ router.patch('/:id/public-routine', canManageAcademic(), async (req: any, res) =
   }
 });
 
-router.delete('/:id', canManageAcademic(), async (req: any, res) => {
+router.delete('/:id', requireAction('exam:delete'), async (req: any, res) => {
   try {
     const exam = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
     if (!exam) return res.status(404).json({ message: 'Exam not found' });
