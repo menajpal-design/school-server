@@ -26,14 +26,15 @@ const dayRange = (value?: string) => {
 
 const getTeacher = (req: any) => Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).lean();
 
-const applyFilters = (query: any, req: any, allowClassFilter = true) => {
+const applyFilters = (query: any, req: any, options: { allowClass?: boolean; allowSection?: boolean } = {}) => {
+  const { allowClass = true, allowSection = true } = options;
   if (req.query.date) {
     const range = dayRange(String(req.query.date));
     if (range) query.dueDate = { $gte: range.start, $lt: range.end };
   }
   if (req.query.subject) query.subject = new RegExp(String(req.query.subject).trim(), 'i');
-  if (allowClassFilter && req.query.classId) query.classId = req.query.classId;
-  if (req.query.sectionId) query.$or = [{ sectionId: req.query.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+  if (allowClass && req.query.classId) query.classId = req.query.classId;
+  if (allowSection && req.query.sectionId) query.$or = [{ sectionId: req.query.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
   return query;
 };
 
@@ -52,7 +53,7 @@ router.get('/', authenticate, async (req: any, res) => {
     const role = req.user.role;
     const base: any = { institutionId: req.user.institutionId };
     if (managerRoles.includes(role)) {
-      const query = applyFilters(base, req, true);
+      const query = applyFilters(base, req, { allowClass: true, allowSection: true });
       if (teacherRoles.includes(role)) {
         const teacher = await getTeacher(req);
         query.classId = { $in: teacher?.assignedClasses || [] };
@@ -64,8 +65,8 @@ router.get('/', authenticate, async (req: any, res) => {
       const student = await Student.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: true }).select('classId sectionId').lean();
       if (!student?.classId) return res.json({ homework: [] });
       const query: any = { institutionId: req.user.institutionId, classId: student.classId, isPublished: true };
-      applyFilters(query, req, false);
-      if (student.sectionId && !req.query.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+      applyFilters(query, req, { allowClass: false, allowSection: false });
+      if (student.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
       const homework = await populateHomework(query);
       return res.json({ homework });
     }
@@ -75,7 +76,7 @@ router.get('/', authenticate, async (req: any, res) => {
       const classIds = [...new Set(students.map((student: any) => String(student.classId)).filter(Boolean))];
       if (!classIds.length) return res.json({ homework: [] });
       const query: any = { institutionId: req.user.institutionId, classId: { $in: classIds }, isPublished: true };
-      applyFilters(query, req, false);
+      applyFilters(query, req, { allowClass: false, allowSection: false });
       const homework = await populateHomework(query);
       return res.json({ homework });
     }
