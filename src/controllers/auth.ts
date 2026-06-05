@@ -1,3 +1,4 @@
+// File Location: school-server/src/controllers/auth.ts
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -10,6 +11,7 @@ import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
+import logger from '../utils/logger';
 
 const getRequestSubdomain = (req: Request) => {
   const headerHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0] || '';
@@ -319,7 +321,7 @@ export const login = async (req: Request, res: Response) => {
     }
 
     const emailQuery = identifier.includes('@') ? identifier.toLowerCase() : identifier;
-    console.log('Login attempt:', { identifier, emailQuery, hasInstitutionScope: !!institutionScope.institutionId });
+    logger.debug('Login attempt', { hasInstitutionScope: !!institutionScope.institutionId });
 
     const resolveInstitutionFromIdentifier = async () => {
       if (tenantInstitution || mongoose.Types.ObjectId.isValid(institutionId)) return tenantInstitution;
@@ -345,7 +347,7 @@ export const login = async (req: Request, res: Response) => {
         ],
       }).populate('institutionId').maxTimeMS(5000);
 
-      console.log('User found by email/username/phone:', { userFound: !!user, userRole: user?.role, userEmail: user?.email });
+      logger.debug('User lookup complete', { userFound: !!user, userRole: user?.role });
 
       let isMatch = user ? await bcrypt.compare(password, user.password) : false;
 
@@ -360,11 +362,11 @@ export const login = async (req: Request, res: Response) => {
           isActive: true,
         }).select('userId').maxTimeMS(5000);
 
-        console.log('Student found by rollNumber/guardianPhone/email:', { studentFound: !!student });
+        logger.debug('Student lookup complete', { studentFound: !!student });
 
         if (student?.userId) {
           user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId').maxTimeMS(5000);
-          console.log('User found via student record:', { userFound: !!user, userRole: user?.role });
+          logger.debug('User resolved via student record', { userFound: !!user, userRole: user?.role });
           isMatch = user ? await bcrypt.compare(password, user.password) : false;
         }
       }
@@ -507,7 +509,7 @@ export const login = async (req: Request, res: Response) => {
 
     if (!user || !isMatch) {
       const errorMsg = user ? 'Incorrect password' : 'User not found';
-      console.warn('Login failed:', { identifier, userFound: !!user, passwordMatch: isMatch, error: errorMsg });
+      logger.warn('Login failed', { userFound: !!user, passwordMatch: isMatch, error: errorMsg });
       return res.status(400).json({ 
         message: 'Invalid credentials',
         errors: [errorMsg],

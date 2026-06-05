@@ -31,9 +31,9 @@ connectDB().catch(err => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`🚀 easy school Server running on port ${PORT}`);
-  console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-  console.log(`📲 Mobile URL: ${process.env.MOBILE_URL || 'http://localhost:8081'}`);
+  logger.info(`🚀 easy school Server running on port ${PORT}`);
+  logger.info(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  logger.info(`📲 Mobile URL: ${process.env.MOBILE_URL || 'http://localhost:8081'}`);
 });
 
 // Handle server errors

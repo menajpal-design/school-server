@@ -111,7 +111,7 @@ app.use('/api/csrf', csrfRoutes);
 if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
   app.use(csrfProtection);
 } else {
-  console.log('⚠️ CSRF protection disabled in development mode');
+  logger.warn('⚠️ CSRF protection disabled in development mode');
 }
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
@@ -161,7 +161,9 @@ app.use('/api/sms-monitoring', smsMonitoringRoutes);
 app.use('/api/library', libraryRoutes);
 app.use('/api/site-settings', siteSettingsRoutes);
 app.use('/api/storage-sync', storageSyncRoutes);
-app.use('/api/dev', devTestRoutes);
+if ((process.env.NODE_ENV || 'development').toLowerCase() !== 'production') {
+  app.use('/api/dev', devTestRoutes);
+}
 app.get('/api/library/test', (req, res) => res.json({ success: true, message: 'library route test OK' }));
 app.use('/uploads', express.static('uploads'));
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'easy school Server is running' }));
@@ -177,7 +179,7 @@ const runSmsRetentionCleanup = async () => {
   try {
     const cutoff = new Date(Date.now() - SMS_RETENTION_DAYS * MS_PER_DAY);
     const result = await SmsLog.deleteMany({ createdAt: { $lt: cutoff } });
-    if (result && typeof result.deletedCount === 'number') console.log(`SMS retention cleanup: removed ${result.deletedCount} logs older than ${SMS_RETENTION_DAYS} days`);
+    if (result && typeof result.deletedCount === 'number') logger.info(`SMS retention cleanup: removed ${result.deletedCount} logs older than ${SMS_RETENTION_DAYS} days`);
   } catch (err) { console.error('Error during SMS retention cleanup:', err); }
 };
 runSmsRetentionCleanup();
