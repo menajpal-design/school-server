@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import { authenticate, normalizeRole } from '../middleware/auth';
 import Syllabus from '../models/Syllabus';
 import Student from '../models/Student';
@@ -28,6 +29,9 @@ const buildVisibilityQuery = async (req: any) => {
     if (student) {
       query.classId = student.classId;
       if (student.sectionId) query.$or = [{ sectionId: student.sectionId }, { sectionId: { $exists: false } }, { sectionId: null }];
+    } else {
+      // Force empty results if student profile not found
+      query.classId = new mongoose.Types.ObjectId();
     }
   }
 
@@ -36,6 +40,9 @@ const buildVisibilityQuery = async (req: any) => {
     const children = await Student.find({ institutionId: req.user.institutionId, _id: { $in: parent?.children || [] } }).select('classId sectionId').lean();
     if (children.length) {
       query.classId = { $in: children.map((child) => child.classId).filter(Boolean) };
+    } else {
+      // Force empty results if parent has no children
+      query.classId = new mongoose.Types.ObjectId();
     }
   }
 
