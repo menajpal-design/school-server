@@ -1,3 +1,4 @@
+// File Location: school-server/src/models/Student.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IStudent extends Document {

@@ -1,3 +1,4 @@
+// File Location: school-server/src/utils/idCardHelper.ts
 import mongoose from 'mongoose';
 
 export async function autoGenerateIdCard(

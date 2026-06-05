@@ -1,3 +1,4 @@
+// File Location: school-server/src/models/Teacher.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface ITeacher extends Document {

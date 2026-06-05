@@ -1,3 +1,4 @@
+// File Location: school-server/src/routes/syllabus.ts
 import express from 'express';
 import mongoose from 'mongoose';
 import { authenticate, normalizeRole } from '../middleware/auth';

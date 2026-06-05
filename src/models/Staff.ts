@@ -1,3 +1,4 @@
+// File Location: school-server/src/models/Staff.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IStaff extends Document {
