@@ -52,4 +52,10 @@ StudentSchema.index({ rollNumber: 1, institutionId: 1 });
 StudentSchema.index({ classId: 1, sectionId: 1 });
 StudentSchema.index({ userId: 1 });
 
+import { autoGenerateIdCard } from '../utils/idCardHelper';
+
+StudentSchema.post('save', async function (doc) {
+  await autoGenerateIdCard(doc, 'student');
+});
+
 export default mongoose.model<IStudent>('Student', StudentSchema);

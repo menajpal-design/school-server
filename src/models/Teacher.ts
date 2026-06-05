@@ -42,4 +42,10 @@ const TeacherSchema: Schema = new Schema({
 TeacherSchema.index({ employeeId: 1, institutionId: 1 });
 TeacherSchema.index({ userId: 1 });
 
+import { autoGenerateIdCard } from '../utils/idCardHelper';
+
+TeacherSchema.post('save', async function (doc) {
+  await autoGenerateIdCard(doc, 'teacher');
+});
+
 export default mongoose.model<ITeacher>('Teacher', TeacherSchema);

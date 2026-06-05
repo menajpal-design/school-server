@@ -34,4 +34,10 @@ const StaffSchema: Schema = new Schema({
 StaffSchema.index({ employeeId: 1, institutionId: 1 });
 StaffSchema.index({ userId: 1 });
 
+import { autoGenerateIdCard } from '../utils/idCardHelper';
+
+StaffSchema.post('save', async function (doc) {
+  await autoGenerateIdCard(doc, 'staff');
+});
+
 export default mongoose.model<IStaff>('Staff', StaffSchema);
