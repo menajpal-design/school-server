@@ -22,13 +22,7 @@ const parseDate = (value?: string) => { const raw = String(value || new Date().t
 const dayRange = (value?: string) => { const d = parseDate(value); return { start: new Date(d.getFullYear(), d.getMonth(), d.getDate()), end: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), date: new Date(d.getFullYear(), d.getMonth(), d.getDate()) }; };
 async function classTeacherScope(M: any, req: any) { if (normalizeRole(req.user.role) !== 'class_teacher') return null; const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean(); return ids(teacher?.assignedClasses || []); }
 async function assertClassScope(M: any, req: any, classId: any) { const scope = await classTeacherScope(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(classId))) throw Object.assign(new Error('Access denied. Class Teacher can mark only assigned class attendance.'), { statusCode: 403 }); }
-async function enrichUsers(rows: any[], field = 'userId') {
-  const userIds = [...new Set(rows.map((row: any) => String(row?.[field]?._id || row?.[field] || '')).filter(Boolean))];
-  if (!userIds.length) return rows;
-  const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean());
-  const map = new Map(users.map((user: any) => [String(user._id), user]));
-  return rows.map((row: any) => ({ ...row, [field]: map.get(String(row?.[field]?._id || row?.[field] || '')) || row[field] }));
-}
+async function enrichUsers(rows: any[], field = 'userId') { const userIds = [...new Set(rows.map((row: any) => String(row?.[field]?._id || row?.[field] || '')).filter(Boolean))]; if (!userIds.length) return rows; const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean()); const map = new Map(users.map((user: any) => [String(user._id), user])); return rows.map((row: any) => ({ ...row, [field]: map.get(String(row?.[field]?._id || row?.[field] || '')) || row[field] })); }
 
 router.get('/people', authenticate, async (req: any, res) => {
   try {
@@ -43,6 +37,28 @@ router.get('/people', authenticate, async (req: any, res) => {
     const people = await enrichUsers(rows);
     return res.json({ people, lockedClassId, lockedClassIds, debug: { source: 'active-school-db', count: people.length } });
   } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load attendance people', error }); }
+});
+
+router.get('/student/:id', authenticate, async (req: any, res) => {
+  try {
+    const M = await models(req);
+    const student: any = await M.Student.findOne({ _id: req.params.id, institutionId: req.user.institutionId, isActive: { $ne: false } }).populate('classId', 'name grade').populate('sectionId', 'name').lean();
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+    await assertClassScope(M, req, student.classId?._id || student.classId);
+    const attendance = await M.Attendance.find({ institutionId: req.user.institutionId, studentId: student._id, userType: 'student' }).sort({ date: 1 }).lean();
+    const [profile] = await enrichUsers([student]);
+    return res.json({ attendance, profile, debug: { source: 'active-school-db', count: attendance.length } });
+  } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load student attendance', error }); }
+});
+
+router.get('/person/:type/:id', authenticate, async (req: any, res) => {
+  try {
+    const M = await models(req); const type = String(req.params.type || '').toLowerCase();
+    const allowed = ['head', 'assistant_head', 'admin', 'super_admin', 'teacher', 'class_teacher', 'subject_teacher'].includes(normalizeRole(req.user.role));
+    if (!allowed) return res.status(403).json({ message: 'Access denied. Cannot view employee attendance history.' });
+    const attendance = await M.Attendance.find({ institutionId: req.user.institutionId, userId: req.params.id, userType: type }).sort({ date: 1 }).lean();
+    return res.json({ attendance, debug: { source: 'active-school-db', count: attendance.length } });
+  } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load person attendance', error }); }
 });
 
 router.get('/', authenticate, async (req: any, res, next) => {
