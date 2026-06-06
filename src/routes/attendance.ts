@@ -696,7 +696,25 @@ router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
 
 router.get('/student/:id', authenticate, canManageAcademic(), async (req: any, res) => {
   try {
-    const student = await Student.findOne({ _id: req.params.id, institutionId: req.user.institutionId }).lean();
+    let targetId = String(req.params.id || '');
+    if (targetId.startsWith('student:')) {
+      targetId = targetId.replace(/^student:/, '');
+    } else if (targetId.startsWith('user:')) {
+      targetId = targetId.replace(/^user:/, '');
+    } else if (targetId.startsWith('user-')) {
+      targetId = targetId.replace(/^user-/, '');
+    } else if (targetId.startsWith('student-')) {
+      targetId = targetId.replace(/^student-/, '');
+    }
+
+    const query: any = { institutionId: req.user.institutionId };
+    if (mongoose.Types.ObjectId.isValid(targetId)) {
+      query.$or = [{ _id: toObjectId(targetId) }, { userId: toObjectId(targetId) }];
+    } else {
+      query._id = targetId;
+    }
+
+    const student = await Student.findOne(query).lean();
     if (!student) return res.status(404).json({ message: 'Student not found' });
     if (req.user.role === 'class_teacher') {
       const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
@@ -720,7 +738,19 @@ router.get('/person/:type/:id', authenticate, canManageAcademic(), async (req, r
   try {
     const personType = normalizePersonType(req.params.type);
     if (!['teacher', 'staff'].includes(personType)) return res.status(400).json({ message: 'Invalid person type' });
-    const attendance = await Attendance.find({ institutionId: req.user.institutionId, userId: req.params.id, userType: personType }).sort({ date: 1 }).lean();
+
+    let targetId = String(req.params.id || '');
+    if (targetId.startsWith('user:')) {
+      targetId = targetId.replace(/^user:/, '');
+    } else if (targetId.startsWith('user-')) {
+      targetId = targetId.replace(/^user-/, '');
+    } else if (targetId.startsWith('teacher:')) {
+      targetId = targetId.replace(/^teacher:/, '');
+    } else if (targetId.startsWith('staff:')) {
+      targetId = targetId.replace(/^staff:/, '');
+    }
+
+    const attendance = await Attendance.find({ institutionId: req.user.institutionId, userId: targetId, userType: personType }).sort({ date: 1 }).lean();
     res.json({ attendance });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load person attendance history', error });
