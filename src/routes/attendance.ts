@@ -9,6 +9,7 @@ import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
 import { sendAttendanceDailySMS, sendAttendanceReminderSMS } from '../utils/sms';
+import { resolveActorScope } from '../services/permissionPolicy';
 
 const router = express.Router();
 
@@ -140,6 +141,9 @@ const canMarkAttendanceRecords = async (req: any, records: any[]) => {
   const role = req.user.role;
   if (['admin', 'super_admin', 'head'].includes(role)) return true;
 
+  const scope = await resolveActorScope(req.user);
+  const isTeacher = ['teacher', 'class_teacher', 'subject_teacher'].includes(role);
+
   for (const record of records) {
     const userType = record.userType || (record.studentId ? 'student' : 'staff');
     if (userType === 'teacher' || (!record.studentId && record.userId)) {
@@ -149,16 +153,12 @@ const canMarkAttendanceRecords = async (req: any, records: any[]) => {
 
     if (userType === 'student' || record.studentId) {
       if (role === 'assistant_head' || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) continue;
-      if (!['class_teacher', 'subject_teacher'].includes(role)) return false;
-      if (role === 'class_teacher') {
-        const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
-        const assignedClasses = (teacher?.assignedClasses || []).map(String);
-        const assignedSections = (teacher?.assignedSections || teacher?.sectionIds || []).map(String);
-        const classId = String(record.classId || req.body.classId || '');
-        const sectionId = String(record.sectionId || req.body.sectionId || '');
-        if (!assignedClasses.includes(classId)) return false;
-        if (assignedSections.length > 0 && sectionId && !assignedSections.includes(sectionId)) return false;
-      }
+      if (!isTeacher) return false;
+      
+      const classId = String(record.classId || req.body.classId || '');
+      const sectionId = String(record.sectionId || req.body.sectionId || '');
+      if (!scope.assignedClassIds.includes(classId)) return false;
+      if (scope.assignedSectionIds.length > 0 && sectionId && !scope.assignedSectionIds.includes(sectionId)) return false;
     }
   }
 
@@ -213,13 +213,14 @@ router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
   const { start, end } = dayRange(req.query.date as string | undefined);
   const query: any = { institutionId: req.user.institutionId };
   
-  if (req.user.role === 'class_teacher') {
-    const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
-    const assignedClasses = (teacher?.assignedClasses || []).map(toObjectId);
-    const assignedSections = (teacher?.assignedSections || teacher?.sectionIds || []).map(toObjectId);
+  const isTeacher = ['teacher', 'class_teacher', 'subject_teacher'].includes(req.user.role);
+  if (isTeacher) {
+    const scope = await resolveActorScope(req.user);
+    const assignedClasses = scope.assignedClassIds.map(toObjectId);
+    const assignedSections = scope.assignedSectionIds.map(toObjectId);
     
     if (req.query.classId) {
-      if (!assignedClasses.map(String).includes(String(req.query.classId))) {
+      if (!scope.assignedClassIds.includes(String(req.query.classId))) {
         return res.status(403).json({ message: 'Access denied. You can only view attendance for your assigned classes.' });
       }
       query.classId = toObjectId(req.query.classId);
@@ -228,7 +229,7 @@ router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
     }
 
     if (req.query.sectionId) {
-      if (!assignedSections.map(String).includes(String(req.query.sectionId))) {
+      if (!scope.assignedSectionIds.includes(String(req.query.sectionId))) {
         return res.status(403).json({ message: 'Access denied. You can only view attendance for your assigned sections.' });
       }
       query.sectionId = toObjectId(req.query.sectionId);
@@ -394,10 +395,11 @@ router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) 
   const endDate = new Date(endSource.getFullYear(), endSource.getMonth(), endSource.getDate() + 1);
   const query: any = { institutionId: req.user.institutionId, date: { $gte: startDate, $lt: endDate } };
   
-  if (req.user.role === 'class_teacher') {
-    const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
-    const assignedClasses = (teacher?.assignedClasses || []).map(String);
-    const assignedSections = (teacher?.assignedSections || teacher?.sectionIds || []).map(String);
+  const isTeacher = ['teacher', 'class_teacher', 'subject_teacher'].includes(req.user.role);
+  if (isTeacher) {
+    const scope = await resolveActorScope(req.user);
+    const assignedClasses = scope.assignedClassIds;
+    const assignedSections = scope.assignedSectionIds;
 
     if (req.query.classId) {
       const targetClass = String(req.query.classId);
@@ -406,7 +408,7 @@ router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) 
       }
       query.classId = toObjectId(targetClass);
     } else {
-      query.classId = { $in: (teacher?.assignedClasses || []).map(toObjectId) };
+      query.classId = { $in: assignedClasses.map(toObjectId) };
     }
 
     if (req.query.sectionId) {

@@ -61,8 +61,8 @@ const idCardReadGuard = async (req: any, res: any, next: any) => {
 
 const idCardScanGuard = async (req: any, res: any, next: any) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
-  if (['staff', 'finance_officer', 'librarian', 'student', 'parent'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot scan ID cards.' });
-  if (leaderRoles.includes(req.user.role) || req.user.role === 'class_teacher' || (Array.isArray(req.user.permissions) && (req.user.permissions.includes('scan:idcard') || req.user.permissions.includes('attendance:mark')))) return next();
+  if (['staff', 'finance_officer', 'librarian', 'student', 'parent', 'class_teacher', 'teacher', 'subject_teacher'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied. This role cannot scan ID cards.' });
+  if (leaderRoles.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('scan:idcard'))) return next();
   return res.status(403).json({ message: 'Access denied. Cannot scan ID cards.' });
 };
 

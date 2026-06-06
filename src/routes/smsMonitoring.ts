@@ -151,7 +151,7 @@ router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head')
 
 
 // Get all SMS logs for an institution (Admin, Head, Assistant Head, Finance Officer)
-router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
+router.get('/', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
   try {
     const { status, parentId, studentId, type, startDate, endDate } = req.query;
     const userId = (req as any).user?.id;
@@ -213,7 +213,7 @@ router.get('/sms-monitoring', authenticate, authorize('admin', 'super_admin', 'h
 });
 
 // Get SMS logs for a specific parent
-router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
+router.get('/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
   try {
     const { parentId } = req.params;
     const tenantId = getTenantIdFromReq(req);
@@ -257,7 +257,7 @@ router.get('/sms-monitoring/parent/:parentId', authenticate, authorize('admin', 
 });
 
 // Get SMS statistics for dashboard
-router.get('/sms-monitoring/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
+router.get('/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
   try {
     const { days = 30 } = req.query;
     const tenantId = getTenantIdFromReq(req);

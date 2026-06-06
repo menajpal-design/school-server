@@ -1,5 +1,7 @@
 import express from 'express';
-import { authenticate, canManageAcademic } from '../middleware/auth';
+import mongoose from 'mongoose';
+import { authenticate, canManageAcademic, normalizeRole } from '../middleware/auth';
+import { resolveActorScope } from '../services/permissionPolicy';
 import ClassModel from '../models/Class';
 import Section from '../models/Section';
 import Subject from '../models/Subject';
@@ -14,6 +16,8 @@ import Parent from '../models/Parent';
 import { sendResultSMS } from '../utils/sms';
 
 const router = express.Router();
+
+const toObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value)) ? new mongoose.Types.ObjectId(String(value)) : value;
 
 const allowAcademicOrViewers = (req: any, res: any, next: any) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
@@ -588,15 +592,23 @@ router.get('/classes', authenticate, allowAcademicOrViewers, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load classes', error }));
 });
 
-router.get('/classes/:id', authenticate, allowAcademicOrViewers, (req, res) => {
-  populateClassQuery()
-    .where({ _id: req.params.id, institutionId: req.user.institutionId })
-    .findOne()
-    .then((classItem) => {
-      if (!classItem) return res.status(404).json({ message: 'Class not found' });
-      res.json({ classItem });
-    })
-    .catch((error) => res.status(500).json({ message: 'Failed to load class', error }));
+router.get('/classes/:id', authenticate, allowAcademicOrViewers, async (req, res) => {
+  try {
+    const role = normalizeRole(req.user.role);
+    if (['teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+      const scope = await resolveActorScope(req.user);
+      if (!scope.assignedClassIds.includes(req.params.id)) {
+        return res.status(403).json({ message: 'Access denied. Not assigned to this class.' });
+      }
+    }
+    const classItem = await populateClassQuery()
+      .where({ _id: req.params.id, institutionId: req.user.institutionId })
+      .findOne();
+    if (!classItem) return res.status(404).json({ message: 'Class not found' });
+    res.json({ classItem });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load class', error });
+  }
 });
 
 router.get('/subjects', authenticate, allowAcademicOrViewers, (req, res) => {
@@ -607,15 +619,24 @@ router.get('/subjects', authenticate, allowAcademicOrViewers, (req, res) => {
     .catch((error) => res.status(500).json({ message: 'Failed to load subjects', error }));
 });
 
-router.get('/subjects/:id', authenticate, allowAcademicOrViewers, (req, res) => {
-  populateSubjectQuery()
-    .where({ _id: req.params.id, institutionId: req.user.institutionId })
-    .findOne()
-    .then((subject) => {
-      if (!subject) return res.status(404).json({ message: 'Subject not found' });
-      res.json({ subject });
-    })
-    .catch((error) => res.status(500).json({ message: 'Failed to load subject', error }));
+router.get('/subjects/:id', authenticate, allowAcademicOrViewers, async (req, res) => {
+  try {
+    const subject = await populateSubjectQuery()
+      .where({ _id: req.params.id, institutionId: req.user.institutionId })
+      .findOne();
+    if (!subject) return res.status(404).json({ message: 'Subject not found' });
+
+    const role = normalizeRole(req.user.role);
+    if (['teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+      const scope = await resolveActorScope(req.user);
+      if (!scope.assignedSubjectIds.includes(req.params.id) && !scope.assignedClassIds.includes(String(subject.classId?._id || subject.classId))) {
+        return res.status(403).json({ message: 'Access denied. Not assigned to this subject.' });
+      }
+    }
+    res.json({ subject });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load subject', error });
+  }
 });
 
 router.get('/exams', authenticate, allowAcademicOrViewers, async (req: any, res) => {
@@ -887,8 +908,40 @@ router.get('/report-card', authenticate, async (req, res) => {
   try {
     const institutionId = req.user.institutionId;
     const studentQuery: any = { institutionId };
-    if (req.query.studentId) studentQuery._id = req.query.studentId;
-    else studentQuery.userId = req.user._id;
+    const userRole = normalizeRole(req.user.role);
+
+    if (userRole === 'student') {
+      studentQuery.userId = req.user._id;
+      if (req.query.studentId) {
+        const student = await Student.findOne({ userId: req.user._id, institutionId }).lean();
+        if (!student || String(student._id) !== String(req.query.studentId)) {
+          return res.status(403).json({ message: 'Access denied. You can only view your own report card.' });
+        }
+      }
+    } else if (userRole === 'parent') {
+      const parent = await Parent.findOne({ userId: req.user._id, institutionId }).lean();
+      const childIds = (parent?.children || []).map(String);
+      const targetId = req.query.studentId ? String(req.query.studentId) : childIds[0];
+      if (!targetId || !childIds.includes(targetId)) {
+        return res.status(403).json({ message: 'Access denied. You can only view report cards for your linked children.' });
+      }
+      studentQuery._id = targetId;
+    } else if (['teacher', 'class_teacher', 'subject_teacher'].includes(userRole)) {
+      const scope = await resolveActorScope(req.user);
+      if (req.query.studentId) {
+        const student = await Student.findOne({ _id: req.query.studentId, institutionId }).lean();
+        if (!student || !scope.assignedClassIds.includes(String(student.classId))) {
+          return res.status(403).json({ message: 'Access denied. Student class is not assigned to you.' });
+        }
+        studentQuery._id = req.query.studentId;
+      } else {
+        return res.status(400).json({ message: 'Student ID is required for teachers.' });
+      }
+    } else {
+      if (req.query.studentId) studentQuery._id = req.query.studentId;
+      else return res.status(400).json({ message: 'Student ID is required.' });
+    }
+
     if (req.query.classId) studentQuery.classId = req.query.classId;
     if (req.query.sectionId) studentQuery.sectionId = req.query.sectionId;
 
@@ -896,9 +949,9 @@ router.get('/report-card', authenticate, async (req, res) => {
       .populate('userId', 'name email phone avatar')
       .populate('classId', 'name grade academicYear')
       .populate('sectionId', 'name');
-      if (!student) {
-        return res.status(404).json({ message: 'Report card not found for current user' });
-      }
+    if (!student) {
+      return res.status(404).json({ message: 'Report card not found for current user' });
+    }
 
       const examId = req.query.examId;
       const resultQuery: any = { institutionId, studentId: student._id };
@@ -964,7 +1017,20 @@ router.get('/report-card', authenticate, async (req, res) => {
 router.get('/report-card/students', authenticate, canManageAcademic(), async (req, res) => {
   try {
     const query: any = { institutionId: req.user.institutionId, isActive: true };
-    if (req.query.classId) query.classId = req.query.classId;
+    const role = normalizeRole(req.user.role);
+    if (['teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+      const scope = await resolveActorScope(req.user);
+      if (req.query.classId) {
+        if (!scope.assignedClassIds.includes(String(req.query.classId))) {
+          return res.status(403).json({ message: 'Access denied. You are not assigned to this class.' });
+        }
+        query.classId = req.query.classId;
+      } else {
+        query.classId = { $in: scope.assignedClassIds };
+      }
+    } else {
+      if (req.query.classId) query.classId = req.query.classId;
+    }
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
     const students = await Student.find(query)
       .populate('userId', 'name avatar email')
@@ -1228,6 +1294,135 @@ router.delete('/subjects/:id', authenticate, canManageAcademic(), async (req, re
     res.json({ message: 'Subject deleted' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to delete subject', error });
+  }
+});
+
+// Class Sections CRUD Routes
+router.get('/sections', authenticate, allowAcademicOrViewers, async (req: any, res) => {
+  try {
+    const query: any = { institutionId: req.user.institutionId };
+    const role = normalizeRole(req.user.role);
+
+    if (['student', 'parent', 'teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+      const scope = await resolveActorScope(req.user);
+      query.classId = { $in: scope.assignedClassIds.map(toObjectId) };
+    }
+
+    if (req.query.classId) {
+      if (query.classId && !query.classId.$in.map(String).includes(String(req.query.classId))) {
+        return res.status(403).json({ message: 'Access denied. You are not assigned to this class.' });
+      }
+      query.classId = toObjectId(req.query.classId);
+    }
+
+    const sections = await Section.find(query)
+      .populate('classId', 'name grade academicYear')
+      .populate('sectionTeacherId', 'name email phone role')
+      .sort({ name: 1 })
+      .lean();
+    res.json({ sections });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load sections', error });
+  }
+});
+
+router.get('/sections/:id', authenticate, allowAcademicOrViewers, async (req: any, res) => {
+  try {
+    const section = await Section.findOne({ _id: req.params.id, institutionId: req.user.institutionId })
+      .populate('classId', 'name grade academicYear')
+      .populate('sectionTeacherId', 'name email phone role')
+      .lean();
+    if (!section) return res.status(404).json({ message: 'Section not found' });
+
+    const role = normalizeRole(req.user.role);
+    if (['student', 'parent', 'teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+      const scope = await resolveActorScope(req.user);
+      if (!scope.assignedClassIds.includes(String(section.classId?._id || section.classId))) {
+        return res.status(403).json({ message: 'Access denied.' });
+      }
+    }
+    res.json({ section });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load section', error });
+  }
+});
+
+router.post('/sections', authenticate, canManageAcademic(), async (req: any, res) => {
+  try {
+    const role = normalizeRole(req.user.role);
+    if (!['head', 'assistant_head'].includes(role) && !(Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
+    const section = await Section.create({
+      name: req.body.name,
+      classId: req.body.classId,
+      sectionTeacherId: req.body.sectionTeacherId || undefined,
+      capacity: Number(req.body.capacity) || 30,
+      currentStudents: Number(req.body.currentStudents) || 0,
+      isActive: req.body.isActive !== false,
+      institutionId: req.user.institutionId,
+    });
+    await ClassModel.findOneAndUpdate(
+      { _id: req.body.classId, institutionId: req.user.institutionId },
+      { $addToSet: { sections: section._id } }
+    );
+    res.status(201).json({ section });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to create section', error });
+  }
+});
+
+router.put('/sections/:id', authenticate, canManageAcademic(), async (req: any, res) => {
+  try {
+    const role = normalizeRole(req.user.role);
+    if (!['head', 'assistant_head'].includes(role) && !(Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
+    const section = await Section.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!section) return res.status(404).json({ message: 'Section not found' });
+
+    const previousClassId = section.classId;
+    section.name = req.body.name || section.name;
+    section.classId = req.body.classId || section.classId;
+    section.sectionTeacherId = req.body.sectionTeacherId || section.sectionTeacherId;
+    section.capacity = req.body.capacity !== undefined ? Number(req.body.capacity) : section.capacity;
+    section.currentStudents = req.body.currentStudents !== undefined ? Number(req.body.currentStudents) : section.currentStudents;
+    section.isActive = req.body.isActive !== undefined ? req.body.isActive !== false : section.isActive;
+    await section.save();
+
+    if (previousClassId && String(previousClassId) !== String(section.classId)) {
+      await ClassModel.findOneAndUpdate(
+        { _id: previousClassId, institutionId: req.user.institutionId },
+        { $pull: { sections: section._id } }
+      );
+      await ClassModel.findOneAndUpdate(
+        { _id: section.classId, institutionId: req.user.institutionId },
+        { $addToSet: { sections: section._id } }
+      );
+    }
+    res.json({ section });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update section', error });
+  }
+});
+
+router.delete('/sections/:id', authenticate, canManageAcademic(), async (req: any, res) => {
+  try {
+    const role = normalizeRole(req.user.role);
+    if (!['head', 'assistant_head'].includes(role) && !(Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:academic'))) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
+    const section = await Section.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!section) return res.status(404).json({ message: 'Section not found' });
+
+    await ClassModel.findOneAndUpdate(
+      { _id: section.classId, institutionId: req.user.institutionId },
+      { $pull: { sections: section._id } }
+    );
+    await section.deleteOne();
+    res.json({ message: 'Section deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete section', error });
   }
 });
 

@@ -63,6 +63,7 @@ import { sanitizeRequest } from './middlewares/sanitize';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requestLogger, attachRequestId } from './middlewares/requestLogger';
 import logger from './utils/logger';
+import { loginLimiter, dashboardLimiter, reportLimiter, pdfLimiter } from './middlewares/rateLimiter';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -113,6 +114,7 @@ if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
 } else {
   logger.warn('⚠️ CSRF protection disabled in development mode');
 }
+app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/seed', seedRoutes);
@@ -126,6 +128,7 @@ app.use('/api/academic/subjects', academicSubjectRoutes);
 app.use('/api/academic/exams', academicExamRoutes);
 app.use('/api/academic/results/me', studentResultRoutes);
 app.use('/api/academic/results', resultRoutes);
+app.use('/api/academic/report-card', reportLimiter);
 app.use('/api/academic', academicOverviewRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/syllabus', syllabusRoutes);
@@ -140,6 +143,7 @@ app.use('/api/finance/collections', financeCollectionsDirectRoutes);
 app.use('/api/finance/payments', financePaymentsDirectRoutes);
 app.use('/api/finance/salary', financeSalaryDirectRoutes);
 app.use('/api/finance/reports', financeReportsDirectRoutes);
+app.use('/api/finance/audit/export', pdfLimiter);
 app.use('/api/finance', financeRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/promotions', promotionRoutes);
@@ -147,12 +151,14 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/notices', noticeRoutes);
 app.use('/api/committee', committeeRoutes);
 app.use('/api/parent', parentRoutes);
+app.use('/api/id-cards/render-pdf', pdfLimiter);
 app.use('/api/id-cards', idCardRoutes);
-app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/dashboard', dashboardLimiter, dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
-app.use('/api/reports', reportRoutes);
+app.use('/api/reports', reportLimiter, reportRoutes);
 app.use('/api/backup', backupRoutes);
+app.use('/api/institution', smsMonitoringRoutes);
 app.use('/api/institution', institutionRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);
