@@ -57,7 +57,7 @@ import storageSyncRoutes from './routes/storageSync';
 import SmsLog from './models/SmsLog';
 import './models/allModels';
 import { config } from './config/config';
-import './config/tenantStorage';
+import { resolveTenantStorageContext, runWithTenantStorage } from './config/tenantStorage';
 import storageConfigGuard from './middlewares/storageConfigGuard';
 import resolveTenant from './middleware/tenant';
 import csrfRoutes from './routes/csrf';
@@ -93,6 +93,19 @@ app.use(sanitizeRequest);
 app.use(cookieParser);
 app.use('/api/csrf', csrfRoutes);
 if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') { app.use(csrfProtection); } else { logger.warn('⚠️ CSRF protection disabled in development mode'); }
+
+// Wrap subsequent API routes/middleware in tenant context (except auth writes & central users lookup)
+app.use((req: any, res, next) => {
+  const path = req.path;
+  const isAuthWrite = path.startsWith('/api/auth') && !path.startsWith('/api/auth/profile');
+  const isUsersRoute = path.startsWith('/api/users');
+  if (isAuthWrite || isUsersRoute) {
+    return next();
+  }
+  const context = req.institution ? resolveTenantStorageContext(req.institution) : null;
+  runWithTenantStorage(context, next, req.user, req.institution);
+});
+
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);

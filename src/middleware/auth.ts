@@ -55,7 +55,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
     if (!token) return res.status(401).json({ message: 'Authentication required.' });
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
-    const user = await withAuthTimeout(User.findById(decoded.id).populate('institutionId').lean().exec(), 'Auth user lookup');
+    const user = await runWithTenantStorage(null, () => withAuthTimeout(User.findById(decoded.id).populate('institutionId').lean().exec(), 'Auth user lookup'));
     if (!user || user.isActive === false) return res.status(401).json({ message: 'Invalid or inactive user.' });
     const institution = expireInstitutionSnapshotIfNeeded((user as any).institutionId);
     req.user = { ...user, id: String((user as any)._id), institutionId: institution?._id || (user as any).institutionId, institution };

@@ -678,7 +678,17 @@ router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
       .populate('sectionId', 'name')
       .sort({ rollNumber: 1 })
       .lean();
-    res.json({ people: students });
+
+    let lockedClassId: string | undefined;
+    if (req.user.role === 'class_teacher') {
+      const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
+      const assignedClasses = teacher?.assignedClasses || [];
+      if (assignedClasses.length === 1) {
+        lockedClassId = String(assignedClasses[0]);
+      }
+    }
+
+    res.json({ people: students, lockedClassId });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load attendance people', error });
   }
