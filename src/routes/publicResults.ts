@@ -12,7 +12,7 @@ const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase()
 
 const clean = (value: any) => String(value || '').trim();
 const oid = (value: any) => String(value?._id || value || '');
-const textRegex = (value: string) => new RegExp(clean(value).replace(/[^a-zA-Z0-9\s-]/g, ''), 'i');
+const textRegex = (value: string) => new RegExp(clean(value).replace(/[^a-zA-Z0-9 ]/g, ''), 'i');
 
 const hostFromRequest = (req: any) => clean(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname)
   .replace(/^https?:\/\//i, '')
@@ -37,12 +37,15 @@ const publicSchoolSelect = 'name type eiin address website domains subdomain log
 const resolveInstitution = async (req: any) => {
   const subdomain = subdomainFromRequest(req);
   if (subdomain) return Institution.findOne({ subdomain, isActive: true }).select(publicSchoolSelect).lean();
+
   const institutionId = clean(req.query.institutionId || req.query.schoolId);
   if (institutionId) return Institution.findOne({ _id: institutionId, isActive: true }).select(publicSchoolSelect).lean();
+
   const host = hostFromRequest(req);
   if (host && host !== MAIN_DOMAIN && host !== `www.${MAIN_DOMAIN}` && host !== 'localhost' && host !== '127.0.0.1') {
     return Institution.findOne({ isActive: true, $or: [{ website: textRegex(host) }, { domains: host }, { domains: `www.${host}` }] }).select(publicSchoolSelect).lean();
   }
+
   return null;
 };
 
