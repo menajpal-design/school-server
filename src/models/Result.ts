@@ -4,6 +4,7 @@ export interface IResult extends Document {
   studentId: mongoose.Types.ObjectId;
   examId: mongoose.Types.ObjectId;
   subjectId: mongoose.Types.ObjectId;
+  year?: number;
   marksObtained?: number;
   grade?: string;
   remarks?: string;
@@ -26,6 +27,7 @@ const ResultSchema: Schema = new Schema({
   studentId: { type: Schema.Types.ObjectId, ref: 'Student', required: true },
   examId: { type: Schema.Types.ObjectId, ref: 'Exam', required: true },
   subjectId: { type: Schema.Types.ObjectId, ref: 'Subject', required: true },
+  year: { type: Number, index: true },
   marksObtained: { type: Number },
   grade: { type: String, trim: true },
   remarks: { type: String, trim: true },
@@ -44,11 +46,11 @@ const ResultSchema: Schema = new Schema({
   timestamps: true
 });
 
-// Indexes
 ResultSchema.index({ studentId: 1, examId: 1, subjectId: 1 }, { unique: true });
 ResultSchema.index({ examId: 1 });
 ResultSchema.index({ subjectId: 1 });
 ResultSchema.index({ workflowStatus: 1 });
 ResultSchema.index({ institutionId: 1 });
+ResultSchema.index({ institutionId: 1, year: 1, workflowStatus: 1 });
 
 export default mongoose.model<IResult>('Result', ResultSchema);
