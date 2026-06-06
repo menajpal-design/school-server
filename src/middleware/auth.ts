@@ -116,7 +116,7 @@ export const canManageAcademic = () => (req: AuthRequest, res: Response, next: N
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
   const currentRole = normalizeRole(req.user.role);
   if (['admin', 'super_admin'].includes(currentRole)) return res.status(403).json({ message: 'Admin roles cannot access academic or attendance operations.' });
-  if (isPrivilegedRole(req.user.role) || ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher'].includes(currentRole) || hasPermission(req.user, 'manage:academic')) return next();
+  if (isPrivilegedRole(req.user.role) || ['class_teacher', 'subject_teacher', 'assistant_head', 'teacher', 'staff', 'finance_officer'].includes(currentRole) || hasPermission(req.user, 'manage:academic')) return next();
   return res.status(403).json({ message: 'Access denied. Academic management only.' });
 };
 export const canPostNotice = () => (req: AuthRequest, res: Response, next: NextFunction) => {
