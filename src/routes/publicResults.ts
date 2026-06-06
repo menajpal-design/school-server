@@ -10,8 +10,8 @@ const router = express.Router();
 const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'support']);
 const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
 
-const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const clean = (value: any) => String(value || '').trim();
+const escapeRegex = (value: string) => clean(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const oid = (value: any) => String(value?._id || value || '');
 
 const hostFromRequest = (req: any) => clean(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname)
