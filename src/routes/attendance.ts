@@ -430,10 +430,10 @@ router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) 
   
   if (req.query.sectionId) query.sectionId = toObjectId(req.query.sectionId);
   if (req.query.personId) query.studentId = toObjectId(req.query.personId);
-  if (req.query.personType === 'teacher' && req.query.personId) {
+  if (['teacher', 'staff'].includes(req.query.personType as string) && req.query.personId) {
     delete query.studentId;
     query.userId = toObjectId(req.query.personId);
-    query.userType = 'teacher';
+    query.userType = req.query.personType;
   }
   if (req.query.userType) query.userType = req.query.userType;
   if (req.query.userId) query.userId = toObjectId(req.query.userId);
