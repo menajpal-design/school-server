@@ -12,7 +12,7 @@ const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase()
 
 const clean = (value: any) => String(value || '').trim();
 const oid = (value: any) => String(value?._id || value || '');
-const textRegex = (value: string) => new RegExp(clean(value).replace(/[^a-zA-Z0-9\s.-]/g, ''), 'i');
+const textRegex = (value: string) => new RegExp(clean(value).replace(/[^a-zA-Z0-9\s-]/g, ''), 'i');
 
 const hostFromRequest = (req: any) => clean(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname)
   .replace(/^https?:\/\//i, '')
