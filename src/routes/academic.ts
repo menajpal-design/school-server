@@ -361,8 +361,19 @@ router.get('/public/results/options', async (req, res) => {
     const institution = await resolvePublicInstitution(req);
     if (!institution) return res.status(404).json({ message: 'School not found' });
     const [classes, exams, appControl] = await Promise.all([
-      ClassModel.find({ institutionId: institution._id, isActive: true }).select('name grade academicYear').sort({ grade: 1 }).lean(),
-      Exam.find({ institutionId: institution._id, isPublished: true }).select('name type classId startDate endDate').sort({ startDate: -1 }).lean(),
+      ClassModel.find({ institutionId: institution._id, isActive: true })
+        .select('name grade academicYear sections')
+        .populate('sections', 'name isActive')
+        .sort({ grade: 1 })
+        .lean(),
+      Exam.find({
+        institutionId: institution._id,
+        $or: [
+          { isPublished: true },
+          { status: 'published' },
+          { status: 'completed' }
+        ]
+      }).select('name type classId startDate endDate').sort({ startDate: -1 }).lean(),
       SiteSetting.findOne({ key: 'app_control_settings', institutionId: institution._id }).lean(),
     ]);
     res.json({ institution, classes, exams, appControlSettings: appControl?.value || {} });
@@ -382,6 +393,7 @@ router.get('/public/results', async (req, res) => {
       rollNumber: String(req.query.rollNumber || '').trim(),
     };
     if (req.query.classId) studentQuery.classId = req.query.classId;
+    if (req.query.sectionId) studentQuery.sectionId = req.query.sectionId;
     if (!studentQuery.rollNumber) return res.status(400).json({ message: 'Roll number is required' });
 
     const student = await Student.findOne(studentQuery)
@@ -473,50 +485,6 @@ router.get('/public/results', async (req, res) => {
       return res.status(404).json({ message: 'No published results found for the selected examination and year' });
     }
 
-    const totalObtained = filteredResults.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
-    const totalMarks = filteredResults.reduce((sum: number, result: any) => {
-      const setup = result.examId?.subjectMarks?.find((item: any) => String(item.subjectId) === String(result.subjectId?._id || result.subjectId));
-      return sum + Number(setup?.totalMarks || result.examId?.totalMarks || 100);
-    }, 0);
-    const percentage = totalMarks ? Math.round((totalObtained / totalMarks) * 100) : 0;
-
-    // GPA Calculation
-    const gradePoints: Record<string, number> = {
-      'A+': 5,
-      'A': 4,
-      'A-': 3.5,
-      'B': 3,
-      'C': 2,
-      'D': 1,
-      'F': 0
-    };
-    
-    let hasFailed = false;
-    let totalPoints = 0;
-    let subjectCount = 0;
-    
-    filteredResults.forEach((r: any) => {
-      const g = String(r.grade || '').trim().toUpperCase();
-      if (g) {
-        if (g === 'F' || r.isPassed === false) {
-          hasFailed = true;
-        }
-        const gp = gradePoints[g] || 0;
-        totalPoints += gp;
-        subjectCount++;
-      }
-    });
-    
-    let gpaText = 'F';
-    if (subjectCount > 0) {
-      if (hasFailed) {
-        gpaText = 'FAILED';
-      } else {
-        const average = totalPoints / subjectCount;
-        gpaText = `GPA=${average.toFixed(2)}`;
-      }
-    }
-
     // Format DOB to DD-MM-YYYY
     const formatDOB = (dateStr: any) => {
       if (!dateStr) return '';
@@ -531,6 +499,94 @@ router.get('/public/results', async (req, res) => {
         return '';
       }
     };
+
+    // GPA Calculation setup
+    const gradePoints: Record<string, number> = {
+      'A+': 5,
+      'A': 4,
+      'A-': 3.5,
+      'B': 3,
+      'C': 2,
+      'D': 1,
+      'F': 0
+    };
+
+    // Group results by examId
+    const examGroups: Record<string, any[]> = {};
+    filteredResults.forEach((r: any) => {
+      const examIdStr = String(r.examId?._id || r.examId || 'unknown');
+      if (!examGroups[examIdStr]) {
+        examGroups[examIdStr] = [];
+      }
+      examGroups[examIdStr].push(r);
+    });
+
+    const examsData = Object.entries(examGroups).map(([examIdStr, groupResults]) => {
+      const totalObtained = groupResults.reduce((sum: number, result: any) => sum + (Number(result.marksObtained) || 0), 0);
+      const totalMarks = groupResults.reduce((sum: number, result: any) => {
+        const setup = result.examId?.subjectMarks?.find((item: any) => String(item.subjectId) === String(result.subjectId?._id || result.subjectId));
+        return sum + Number(setup?.totalMarks || result.examId?.totalMarks || 100);
+      }, 0);
+      const percentage = totalMarks ? Math.round((totalObtained / totalMarks) * 100) : 0;
+
+      let hasFailed = false;
+      let totalPoints = 0;
+      let subjectCount = 0;
+
+      groupResults.forEach((r: any) => {
+        const g = String(r.grade || '').trim().toUpperCase();
+        if (g) {
+          if (g === 'F' || r.isPassed === false) {
+            hasFailed = true;
+          }
+          const gp = gradePoints[g] || 0;
+          totalPoints += gp;
+          subjectCount++;
+        }
+      });
+
+      let gpaText = 'F';
+      if (subjectCount > 0) {
+        if (hasFailed) {
+          gpaText = 'FAILED';
+        } else {
+          const average = totalPoints / subjectCount;
+          gpaText = `GPA=${average.toFixed(2)}`;
+        }
+      }
+
+      const firstResult = groupResults[0];
+      const examName = firstResult?.examId?.name || 'Examination';
+      const examYear = firstResult?.examId?.startDate ? new Date(firstResult.examId.startDate).getFullYear().toString() : searchYear;
+
+      return {
+        examId: examIdStr,
+        examName,
+        examYear,
+        summary: {
+          totalObtained,
+          totalMarks,
+          percentage,
+          passed: !hasFailed,
+          gpa: gpaText,
+          examName,
+          examYear,
+          board: req.query.board ? String(req.query.board).toUpperCase() : 'DHAKA'
+        },
+        results: groupResults.map((result: any) => ({
+          examName: result.examId?.name,
+          examType: result.examId?.type,
+          subjectName: result.subjectId?.name,
+          subjectCode: result.subjectId?.code || '',
+          marksObtained: result.marksObtained,
+          grade: result.grade,
+          isPassed: result.isPassed,
+          remarks: result.remarks,
+        })),
+      };
+    });
+
+    const primaryExam = examsData[0] || null;
 
     res.json({
       institution: {
@@ -554,26 +610,9 @@ router.get('/public/results', async (req, res) => {
         group: (student.classId as any)?.name?.toUpperCase()?.includes('SCIENCE') ? 'SCIENCE' : (student.classId as any)?.name?.toUpperCase()?.includes('COMMERCE') ? 'COMMERCE' : (student.classId as any)?.name?.toUpperCase()?.includes('HUMANITIES') ? 'HUMANITIES' : 'GENERAL',
         admissionDate: student.admissionDate,
       },
-      summary: {
-        totalObtained,
-        totalMarks,
-        percentage,
-        passed: !hasFailed,
-        gpa: gpaText,
-        examName: (filteredResults[0]?.examId as any)?.name || 'SSC or Equivalent Examination',
-        examYear: (filteredResults[0]?.examId as any)?.startDate ? new Date((filteredResults[0].examId as any).startDate).getFullYear().toString() : searchYear,
-        board: req.query.board ? String(req.query.board).toUpperCase() : 'DHAKA'
-      },
-      results: filteredResults.map((result: any) => ({
-        examName: result.examId?.name,
-        examType: result.examId?.type,
-        subjectName: result.subjectId?.name,
-        subjectCode: result.subjectId?.code || '',
-        marksObtained: result.marksObtained,
-        grade: result.grade,
-        isPassed: result.isPassed,
-        remarks: result.remarks,
-      })),
+      exams: examsData,
+      summary: primaryExam ? primaryExam.summary : null,
+      results: primaryExam ? primaryExam.results : []
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load public result', error });
