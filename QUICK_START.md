@@ -43,7 +43,7 @@ Start server:
 npm run dev
 ```
 
-Server runs at: `http://159.65.227.91:5000`
+Server runs at: `http://localhost:5000`
 
 ### 2. Web Client Setup
 
@@ -131,7 +131,7 @@ school_n/
 
 ## 🔑 API Endpoints
 
-All endpoints are on `http://159.65.227.91:5000/api`
+All endpoints are on `http://localhost:5000/api`
 
 ### Authentication
 - `POST /auth/login` - Login with email and password

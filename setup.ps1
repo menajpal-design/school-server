@@ -148,7 +148,7 @@ Next Steps:
    cd server
    npm run dev
    
-   Server will run at: http://159.65.227.91:5000
+   Server will run at: http://localhost:5000
 
 2. Start Web Client (in new terminal):
    cd client

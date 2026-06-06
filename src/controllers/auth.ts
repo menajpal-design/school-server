@@ -7,6 +7,9 @@ import crypto from 'crypto';
 import User from '../models/User';
 import Institution from '../models/Institution';
 import Student from '../models/Student';
+import Teacher from '../models/Teacher';
+import Staff from '../models/Staff';
+import Parent from '../models/Parent';
 import { generateUsername } from '../utils/credentials';
 import { calculatePlanDue } from '../config/plans';
 import { ensureDatabaseReady } from '../config/database';
@@ -576,6 +579,37 @@ export const getProfile = async (req: Request, res: Response) => {
     }
 
     const institution = (req as any).institution || user.institution;
+
+    let student = null;
+    let teacher = null;
+    let staff = null;
+    let parent = null;
+
+    if (user.role === 'student') {
+      student = await Student.findOne({ userId: user._id })
+        .populate('classId')
+        .populate('sectionId')
+        .lean();
+    } else if (['teacher', 'class_teacher', 'subject_teacher', 'head', 'assistant_head'].includes(user.role)) {
+      teacher = await Teacher.findOne({ userId: user._id })
+        .populate('assignedClasses')
+        .lean();
+    } else if (user.role === 'staff') {
+      staff = await Staff.findOne({ userId: user._id })
+        .lean();
+    } else if (user.role === 'parent') {
+      parent = await Parent.findOne({ userId: user._id })
+        .populate({
+          path: 'children',
+          populate: [
+            { path: 'classId' },
+            { path: 'sectionId' },
+            { path: 'userId', select: 'name email avatar phone role' }
+          ]
+        })
+        .lean();
+    }
+
     res.json({
       user: {
         id: user._id,
@@ -586,7 +620,11 @@ export const getProfile = async (req: Request, res: Response) => {
         avatar: user.avatar,
         institutionId: institution?._id || user.institutionId,
         institution: serializeInstitution(institution),
-        permissions: user.permissions
+        permissions: user.permissions,
+        student,
+        teacher,
+        staff,
+        parent
       }
     });
   } catch (error) {

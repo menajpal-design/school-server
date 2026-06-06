@@ -2,7 +2,7 @@ import http from 'http';
 import https from 'https';
 import { URL } from 'url';
 
-const baseUrl = process.env.SMOKE_TEST_URL || 'http://159.65.227.91:5000';
+const baseUrl = process.env.SMOKE_TEST_URL || 'http://localhost:5000';
 const testHost = process.env.SMOKE_TEST_HOST;
 const timeoutMs = Number(process.env.SMOKE_TEST_TIMEOUT || '15000');
 

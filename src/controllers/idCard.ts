@@ -8,6 +8,7 @@ import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
 import Parent from '../models/Parent';
 import { sendEmail } from '../utils/email';
+import { normalizeRole } from '../middleware/auth';
 
 type OwnerType = 'student' | 'teacher' | 'staff' | 'head';
 
@@ -112,16 +113,41 @@ export const getIdCardById = async (req: Request, res: Response) => { try { cons
 export const getMyIdCard = async (req: Request, res: Response) => {
   try {
     const user: any = (req as any).user;
-    if (user.role === 'parent') return res.status(403).json({ message: 'Parent accounts must use a child card view, not my-card.' });
-    if (user.role === 'student') {
+    const role = normalizeRole(user.role);
+    if (role === 'parent') return res.status(403).json({ message: 'Parent accounts must use a child card view, not my-card.' });
+    if (role === 'student') {
       const student = await resolveStudentProfileForUser(user);
       if (!student) return res.status(404).json({ message: 'Student profile was not found for this login. Please contact school office.' });
-      const card = await findStudentCard(student, user);
-      if (!card) return res.json({ card: null, student, institution: (student as any).institutionId, message: 'Your ID card is not generated yet. Please contact school office.', generated: false });
+      let card = await findStudentCard(student, user);
+      if (!card) {
+        card = await createCardForOwner('student', student, user._id || user.id);
+        card = await IDCard.findById(card._id).populate('ownerId').populate('institutionId');
+      }
       return res.json({ card, student, institution: (student as any).institutionId, generated: true });
     }
     const ownerIds = unique([user?._id, user?.id]);
-    const card = await IDCard.findOne({ institutionId: user.institutionId, ownerId: { $in: ownerIds } }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
+    let card = await IDCard.findOne({ institutionId: user.institutionId, ownerId: { $in: ownerIds } }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
+    if (!card) {
+      if (['teacher', 'class_teacher', 'subject_teacher'].includes(role)) {
+        const teacher = await Teacher.findOne({ userId: user._id }).populate('institutionId');
+        if (teacher) {
+          const generated = await createCardForOwner('teacher', teacher, user._id || user.id);
+          card = await IDCard.findById(generated._id).populate('ownerId').populate('institutionId');
+        }
+      } else if (role === 'staff') {
+        const staff = await Staff.findOne({ userId: user._id }).populate('institutionId');
+        if (staff) {
+          const generated = await createCardForOwner('staff', staff, user._id || user.id);
+          card = await IDCard.findById(generated._id).populate('ownerId').populate('institutionId');
+        }
+      } else if (role === 'head' || role === 'assistant_head') {
+        const teacher = await Teacher.findOne({ userId: user._id }).populate('institutionId');
+        if (teacher) {
+          const generated = await createCardForOwner(role === 'head' ? 'head' : 'teacher', teacher, user._id || user.id);
+          card = await IDCard.findById(generated._id).populate('ownerId').populate('institutionId');
+        }
+      }
+    }
     if (!card) return res.status(404).json({ message: 'No ID card found for current user' });
     return res.json({ card, generated: true });
   } catch (error) { return res.status(500).json({ message: 'Server error', error }); }
@@ -130,14 +156,18 @@ export const getMyIdCard = async (req: Request, res: Response) => {
 export const getChildIdCard = async (req: Request, res: Response) => {
   try {
     const user: any = (req as any).user;
-    if (user.role !== 'parent') return res.status(403).json({ message: 'Only parent accounts can use child card view.' });
+    const role = normalizeRole(user.role);
+    if (role !== 'parent') return res.status(403).json({ message: 'Only parent accounts can use child card view.' });
     const parent = await Parent.findOne({ institutionId: user.institutionId, userId: user._id }).lean();
     const childIds = (parent?.children || []).map((id: any) => String(id));
     if (!childIds.includes(String(req.params.studentId))) return res.status(403).json({ message: 'Access denied. This child is not linked to your parent account.' });
     const student = await Student.findOne({ _id: req.params.studentId, institutionId: user.institutionId }).populate('userId').populate('classId').populate('sectionId').populate('institutionId');
     if (!student) return res.status(404).json({ message: 'Child student profile not found.' });
-    const card = await findStudentCard(student, { ...user, _id: (student as any).userId?._id || (student as any).userId, id: (student as any).userId?._id || (student as any).userId });
-    if (!card) return res.json({ card: null, student, institution: (student as any).institutionId, message: 'This child ID card is not generated yet. Please contact school office.', generated: false });
+    let card = await findStudentCard(student, { ...user, _id: (student as any).userId?._id || (student as any).userId, id: (student as any).userId?._id || (student as any).userId });
+    if (!card) {
+      card = await createCardForOwner('student', student, user._id || user.id);
+      card = await IDCard.findById(card._id).populate('ownerId').populate('institutionId');
+    }
     return res.json({ card, student, institution: (student as any).institutionId, generated: true });
   } catch (error) { return res.status(500).json({ message: 'Server error', error }); }
 };

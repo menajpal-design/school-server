@@ -214,7 +214,7 @@ server/
 ```bash
 npm run dev
 ```
-Server will start at `http://159.65.227.91:5000`
+Server will start at `http://localhost:5000`
 
 ### Production Build
 ```bash
