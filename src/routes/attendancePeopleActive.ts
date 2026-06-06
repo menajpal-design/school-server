@@ -1,6 +1,7 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import { authenticate, normalizeRole } from '../middleware/auth';
+import User from '../models/User';
 import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
@@ -19,16 +20,24 @@ const parseDate = (value?: string) => { const raw = String(value || new Date().t
 const dayRange = (value?: string) => { const d = parseDate(value); return { start: new Date(d.getFullYear(), d.getMonth(), d.getDate()), end: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), date: new Date(d.getFullYear(), d.getMonth(), d.getDate()) }; };
 async function classTeacherScope(M: any, req: any) { if (normalizeRole(req.user.role) !== 'class_teacher') return null; const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean(); return ids(teacher?.assignedClasses || []); }
 async function assertClassScope(M: any, req: any, classId: any) { const scope = await classTeacherScope(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(classId))) throw Object.assign(new Error('Access denied. Class Teacher can mark only assigned class attendance.'), { statusCode: 403 }); }
+async function enrichUsers(rows: any[], field = 'userId') {
+  const userIds = [...new Set(rows.map((row: any) => String(row?.[field]?._id || row?.[field] || '')).filter(Boolean))];
+  if (!userIds.length) return rows;
+  const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean());
+  const map = new Map(users.map((user: any) => [String(user._id), user]));
+  return rows.map((row: any) => ({ ...row, [field]: map.get(String(row?.[field]?._id || row?.[field] || '')) || row[field] }));
+}
 
 router.get('/people', authenticate, async (req: any, res) => {
   try {
     const M = await models(req); const institutionId = req.user.institutionId; const role = normalizeRole(req.user.role); const personType = String(req.query.personType || 'student').toLowerCase();
-    if (personType === 'teacher') { if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Only school leaders can load teacher roster.' }); const people = await M.Teacher.find({ institutionId, isActive: { $ne: false } }).populate('userId', 'name username email phone avatar role').sort({ createdAt: -1 }).lean(); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); }
-    if (personType === 'staff') { if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Only school leaders can load staff roster.' }); const people = await M.Staff.find({ institutionId, isActive: { $ne: false } }).populate('userId', 'name username email phone avatar role').sort({ createdAt: -1 }).lean(); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); }
+    if (personType === 'teacher') { if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Only school leaders can load teacher roster.' }); const rows = await M.Teacher.find({ institutionId, isActive: { $ne: false } }).sort({ createdAt: -1 }).lean(); const people = await enrichUsers(rows); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); }
+    if (personType === 'staff') { if (!['head', 'assistant_head', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Only school leaders can load staff roster.' }); const rows = await M.Staff.find({ institutionId, isActive: { $ne: false } }).sort({ createdAt: -1 }).lean(); const people = await enrichUsers(rows); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); }
     const query: any = { institutionId, isActive: true }; let lockedClassId = ''; let lockedClassIds: string[] = [];
     if (role === 'class_teacher') { lockedClassIds = await classTeacherScope(M, req) || []; if (!lockedClassIds.length) return res.json({ people: [], lockedClassId: '', lockedClassIds, message: 'No assigned class found for this class teacher.' }); const requested = String(req.query.classId || ''); lockedClassId = lockedClassIds.includes(requested) ? requested : lockedClassIds[0]; query.classId = lockedClassId; } else if (req.query.classId) query.classId = req.query.classId;
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
-    const people = await M.Student.find(query).populate('userId', 'name username email phone avatar role').populate('classId', 'name grade').populate('sectionId', 'name').sort({ rollNumber: 1, createdAt: 1 }).lean();
+    const rows = await M.Student.find(query).populate('classId', 'name grade').populate('sectionId', 'name').sort({ rollNumber: 1, createdAt: 1 }).lean();
+    const people = await enrichUsers(rows);
     return res.json({ people, lockedClassId, lockedClassIds, debug: { source: 'active-school-db', count: people.length } });
   } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load attendance people', error }); }
 });
@@ -41,7 +50,7 @@ router.get('/', authenticate, async (req: any, res, next) => {
     if (req.query.sectionId) query.sectionId = req.query.sectionId;
     if (req.query.userType) query.userType = req.query.userType;
     if (req.query.date) query.date = { $gte: start, $lt: end };
-    const attendance = await M.Attendance.find(query).populate('studentId', 'rollNumber guardianName').populate('userId', 'name avatar email role').populate('classId', 'name grade').populate('sectionId', 'name').sort({ date: -1 }).lean();
+    const attendance = await M.Attendance.find(query).populate('studentId', 'rollNumber guardianName').populate('classId', 'name grade').populate('sectionId', 'name').sort({ date: -1 }).lean();
     return res.json({ attendance, debug: { source: 'active-school-db', count: attendance.length } });
   } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load attendance', error }); }
 });
