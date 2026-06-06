@@ -55,6 +55,7 @@ import siteSettingsRoutes from './routes/siteSettings';
 import devTestRoutes from './routes/devTest';
 import storageSyncRoutes from './routes/storageSync';
 import SmsLog from './models/SmsLog';
+import './models/allModels';
 import { config } from './config/config';
 import './config/tenantStorage';
 import storageConfigGuard from './middlewares/storageConfigGuard';

@@ -50,6 +50,12 @@ const registerBridgeModels = (connection: mongoose.Connection) => {
     if (baseModel) registerModel(connection, baseModel);
   }
 };
+const registerAllModels = (connection: mongoose.Connection) => {
+  for (const modelName of Object.keys(mongoose.models)) {
+    const baseModel = mongoose.models[modelName];
+    if (baseModel) registerModel(connection, baseModel);
+  }
+};
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T | null> => {
   let timeout: NodeJS.Timeout | undefined;
@@ -83,6 +89,7 @@ const getTenantConnection = async (context: TenantStorageContext) => {
     }).asPromise().then((connection) => {
       tenantConnectionFailures.delete(key);
       registerBridgeModels(connection);
+      registerAllModels(connection);
       connection.collection('users').dropIndex('email_1').catch(() => {});
       connection.collection('users').dropIndex('username_1').catch(() => {});
       return connection;
@@ -108,7 +115,10 @@ const getTenantModel = async (baseModel: any, context: TenantStorageContext | nu
   if (context.mongoUri) {
     const primaryContext = { ...context, mongoUri: context.mongoUri } as TenantStorageContext;
     const primaryConnection = await getTenantConnection(primaryContext);
-    if (primaryConnection) return registerModel(primaryConnection, baseModel);
+    if (primaryConnection) {
+      registerAllModels(primaryConnection);
+      return registerModel(primaryConnection, baseModel);
+    }
   }
   // If this is a read operation, try archive URIs (allow reading historical data)
   if (forRead && Array.isArray(context.archiveMongoUris)) {

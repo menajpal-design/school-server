@@ -8,6 +8,9 @@ import Parent from '../models/Parent';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
+import Class from '../models/Class';
+import Section from '../models/Section';
+import User from '../models/User';
 import { sendAttendanceDailySMS, sendAttendanceReminderSMS } from '../utils/sms';
 import { resolveActorScope } from '../services/permissionPolicy';
 
@@ -591,7 +594,7 @@ router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
     const personType = normalizePersonType(req.query.personType);
     if (personType === 'teacher') {
       const teachers = await Teacher.find(employeeAttendanceQuery(req))
-        .populate('userId', 'name avatar email role')
+        .populate('userId', 'name avatar email role phone username fingerprintId biometricId')
         .select('userId employeeId department designation isActive')
         .sort({ createdAt: -1 })
         .lean();
@@ -600,11 +603,52 @@ router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
 
     if (personType === 'staff') {
       const staff = await Staff.find(employeeAttendanceQuery(req))
-        .populate('userId', 'name avatar email role')
+        .populate('userId', 'name avatar email role phone username fingerprintId biometricId')
         .select('userId employeeId department designation isActive')
         .sort({ createdAt: -1 })
         .lean();
       return res.json({ people: staff.map((staffMember: any) => ({ ...staffMember, _id: staffMember.userId?._id || staffMember.userId, profileId: staffMember._id, personType: 'staff' })) });
+    }
+
+    if (personType === 'head') {
+      const heads = await User.find({ institutionId: req.user.institutionId, role: 'head', isActive: true })
+        .select('name avatar email role phone username fingerprintId biometricId')
+        .sort({ createdAt: -1 })
+        .lean();
+      return res.json({ people: heads.map((user: any) => ({ ...user, _id: user._id, personType: 'teacher' })) });
+    }
+
+    if (personType === 'assistant_head') {
+      const assistantHeads = await User.find({ institutionId: req.user.institutionId, role: 'assistant_head', isActive: true })
+        .select('name avatar email role phone username fingerprintId biometricId')
+        .sort({ createdAt: -1 })
+        .lean();
+      return res.json({ people: assistantHeads.map((user: any) => ({ ...user, _id: user._id, personType: 'teacher' })) });
+    }
+
+    if (personType === 'all_staff') {
+      const [teachers, staff, users] = await Promise.all([
+        Teacher.find(employeeAttendanceQuery(req)).populate('userId', 'name avatar email role phone username fingerprintId biometricId').lean(),
+        Staff.find(employeeAttendanceQuery(req)).populate('userId', 'name avatar email role phone username fingerprintId biometricId').lean(),
+        User.find({ institutionId: req.user.institutionId, role: { $in: ['head', 'assistant_head'] }, isActive: true }).select('name avatar email role phone username fingerprintId biometricId').lean()
+      ]);
+
+      const list: any[] = [];
+      teachers.forEach((t: any) => {
+        if (t.userId) {
+          list.push({ ...t, _id: t.userId._id || t.userId, profileId: t._id, personType: 'teacher' });
+        }
+      });
+      staff.forEach((s: any) => {
+        if (s.userId) {
+          list.push({ ...s, _id: s.userId._id || s.userId, profileId: s._id, personType: 'staff' });
+        }
+      });
+      users.forEach((u: any) => {
+        list.push({ ...u, _id: u._id, personType: u.role === 'assistant_head' ? 'teacher' : 'staff' });
+      });
+
+      return res.json({ people: list });
     }
 
     const query = await attendanceStudentQuery(req);
