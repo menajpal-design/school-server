@@ -1,17 +1,20 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
 import { authenticate, authorize } from '../middleware/auth';
 import getTenantIdFromReq from '../utils/tenant';
 import User from '../models/User';
 import ClassModel from '../models/Class';
 import Teacher from '../models/Teacher';
 
+type UserRole = 'admin' | 'super_admin' | 'head' | 'assistant_head' | 'class_teacher' | 'subject_teacher' | 'teacher' | 'finance_officer' | 'staff' | 'student' | 'parent' | 'committee_member';
+
 const router = express.Router();
 const platformAdminRoles = ['admin', 'super_admin'];
-const validRoles = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
-const roleHierarchy = ['super_admin', 'admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+const validRoles: UserRole[] = ['admin', 'super_admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
+const roleHierarchy: UserRole[] = ['super_admin', 'admin', 'head', 'assistant_head', 'class_teacher', 'subject_teacher', 'teacher', 'finance_officer', 'staff', 'student', 'parent', 'committee_member'];
 const isPlatformAdmin = (role?: string) => platformAdminRoles.includes(role || '');
-const getManagedRoles = (role?: string) => { const index = roleHierarchy.indexOf(role || ''); return index >= 0 ? roleHierarchy.slice(index + 1) : []; };
+const getManagedRoles = (role?: string) => { const index = roleHierarchy.indexOf(role as UserRole); return index >= 0 ? roleHierarchy.slice(index + 1) : []; };
 const scopedUserQuery = (req: any) => { if (isPlatformAdmin(req.user?.role)) return {}; const tenantId = getTenantIdFromReq(req); return tenantId ? { institutionId: tenantId } : {}; };
 const buildUserListQuery = (req: any) => {
   const baseQuery: any = { ...scopedUserQuery(req) };
@@ -37,13 +40,15 @@ async function syncClassTeacherProfile(req: any, targetUser: any, nextRole: stri
     return;
   }
   await validateClassTeacherAssignment(req, targetUser._id, classId);
+  const classObjectId = new mongoose.Types.ObjectId(String(classId));
   let teacher = await Teacher.findOne({ institutionId, userId: targetUser._id });
-  if (!teacher) teacher = await Teacher.create({ userId: targetUser._id, employeeId: targetUser.employeeId || `T-${Date.now()}`, designation: 'Class Teacher', department: targetUser.department || 'General', assignedClasses: [classId], subjects: [], joiningDate: new Date(), qualification: targetUser.qualification || 'Not specified', experience: 0, salary: Number(targetUser.salary || 0), institutionId });
+  if (!teacher) teacher = await Teacher.create({ userId: targetUser._id, employeeId: targetUser.employeeId || `T-${Date.now()}`, designation: 'Class Teacher', department: targetUser.department || 'General', assignedClasses: [classObjectId], subjects: [], joiningDate: new Date(), qualification: targetUser.qualification || 'Not specified', experience: 0, salary: Number(targetUser.salary || 0), institutionId });
   teacher.designation = 'Class Teacher';
-  teacher.assignedClasses = Array.from(new Set([String(classId), ...(teacher.assignedClasses || []).map((x: any) => String(x))]));
+  const classIds = Array.from(new Set([String(classId), ...(teacher.assignedClasses || []).map((x: any) => String(x))])).map((value) => new mongoose.Types.ObjectId(value));
+  teacher.assignedClasses = classIds as any;
   await teacher.save();
-  await ClassModel.updateMany({ institutionId, classTeacherId: targetUser._id, _id: { $ne: classId } }, { $unset: { classTeacherId: '' } });
-  await ClassModel.findOneAndUpdate({ _id: classId, institutionId }, { $set: { classTeacherId: targetUser._id } });
+  await ClassModel.updateMany({ institutionId, classTeacherId: targetUser._id, _id: { $ne: classObjectId } }, { $unset: { classTeacherId: '' } });
+  await ClassModel.findOneAndUpdate({ _id: classObjectId, institutionId }, { $set: { classTeacherId: targetUser._id } });
 }
 
 router.use(authenticate);
@@ -62,7 +67,7 @@ router.get('/permissions', (req, res) => { const managedRoles = getManagedRoles(
 router.patch('/:id/status', async (req, res) => { try { const managedRoles = getManagedRoles(req.user?.role); const user = await User.findOneAndUpdate({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } }, { isActive: req.body.isActive }, { new: true }).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt'); if (!user) return res.status(404).json({ message: 'User not found' }); res.json({ user }); } catch (error) { res.status(500).json({ message: 'Failed to update user status', error }); } });
 router.patch('/:id/role', async (req: any, res) => {
   try {
-    const nextRole = String(req.body.role || ''); const managedRoles = getManagedRoles(req.user?.role);
+    const nextRole = String(req.body.role || '') as UserRole; const managedRoles = getManagedRoles(req.user?.role);
     if (!validRoles.includes(nextRole)) return res.status(400).json({ message: 'Invalid role' });
     if (!managedRoles.includes(nextRole)) return res.status(403).json({ message: 'You can only assign lower roles.' });
     const target = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } });
