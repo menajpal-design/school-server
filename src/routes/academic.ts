@@ -13,6 +13,7 @@ import Attendance from '../models/Attendance';
 import IDCard from '../models/IDCard';
 import Institution from '../models/Institution';
 import Parent from '../models/Parent';
+import SiteSetting from '../models/SiteSetting';
 import { sendResultSMS } from '../utils/sms';
 
 const router = express.Router();
@@ -359,11 +360,12 @@ router.get('/public/results/options', async (req, res) => {
   try {
     const institution = await resolvePublicInstitution(req);
     if (!institution) return res.status(404).json({ message: 'School not found' });
-    const [classes, exams] = await Promise.all([
+    const [classes, exams, appControl] = await Promise.all([
       ClassModel.find({ institutionId: institution._id, isActive: true }).select('name grade academicYear').sort({ grade: 1 }).lean(),
       Exam.find({ institutionId: institution._id, isPublished: true }).select('name type classId startDate endDate').sort({ startDate: -1 }).lean(),
+      SiteSetting.findOne({ key: 'app_control_settings', institutionId: institution._id }).lean(),
     ]);
-    res.json({ institution, classes, exams });
+    res.json({ institution, classes, exams, appControlSettings: appControl?.value || {} });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load result options', error });
   }
@@ -440,6 +442,12 @@ router.get('/public/results', async (req, res) => {
       }
       if (search === 'dibs') {
         return examName.includes('dibs') || className.includes('dibs') || classGrade.includes('dibs');
+      }
+      if (search === 'half_yearly' || search === 'half_terminal' || search === 'half_term') {
+        return examName.includes('half') || examName.includes('mid') || examName.includes('অর্ধ') || examName.includes('অর্ধবার্ষিক');
+      }
+      if (search === 'final' || search === 'annual') {
+        return examName.includes('final') || examName.includes('annual') || examName.includes('বার্ষিক') || examName.includes('শেষ');
       }
       return true;
     };
