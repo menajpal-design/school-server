@@ -36,14 +36,10 @@ const publicSchoolSelect = 'name type eiin address website domains subdomain log
 
 const resolveInstitution = async (req: any) => {
   const subdomain = subdomainFromRequest(req);
-  if (subdomain) {
-    return Institution.findOne({ subdomain, isActive: true }).select(publicSchoolSelect).lean();
-  }
+  if (subdomain) return Institution.findOne({ subdomain, isActive: true }).select(publicSchoolSelect).lean();
 
   const institutionId = clean(req.query.institutionId || req.query.schoolId);
-  if (institutionId) {
-    return Institution.findOne({ _id: institutionId, isActive: true }).select(publicSchoolSelect).lean();
-  }
+  if (institutionId) return Institution.findOne({ _id: institutionId, isActive: true }).select(publicSchoolSelect).lean();
 
   const host = hostFromRequest(req);
   if (host && host !== MAIN_DOMAIN && host !== `www.${MAIN_DOMAIN}` && host !== 'localhost' && host !== '127.0.0.1') {
@@ -61,12 +57,13 @@ const resolveInstitution = async (req: any) => {
 };
 
 const loadPublicOptions = async (institutionId: any, classId?: any) => {
-  const publishedExamIds = await Result.distinct('examId', { institutionId, workflowStatus: 'published' });
-  const classIdsWithPublishedResults = await Student.distinct('classId', {
-    institutionId,
-    isActive: true,
-    _id: { $in: await Result.distinct('studentId', { institutionId, workflowStatus: 'published' }) },
-  });
+  const [publishedExamIds, publishedStudentIds] = await Promise.all([
+    Result.distinct('examId', { institutionId, workflowStatus: 'published' }),
+    Result.distinct('studentId', { institutionId, workflowStatus: 'published' }),
+  ]);
+  const classIdsWithPublishedResults = publishedStudentIds.length
+    ? await Student.distinct('classId', { institutionId, isActive: true, _id: { $in: publishedStudentIds } })
+    : [];
 
   const classQuery: any = { institutionId, isActive: true };
   if (classIdsWithPublishedResults.length) classQuery._id = { $in: classIdsWithPublishedResults };
@@ -75,15 +72,8 @@ const loadPublicOptions = async (institutionId: any, classId?: any) => {
   if (classId) examQuery.classId = classId;
 
   const [classes, exams] = await Promise.all([
-    ClassModel.find(classQuery)
-      .select('name grade academicYear sections')
-      .populate('sections', 'name isActive')
-      .sort({ grade: 1, name: 1 })
-      .lean(),
-    Exam.find(examQuery)
-      .select('name type classId startDate endDate subjectMarks totalMarks passingMarks')
-      .sort({ startDate: -1, createdAt: -1 })
-      .lean(),
+    ClassModel.find(classQuery).select('name grade academicYear sections').populate('sections', 'name isActive').sort({ grade: 1, name: 1 }).lean(),
+    Exam.find(examQuery).select('name type classId startDate endDate subjectMarks totalMarks passingMarks').sort({ startDate: -1, createdAt: -1 }).lean(),
   ]);
 
   return { classes, exams };
@@ -121,7 +111,6 @@ router.get('/options', async (req, res) => {
   try {
     const institution = await resolveInstitution(req);
     if (!institution) return res.status(404).json({ message: 'School not found' });
-
     const { classes, exams } = await loadPublicOptions(institution._id, req.query.classId);
     res.json({ institution, school: institution, classes, exams, appControlSettings: {} });
   } catch (error) {
@@ -159,9 +148,7 @@ router.get('/', async (req, res) => {
 
     if (regNumber) {
       const regLower = regNumber.toLowerCase();
-      candidates = candidates.filter((student: any) =>
-        String(student.registrationNo || student.registrationNumber || student.idCardNumber || student._id || '').toLowerCase() === regLower
-      );
+      candidates = candidates.filter((student: any) => String(student.registrationNo || student.registrationNumber || student.idCardNumber || student._id || '').toLowerCase() === regLower);
     }
 
     if (studentName) {
@@ -169,7 +156,7 @@ router.get('/', async (req, res) => {
       candidates = candidates.filter((student: any) => String(student.userId?.name || student.guardianName || '').toLowerCase().includes(nameLower));
     }
 
-    const student = candidates[0];
+    const student: any = candidates[0];
     if (!student) return res.status(404).json({ message: 'No student found for this school, class, section and search details' });
 
     const results = await Result.find({ institutionId: institution._id, studentId: student._id, examId, workflowStatus: 'published' })
@@ -256,7 +243,7 @@ router.get('/', async (req, res) => {
     res.json({
       institution: {
         id: institution._id,
-        name: institution.name,
+        name: (institution as any).name,
         eiin: (institution as any).eiin,
         address: (institution as any).address,
         logo: (institution as any).logo || (institution as any).logoUrl || (institution as any).image || (institution as any).imageUrl || '',
