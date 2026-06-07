@@ -33,6 +33,7 @@ import financeCollectionsDirectRoutes from './routes/financeCollectionsDirect';
 import financePaymentsDirectRoutes from './routes/financePaymentsDirect';
 import financeSalaryDirectRoutes from './routes/financeSalaryDirect';
 import financeReportsDirectRoutes from './routes/financeReportsDirect';
+import studentFeePaymentRoutes from './routes/studentFeePayments';
 import payrollRoutes from './routes/payroll';
 import promotionRoutes from './routes/promotions';
 import documentRoutes from './routes/documents';
@@ -94,18 +95,7 @@ app.use(cookieParser);
 app.use('/api/csrf', csrfRoutes);
 if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') { app.use(csrfProtection); } else { logger.warn('⚠️ CSRF protection disabled in development mode'); }
 
-// Wrap subsequent API routes/middleware in tenant context (except auth writes & central users lookup)
-app.use((req: any, res, next) => {
-  const path = req.path;
-  const isAuthWrite = path.startsWith('/api/auth') && !path.startsWith('/api/auth/profile');
-  const isUsersRoute = path.startsWith('/api/users');
-  if (isAuthWrite || isUsersRoute) {
-    return next();
-  }
-  const context = req.institution ? resolveTenantStorageContext(req.institution) : null;
-  runWithTenantStorage(context, next, req.user, req.institution);
-});
-
+app.use((req: any, res, next) => { const path = req.path; const isAuthWrite = path.startsWith('/api/auth') && !path.startsWith('/api/auth/profile'); const isUsersRoute = path.startsWith('/api/users'); if (isAuthWrite || isUsersRoute) return next(); const context = req.institution ? resolveTenantStorageContext(req.institution) : null; runWithTenantStorage(context, next, req.user, req.institution); });
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/config', configRoutes);
@@ -132,6 +122,7 @@ app.use('/api/attendance', attendanceMeRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/holidays', holidayRoutes);
+app.use('/api/finance/my-fees', studentFeePaymentRoutes);
 app.use('/api/finance/fees', financeFeesDirectRoutes);
 app.use('/api/finance/collections', financeCollectionsDirectRoutes);
 app.use('/api/finance/payments', financePaymentsDirectRoutes);
