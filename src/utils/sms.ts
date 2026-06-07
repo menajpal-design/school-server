@@ -31,6 +31,7 @@ const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => { const digits = String(value || '').replace(/\D/g, '').replace(/^88/, ''); return digits && !digits.startsWith('0') ? `0${digits}` : digits; };
 const asciiOnly = (value: any) => String(value || '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
 const compactUrl = (value: string) => String(value || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+const compactDomain = (value: string) => compactUrl(value).replace(/\/login$/i, '');
 
 const parseGatewayResponse = (text: string) => {
   const raw = String(text || '').trim();
@@ -41,17 +42,50 @@ const parseGatewayResponse = (text: string) => {
 const cleanOrigin = (value?: string) => { const raw = String(value || '').trim(); if (!raw || /localhost|127\.0\.0\.1/i.test(raw)) return ''; const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`; try { const url = new URL(withProtocol); return `${url.protocol}//${url.host}`.replace(/\/$/, ''); } catch (_) { return ''; } };
 const frontendOriginFromEnv = () => cleanOrigin(process.env.FRONTEND_URL || process.env.CLIENT_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || '');
 const rootDomainFromEnv = () => { const origin = frontendOriginFromEnv(); if (origin) { try { return new URL(origin).hostname.replace(/^www\./i, ''); } catch (_) { return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, ''); } } return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, ''); };
-const buildInstitutionLoginUrl = (institution: any) => { const subdomain = String(institution?.subdomain || '').trim().toLowerCase(); if (subdomain) return `https://${subdomain}.${rootDomainFromEnv()}/login`; const domains = Array.isArray(institution?.domains) ? institution.domains : []; const domainOrigin = cleanOrigin(domains.find(Boolean)); if (domainOrigin) return `${domainOrigin}/login`; const websiteOrigin = cleanOrigin(institution?.website); if (websiteOrigin) return `${websiteOrigin}/login`; const envOrigin = frontendOriginFromEnv() || `https://www.${rootDomainFromEnv()}`; return `${envOrigin}/login`; };
-const getInstitutionSmsBranding = async (institutionId?: any) => { if (!institutionId) return null; const institution: any = await Institution.findById(institutionId).select('name website domains subdomain').lean(); if (!institution) return null; const appName = asciiOnly(institution.name || process.env.APP_NAME || 'ES') || 'ES'; return { appName, loginUrl: buildInstitutionLoginUrl(institution) }; };
+const buildInstitutionLoginUrl = (institution: any) => {
+  const subdomain = String(institution?.subdomain || '').trim().toLowerCase();
+  if (subdomain) return `https://${subdomain}.${rootDomainFromEnv()}/login`;
+  const domains = Array.isArray(institution?.domains) ? institution.domains : [];
+  const domainOrigin = cleanOrigin(domains.find(Boolean));
+  if (domainOrigin) return `${domainOrigin}/login`;
+  const websiteOrigin = cleanOrigin(institution?.website);
+  if (websiteOrigin) return `${websiteOrigin}/login`;
+  const envOrigin = frontendOriginFromEnv() || `https://www.${rootDomainFromEnv()}`;
+  return `${envOrigin}/login`;
+};
+const getInstitutionSmsBranding = async (institutionId?: any) => {
+  if (!institutionId) return null;
+  const institution: any = await Institution.findById(institutionId).select('name website domains subdomain').lean();
+  if (!institution) return null;
+  const appName = asciiOnly(institution.name || process.env.APP_NAME || 'School').slice(0, 24) || 'School';
+  return { appName, loginUrl: buildInstitutionLoginUrl(institution) };
+};
 
 const GSM_7_REGEX = /^[A-Za-z0-9 @£$¥èéùìòÇ\nØøCRÅå_"'!#%&()\-:;<=>?¡ÄÖÑÜ§¿äöñüà^{}\[~\]|€\/\.\+,]*$/;
 function computeSmsSegments(message: string) { const msg = String(message || ''); const isGsm7 = GSM_7_REGEX.test(msg); if (isGsm7) return msg.length <= 160 ? 1 : Math.ceil(msg.length / 153); return msg.length <= 70 ? 1 : Math.ceil(msg.length / 67); }
 const oneCreditMessage = (message: string) => { const msg = String(message || '').replace(/\s+/g, ' ').trim(); const isGsm7 = GSM_7_REGEX.test(msg); const limit = isGsm7 ? 160 : 70; return msg.length <= limit ? msg : msg.slice(0, limit); };
 const forceOneCreditOptions = (options: SMSOptions): SMSOptions => ({ ...options, message: oneCreditMessage(options.message || '') });
+const replaceLoginPart = (message: string, loginUrl: string) => {
+  const login = compactUrl(loginUrl);
+  let next = String(message || '');
+  if (/Login\s*:/i.test(next)) next = next.replace(/Login\s*:\s*\S+/i, `Login:${login}`);
+  else next += ` Login:${login}`;
+  next = next.replace(/https?:\/\/localhost(?::\d+)?\/login/gi, login).replace(/localhost(?::\d+)?\/login/gi, login);
+  next = next.replace(/https?:\/\/(?:www\.)?easyschool\.live\/login/gi, login).replace(/(?:www\.)?easyschool\.live\/login/gi, login);
+  return next;
+};
 const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOptions> => {
   if (!options.institutionId || !options.message) return forceOneCreditOptions(options);
-  try { const branding = await getInstitutionSmsBranding(options.institutionId); if (!branding) return forceOneCreditOptions(options); let message = String(options.message || ''); message = message.replace(/^\s*(EASY SCHOOL|Easy School)\b/, branding.appName); message = message.replace(/Login:\s*https?:\/\/[^\s.]+(?:\.[^\s.]+)*(?::\d+)?\/login\.?/i, `Login: ${compactUrl(branding.loginUrl)}`); message = message.replace(/https?:\/\/localhost(?::\d+)?\/login/gi, compactUrl(branding.loginUrl)); message = message.replace(/https?:\/\/www\.easyschool\.live\/login/gi, compactUrl(branding.loginUrl)); message = message.replace(/https?:\/\/easyschool\.live\/login/gi, compactUrl(branding.loginUrl)); return forceOneCreditOptions({ ...options, message }); }
-  catch (error) { console.error('Failed to apply institution SMS branding:', error); return forceOneCreditOptions(options); }
+  try {
+    const branding = await getInstitutionSmsBranding(options.institutionId);
+    if (!branding) return forceOneCreditOptions(options);
+    const brand = branding.appName;
+    let message = String(options.message || '');
+    message = message.replace(/^\s*(EASY SCHOOL|Easy School|ES)\b/i, brand);
+    message = replaceLoginPart(message, branding.loginUrl);
+    if (!message.toLowerCase().startsWith(brand.toLowerCase())) message = `${brand} ${message}`;
+    return forceOneCreditOptions({ ...options, message });
+  } catch (error) { console.error('Failed to apply institution SMS branding:', error); return forceOneCreditOptions(options); }
 };
 const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units); return Boolean(quota.allowed); };
 const buildChargeMeta = (options: SMSOptions, count = 1) => { const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose); const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose); return { smsChargeRate, smsChargeAmount }; };
@@ -59,9 +93,10 @@ const resolveSmsConfig = async (options: SMSOptions) => {
   const institution = options.institutionId ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean() : null;
   const institutionSettings: any = (institution as any)?.settings || {}; const globalEnabled = process.env.SMS_ENABLED !== 'false'; const provider = String(institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'anoncify').toLowerCase(); const apiUrl = String(institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || 'https://anoncify.xyz/api/sms').trim(); const rawKey = String(institutionSettings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || SMS_API_KEY || '').trim(); const isPlaceholder = !rawKey || rawKey.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey); const apiKey = isPlaceholder ? '' : rawKey; const enabled = typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled; return { institution, provider, apiUrl, apiKey, enabled };
 };
-export const buildCredentialSmsMessage = ({ loginUrl = frontendOriginFromEnv() ? `${frontendOriginFromEnv()}/login` : `https://www.${rootDomainFromEnv()}/login`, summary, username, password, parentUsername, parentPassword }: CredentialSmsOptions) => {
+export const buildCredentialSmsMessage = ({ appName = 'ES', loginUrl = frontendOriginFromEnv() ? `${frontendOriginFromEnv()}/login` : `https://www.${rootDomainFromEnv()}/login`, summary, username, password, parentUsername, parentPassword }: CredentialSmsOptions) => {
+  const brand = asciiOnly(appName || 'ES').slice(0, 24) || 'ES';
   const title = asciiOnly(summary).replace(/account created|created|for/gi, '').trim().slice(0, 18) || 'Account';
-  let msg = `ES ${title}: U:${asciiOnly(username)} P:${asciiOnly(password)} Login:${compactUrl(loginUrl)}`;
+  let msg = `${brand} ${title}: U:${asciiOnly(username)} P:${asciiOnly(password)} Login:${compactUrl(loginUrl)}`;
   if (parentUsername) msg += ` PU:${asciiOnly(parentUsername)} PP:${asciiOnly(parentPassword || 'N/A')}`;
   return oneCreditMessage(msg);
 };
@@ -82,10 +117,5 @@ const sendViaSmsLayer = async (rawOptions: SMSOptions): Promise<boolean> => {
   return successCount === recipients.length;
 };
 export const sendSMS = async (rawOptions: SMSOptions): Promise<boolean> => { const options = await applyInstitutionBrandingToSms(rawOptions); const recipients = recipientsFor(options.to).map(normalizePhone).filter(Boolean); if (!recipients.length) { await logSmsAttempt(options, 'failed', 'No phone number found'); return false; } const smsConfig = await resolveSmsConfig({ ...options, to: recipients }); if (!smsConfig.enabled) { await logSmsAttempt({ ...options, to: recipients, recipientPhone: options.recipientPhone || recipients, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, 1); return false; } if (smsConfig.provider === 'anoncify' || smsConfig.provider === 'smslayer') return sendViaSmsLayer({ ...options, to: recipients, smsProvider: smsConfig.provider, smsApiUrl: smsConfig.apiUrl, smsApiKey: smsConfig.apiKey, smsEnabled: smsConfig.enabled }); await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`); return false; };
-export const sendBulkSMS = async (recipients: string[], message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: recipients, message: oneCreditMessage(message), institutionId, type: 'notification', purpose: 'bulk' });
-export const sendAttendanceReminderSMS = async (phoneNumber: string, studentName: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(`Parent: ${asciiOnly(studentName)} absent today. Contact school if needed.`), institutionId, type: 'attendance', purpose: 'attendance_absent', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
-export const sendAttendanceDailySMS = async (phoneNumber: string, studentName: string, status: 'present' | 'absent' | 'late' | 'leave', institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(`Parent: ${asciiOnly(studentName)} marked ${status} today.`), institutionId, type: 'attendance', purpose: 'attendance_daily', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
-export const sendResultSMS = async (phoneNumber: string, studentName: string, summary: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(`Result ${asciiOnly(studentName)}: ${asciiOnly(summary)}`), institutionId, type: 'notification', purpose: 'result_published', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
-export const sendFeeDueSMS = async (phoneNumber: string, studentName: string, dueAmount: number, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(`Fee due ${asciiOnly(studentName)}: Tk ${dueAmount}. Please pay.`), institutionId, type: 'fee', purpose: 'fee_due', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
-export const sendMonthlyParentSummarySMS = async (phoneNumber: string, studentName: string, message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(message), institutionId, type: 'monthly_parent', purpose: 'monthly_parent', recipientName: `Parent of ${studentName}`, recipientType: 'guardian' });
-export const sendNotificationSMS = async (phoneNumber: string, message: string, institutionId?: any): Promise<boolean> => sendSMS({ to: phoneNumber, message: oneCreditMessage(message), institutionId, type: 'notification', purpose: 'notification' });
+export const sendBulkSMS = async (recipients: string[], message: string, institutionId?: any): Promise<{ success: number; failed: number }> => { let success = 0; let failed = 0; for (const to of recipients) { const ok = await sendSMS({ to, message, institutionId, type: 'notification', purpose: 'bulk_sms' }); if (ok) success += 1; else failed += 1; } return { success, failed }; };
+export { computeSmsSegments, oneCreditMessage };
