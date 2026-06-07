@@ -3,17 +3,20 @@ import mongoose from 'mongoose';
 import { authenticate, normalizeRole } from '../middleware/auth';
 import Student from '../models/Student';
 import Fee from '../models/Fee';
+import Payment from '../models/Payment';
 import User from '../models/User';
 import Teacher from '../models/Teacher';
 import ClassModel from '../models/Class';
 import Section from '../models/Section';
 import SiteSetting from '../models/SiteSetting';
 import { runWithTenantStorage } from '../config/tenantStorage';
+import { writeAuditLog } from '../services/auditService';
 
 const router = express.Router();
 const connections = new Map<string, Promise<mongoose.Connection>>();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
-
+const receiptNumber = () => `RCPT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+const money = (v: any) => Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0;
 const normalizeMongoItems = (config: any = {}) => {
   const existing = Array.isArray(config.mongodbUris) ? config.mongodbUris : [];
   const items = existing.map((item: any, index: number) => ({ id: item.id || `mongo-${index + 1}`, uri: item.uri || item.mongodbUrl || '', isActive: item.isActive === true })).filter((item: any) => item.uri);
@@ -22,7 +25,8 @@ const normalizeMongoItems = (config: any = {}) => {
   return items;
 };
 async function activeMongoUri(req: any) {
-  const setting: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
+  const scoped: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config', institutionId: req.user.institutionId }).lean())?.value || null);
+  const setting: any = scoped || await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
   const items = normalizeMongoItems(setting);
   const activeMongo = items.find((item: any) => item.isActive) || items[items.length - 1];
   const uri = String(activeMongo?.uri || setting.mongodbUrl || req.user?.institution?.settings?.mongodbUri || '').trim();
@@ -34,46 +38,37 @@ async function models(req: any) {
   if (!connections.has(uri)) connections.set(uri, mongoose.createConnection(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15000, connectTimeoutMS: 15000, socketTimeoutMS: 30000, retryWrites: true }).asPromise());
   const connection = await connections.get(uri)!;
   const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  return { Student: model('Student', Student), Fee: model('Fee', Fee), Teacher: model('Teacher', Teacher), Class: model('Class', ClassModel), Section: model('Section', Section) };
+  return { Student: model('Student', Student), Fee: model('Fee', Fee), Payment: model('Payment', Payment), Teacher: model('Teacher', Teacher), Class: model('Class', ClassModel), Section: model('Section', Section) };
 }
-async function enrichUsers(rows: any[]) {
-  const ids = [...new Set(rows.map((x: any) => String(x.userId?._id || x.userId || '')).filter(Boolean))];
-  const users = await primaryDb(() => User.find({ _id: { $in: ids } }).select('name phone email avatar').lean());
-  const map = new Map(users.map((u: any) => [String(u._id), u]));
-  return rows.map((row: any) => ({ ...row, userId: typeof row.userId === 'object' && row.userId?.name ? row.userId : (map.get(String(row.userId?._id || row.userId || '')) || row.userId) }));
-}
-function canOpenFinance(user: any) {
-  const role = normalizeRole(user?.role);
-  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
-  return ['head', 'assistant_head', 'finance_officer', 'class_teacher', 'admin', 'super_admin'].includes(role) || permissions.includes('manage:finance');
-}
+async function enrichUsers(rows: any[]) { const ids = [...new Set(rows.map((x: any) => String(x.userId?._id || x.userId || '')).filter(Boolean))]; const users = await primaryDb(() => User.find({ _id: { $in: ids } }).select('name phone email avatar').lean()); const map = new Map(users.map((u: any) => [String(u._id), u])); return rows.map((row: any) => ({ ...row, userId: typeof row.userId === 'object' && row.userId?.name ? row.userId : (map.get(String(row.userId?._id || row.userId || '')) || row.userId) })); }
+function canOpenFinance(user: any) { const role = normalizeRole(user?.role); const permissions = Array.isArray(user?.permissions) ? user.permissions : []; return ['head', 'assistant_head', 'finance_officer', 'class_teacher'].includes(role) || permissions.includes('manage:finance'); }
+async function classTeacherClassIds(M: any, req: any) { if (normalizeRole(req.user.role) !== 'class_teacher') return null; const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean(); return (teacher?.assignedClasses || []).map((x: any) => String(x?._id || x)).filter(Boolean); }
+async function assertClassTeacherStudent(M: any, req: any, student: any) { const scope = await classTeacherClassIds(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(student.classId?._id || student.classId))) throw Object.assign(new Error('Class Teacher can collect fee only from own assigned class students.'), { statusCode: 403 }); }
+
 router.use(authenticate);
 router.use((req: any, res, next) => canOpenFinance(req.user) ? next() : res.status(403).json({ message: 'Access denied. Finance management only.' }));
+
 router.get('/', async (req: any, res) => {
   try {
-    const M = await models(req);
-    const role = normalizeRole(req.user.role);
-    const term = String(req.query.search || '').trim().toLowerCase();
-    const studentQuery: any = { institutionId: req.user.institutionId };
-    if (role === 'class_teacher') {
-      const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean();
-      const classIds = (teacher?.assignedClasses || []).filter(Boolean);
-      if (!classIds.length) return res.json({ students: [], collections: [], source: 'class-teacher-no-class-scope' });
-      studentQuery.classId = { $in: classIds };
-    }
-    const rows = await M.Student.find(studentQuery).populate('classId', 'name grade').populate('sectionId', 'name').limit(200).lean();
-    const students = await enrichUsers(rows);
-    const fees = await M.Fee.find({ institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).lean();
+    const M = await models(req); const role = normalizeRole(req.user.role); const term = String(req.query.search || '').trim().toLowerCase(); const studentQuery: any = { institutionId: req.user.institutionId };
+    const scope = await classTeacherClassIds(M, req); if (scope) { if (!scope.length) return res.json({ students: [], collections: [], source: 'class-teacher-no-class-scope' }); studentQuery.classId = { $in: scope }; }
+    const rows = await M.Student.find(studentQuery).populate('classId', 'name grade').populate('sectionId', 'name').limit(200).lean(); const students = await enrichUsers(rows); const fees = await M.Fee.find({ institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).lean();
     const filtered = students.filter((s: any) => !term || [s.userId?.name, s.userId?.phone, s.rollNumber, s.guardianName, s.guardianPhone, s.classId?.name, s.sectionId?.name].join(' ').toLowerCase().includes(term));
-    const result = filtered.map((student: any) => {
-      const dueAmount = fees.reduce((sum: number, fee: any) => {
-        const studentMatch = fee.studentId && String(fee.studentId) === String(student._id);
-        const classMatch = !fee.studentId && fee.classId && String(fee.classId) === String(student.classId?._id || student.classId);
-        return studentMatch || classMatch ? sum + Number(fee.amount || 0) : sum;
-      }, 0);
-      return { ...student, dueAmount };
-    });
+    const result = filtered.map((student: any) => { const dueAmount = fees.reduce((sum: number, fee: any) => { const studentMatch = fee.studentId && String(fee.studentId) === String(student._id); const classMatch = !fee.studentId && fee.classId && String(fee.classId) === String(student.classId?._id || student.classId); return studentMatch || classMatch ? sum + Number(fee.amount || 0) : sum; }, 0); return { ...student, dueAmount }; });
     res.json({ students: result, collections: [], source: role === 'class_teacher' ? 'class-teacher-own-class' : 'settings-active-mongodb-direct' });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load collections', error }); }
+});
+
+router.post('/collect', async (req: any, res) => {
+  try {
+    const M = await models(req); const student: any = await M.Student.findOne({ _id: req.body.studentId, institutionId: req.user.institutionId }).lean(); if (!student) return res.status(404).json({ message: 'Student not found.' }); await assertClassTeacherStudent(M, req, student);
+    const fee = await M.Fee.findOne({ institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] }, $or: [{ studentId: student._id }, { studentId: { $exists: false }, classId: student.classId }, { studentId: null, classId: student.classId }] }).sort({ dueDate: 1 });
+    if (!fee) return res.status(404).json({ message: 'No due fee found for this student.' });
+    const paidAmount = money(req.body.amount); const payableAmount = money(fee.amount); if (paidAmount <= 0) return res.status(400).json({ message: 'Enter a valid payment amount.' }); if (paidAmount > payableAmount) return res.status(400).json({ message: 'Payment amount cannot be greater than due amount.', dueAmount: payableAmount });
+    const payment = await M.Payment.create({ feeId: fee._id, studentId: student._id, amount: paidAmount, paymentMethod: req.body.paymentMethod || 'cash', paymentDate: new Date(), collectedBy: req.user._id, notes: req.body.notes || 'Offline fee collection', receiptNumber: receiptNumber(), institutionId: req.user.institutionId });
+    const remaining = money(payableAmount - paidAmount); fee.amount = remaining; fee.status = remaining <= 0 ? 'paid' : 'pending'; fee.paidDate = remaining <= 0 ? new Date() : undefined; fee.paymentMethod = req.body.paymentMethod || 'cash'; await fee.save();
+    const [enrichedStudent] = await enrichUsers([student]); const created = { ...(payment.toObject ? payment.toObject() : payment), studentId: enrichedStudent, feeId: fee };
+    await writeAuditLog(req, 'create', 'fee-collection', payment._id, created).catch(() => undefined); res.status(201).json({ payment: created, message: 'Fee collected successfully.' });
+  } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to collect fee.', error }); }
 });
 export default router;
