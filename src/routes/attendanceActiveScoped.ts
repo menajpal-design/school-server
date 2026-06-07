@@ -23,12 +23,47 @@ const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDat
 const dayRange = (value?: string) => { const d = parseDate(value); return { start: startOfDay(d), end: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), date: startOfDay(d) }; };
 const rangeOf = (q: any) => { if (q.startDate || q.endDate) { const s = startOfDay(parseDate(q.startDate || q.date)); const e0 = parseDate(q.endDate || q.startDate || q.date); return { $gte: s, $lt: new Date(e0.getFullYear(), e0.getMonth(), e0.getDate() + 1) }; } if (q.date) { const { start, end } = dayRange(q.date); return { $gte: start, $lt: end }; } return undefined; };
 async function teacherScope(M: any, req: any) { if (normalizeRole(req.user.role) !== 'class_teacher') return null; const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean(); return ids(teacher?.assignedClasses || []); }
-async function assertClass(M: any, req: any, classId: any) { const scope = await teacherScope(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(classId))) throw Object.assign(new Error('Access denied. Class Teacher can mark only assigned class attendance.'), { statusCode: 403 }); }
+async function assertClass(M: any, req: any, classId: any) { const scope = await teacherScope(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(classId))) throw Object.assign(new Error('Access denied. Class Teacher can mark/view only assigned class attendance.'), { statusCode: 403 }); }
 async function enrichUsers(rows: any[], field = 'userId') { const userIds = [...new Set(rows.map((row: any) => String(row?.[field]?._id || row?.[field] || '')).filter(Boolean))]; if (!userIds.length) return rows; const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean()); const map = new Map(users.map((u: any) => [String(u._id), u])); return rows.map((row: any) => ({ ...row, [field]: map.get(String(row?.[field]?._id || row?.[field] || '')) || row[field] })); }
+async function enrichReportRows(rows: any[]) { const plain = rows.map((r: any) => typeof r?.toObject === 'function' ? r.toObject() : r); const studentUserIds = [...new Set(plain.map((row: any) => String(row.studentId?.userId || '')).filter(Boolean))]; const userIds = [...new Set([...studentUserIds, ...plain.map((row: any) => String(row.userId?._id || row.userId || '')).filter(Boolean)])]; const users = userIds.length ? await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar role').lean()) : []; const map = new Map(users.map((u: any) => [String(u._id), u])); return plain.map((row: any) => ({ ...row, userId: row.userId && !row.userId.name ? (map.get(String(row.userId)) || row.userId) : row.userId, studentId: row.studentId ? { ...row.studentId, userId: row.studentId.userId?.name ? row.studentId.userId : (map.get(String(row.studentId.userId)) || row.studentId.userId) } : row.studentId })); }
 const summary = (rows: any[]) => ({ total: rows.length, present: rows.filter((x) => x.status === 'present').length, absent: rows.filter((x) => x.status === 'absent').length, late: rows.filter((x) => x.status === 'late').length, leave: rows.filter((x) => x.status === 'leave').length });
+const percentage = (present: number, total: number) => total ? Math.round((present / total) * 100) : 0;
 
 router.get('/people', authenticate, async (req: any, res) => {
   try { const M = await models(req); const role = normalizeRole(req.user.role); const personType = String(req.query.personType || 'student').toLowerCase(); const canEmployees = ['head', 'assistant_head', 'admin', 'super_admin', 'teacher', 'class_teacher', 'subject_teacher'].includes(role); if (personType === 'teacher') { if (!canEmployees) return res.status(403).json({ message: 'Access denied.' }); const people = await enrichUsers(await M.Teacher.find({ institutionId: req.user.institutionId, isActive: { $ne: false } }).lean()); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); } if (personType === 'staff') { if (!canEmployees) return res.status(403).json({ message: 'Access denied.' }); const people = await enrichUsers(await M.Staff.find({ institutionId: req.user.institutionId, isActive: { $ne: false } }).lean()); return res.json({ people, debug: { source: 'active-school-db', count: people.length } }); } const query: any = { institutionId: req.user.institutionId, isActive: true }; let lockedClassId = ''; let lockedClassIds: string[] = []; const scope = await teacherScope(M, req); if (scope) { lockedClassIds = scope; if (!scope.length) return res.json({ people: [], lockedClassId, lockedClassIds, message: 'No assigned class found for this class teacher.' }); lockedClassId = scope.includes(String(req.query.classId || '')) ? String(req.query.classId) : scope[0]; query.classId = lockedClassId; } else if (req.query.classId) query.classId = req.query.classId; if (req.query.sectionId) query.sectionId = req.query.sectionId; const rows = await M.Student.find(query).populate('classId', 'name grade').populate('sectionId', 'name').sort({ rollNumber: 1 }).lean(); const people = await enrichUsers(rows); return res.json({ people, lockedClassId, lockedClassIds, debug: { source: 'active-school-db', count: people.length } }); } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load attendance people', error }); }
+});
+
+router.get('/reports', authenticate, async (req: any, res) => {
+  try {
+    const M = await models(req); const role = normalizeRole(req.user.role); const q: any = { institutionId: req.user.institutionId };
+    const range = rangeOf(req.query) || { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1), $lt: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1) };
+    q.date = range;
+    const requestedPersonType = String(req.query.personType || '').toLowerCase();
+    const requestedClassId = String(req.query.classId || '');
+    const requestedSectionId = String(req.query.sectionId || '');
+    const scope = await teacherScope(M, req);
+    if (scope) { if (!scope.length) return res.json({ reports: [], comparison: [], trend: [], debug: { source: 'active-school-db', reason: 'class-teacher-no-scope' } }); if (requestedClassId) await assertClass(M, req, requestedClassId); q.classId = requestedClassId || { $in: scope }; }
+    else if (requestedClassId) q.classId = requestedClassId;
+    if (requestedSectionId) q.sectionId = requestedSectionId;
+    if (req.query.personId) { if (requestedPersonType === 'teacher' || requestedPersonType === 'staff') { q.userId = req.query.personId; q.userType = requestedPersonType; } else { q.studentId = req.query.personId; } }
+    if (req.query.userType) q.userType = req.query.userType;
+    if (requestedPersonType === 'student') q.userType = 'student';
+    if (requestedPersonType === 'teacher') q.userType = 'teacher';
+    if (requestedPersonType === 'staff') q.userType = 'staff';
+
+    const recordsRaw = await M.Attendance.find(q).populate('studentId', 'rollNumber userId guardianName').populate('classId', 'name grade').populate('sectionId', 'name').sort({ date: -1 }).lean();
+    const reports = await enrichReportRows(recordsRaw);
+    const classIds = [...new Set(reports.map((r: any) => String(r.classId?._id || r.classId || '')).filter(Boolean))];
+    const classes = classIds.length ? await M.Class.find({ _id: { $in: classIds } }).select('name').lean() : [];
+    const classMap = new Map(classes.map((c: any) => [String(c._id), c.name]));
+    const grouped = new Map<string, any>();
+    for (const r of reports) { const id = String(r.classId?._id || r.classId || (r.userType || 'other')); const name = r.classId?.name || classMap.get(id) || (r.userType === 'teacher' ? 'Teachers' : r.userType === 'staff' ? 'Staff' : 'Class'); const g = grouped.get(id) || { name, total: 0, present: 0, absent: 0, late: 0, leave: 0 }; g.total += 1; if (r.status === 'present') g.present += 1; if (r.status === 'absent') g.absent += 1; if (r.status === 'late') g.late += 1; if (r.status === 'leave') g.leave += 1; grouped.set(id, g); }
+    const trendMap = new Map<string, any>();
+    for (const r of reports) { const d = new Date(r.date).toISOString().slice(0, 10); const g = trendMap.get(d) || { date: d, total: 0, present: 0 }; g.total += 1; if (r.status === 'present') g.present += 1; trendMap.set(d, g); }
+    const comparison = Array.from(grouped.values()).map((g) => ({ ...g, percentage: percentage(g.present, g.total) }));
+    const trend = Array.from(trendMap.values()).sort((a, b) => a.date.localeCompare(b.date)).map((g) => ({ ...g, percentage: percentage(g.present, g.total) }));
+    return res.json({ reports, comparison, trend, summary: summary(reports), debug: { source: 'active-school-db', count: reports.length } });
+  } catch (error: any) { return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load attendance reports', error }); }
 });
 
 router.get('/student/:id', authenticate, async (req: any, res) => {
