@@ -1,5 +1,4 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import { authenticate } from '../middleware/auth';
 import Fee from '../models/Fee';
 import Payment from '../models/Payment';
@@ -25,7 +24,7 @@ const paymentSettings = async (institutionId: any) => {
 const populatePayment = () => Payment.find().populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email phone' } }).populate('feeId', 'type month year amount dueDate status').populate('collectedBy', 'name role');
 const studentFeeQuery = (student: any, institutionId: any) => ({ institutionId, $or: [{ studentId: student._id }, { studentId: { $exists: false }, classId: student.classId }, { studentId: null, classId: student.classId }] });
 
-router.get('/my-fees', authenticate, async (req: any, res) => {
+router.get('/', authenticate, async (req: any, res) => {
   try {
     const settings = await paymentSettings(req.user.institutionId);
     const build = async (student: any) => {
@@ -50,7 +49,7 @@ router.get('/my-fees', authenticate, async (req: any, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load fee data', error }); }
 });
 
-router.post('/my-fees/pay', authenticate, async (req: any, res) => {
+router.post('/pay', authenticate, async (req: any, res) => {
   try {
     const settings = await paymentSettings(req.user.institutionId);
     if (!settings.onlineEnabled) return res.status(403).json({ message: 'Online payment is not enabled for this school.' });
