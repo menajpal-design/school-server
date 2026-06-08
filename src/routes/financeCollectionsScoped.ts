@@ -47,6 +47,9 @@ async function enrichUsers(rows: any[]) { const ids = [...new Set(rows.map((x: a
 function canOpenFinance(user: any) { const role = normalizeRole(user?.role); const permissions = Array.isArray(user?.permissions) ? user.permissions : []; return ['head', 'assistant_head', 'finance_officer', 'class_teacher'].includes(role) || permissions.includes('manage:finance'); }
 async function classTeacherClassIds(M: any, req: any) { if (normalizeRole(req.user.role) !== 'class_teacher') return null; const teacher: any = await M.Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id, isActive: { $ne: false } }).select('assignedClasses').lean(); return (teacher?.assignedClasses || []).map((x: any) => String(x?._id || x)).filter(Boolean); }
 async function assertClassTeacherStudent(M: any, req: any, student: any) { const scope = await classTeacherClassIds(M, req); if (!scope) return; if (!scope.length) throw Object.assign(new Error('No assigned class found for this class teacher.'), { statusCode: 403 }); if (!scope.includes(String(student.classId?._id || student.classId))) throw Object.assign(new Error('Class Teacher can collect fee only from own assigned class students.'), { statusCode: 403 }); }
+function feeAppliesToStudent(fee: any, student: any) { const studentMatch = fee.studentId && String(fee.studentId) === String(student._id); const classMatch = !fee.studentId && fee.classId && String(fee.classId) === String(student.classId?._id || student.classId); return Boolean(studentMatch || classMatch); }
+async function feeDueForStudent(M: any, fee: any, studentId: any) { const totalPaid = await M.Payment.aggregate([{ $match: { institutionId: fee.institutionId, feeId: fee._id, studentId: new mongoose.Types.ObjectId(String(studentId)) } }, { $group: { _id: null, total: { $sum: '$amount' } } }]); const paid = money(totalPaid[0]?.total || 0); return money(Number(fee.amount || 0) - paid); }
+async function dueForStudent(M: any, student: any, fees: any[], invoices: any[]) { const invoiceDue = invoices.reduce((sum: number, inv: any) => String(inv.studentId) === String(student._id) ? sum + Number(inv.dueAmount || 0) : sum, 0); let feeDue = 0; for (const fee of fees.filter((f: any) => feeAppliesToStudent(f, student))) feeDue += await feeDueForStudent(M, fee, student._id); return money(invoiceDue + feeDue); }
 
 router.use(authenticate);
 router.use((req: any, res, next) => canOpenFinance(req.user) ? next() : res.status(403).json({ message: 'Access denied. Finance management only.' }));
@@ -61,11 +64,7 @@ router.get('/', async (req: any, res) => {
       M.StudentInvoice.find({ institutionId: req.user.institutionId, status: { $in: ['unpaid', 'partial', 'overdue'] } }).lean(),
     ]);
     const filtered = students.filter((s: any) => !term || [s.userId?.name, s.userId?.phone, s.rollNumber, s.guardianName, s.guardianPhone, s.classId?.name, s.sectionId?.name].join(' ').toLowerCase().includes(term));
-    const result = filtered.map((student: any) => {
-      const feeDue = fees.reduce((sum: number, fee: any) => { const studentMatch = fee.studentId && String(fee.studentId) === String(student._id); const classMatch = !fee.studentId && fee.classId && String(fee.classId) === String(student.classId?._id || student.classId); return studentMatch || classMatch ? sum + Number(fee.amount || 0) : sum; }, 0);
-      const invoiceDue = invoices.reduce((sum: number, inv: any) => String(inv.studentId) === String(student._id) ? sum + Number(inv.dueAmount || 0) : sum, 0);
-      return { ...student, dueAmount: money(feeDue + invoiceDue) };
-    });
+    const result = await Promise.all(filtered.map(async (student: any) => ({ ...student, dueAmount: await dueForStudent(M, student, fees, invoices) })));
     res.json({ students: result, collections: [], source: role === 'class_teacher' ? 'class-teacher-own-class' : 'settings-active-mongodb-direct' });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load collections', error }); }
 });
@@ -82,9 +81,9 @@ router.post('/collect', async (req: any, res) => {
     }
     const fee = await M.Fee.findOne({ institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] }, $or: [{ studentId: student._id }, { studentId: { $exists: false }, classId: student.classId }, { studentId: null, classId: student.classId }] }).sort({ dueDate: 1 });
     if (!fee) return res.status(404).json({ message: 'No due fee found for this student.' });
-    const paidAmount = money(req.body.amount); const payableAmount = money(fee.amount); if (paidAmount <= 0) return res.status(400).json({ message: 'Enter a valid payment amount.' }); if (paidAmount > payableAmount) return res.status(400).json({ message: 'Payment amount cannot be greater than due amount.', dueAmount: payableAmount });
+    const paidAmount = money(req.body.amount); const payableAmount = await feeDueForStudent(M, fee, student._id); if (paidAmount <= 0) return res.status(400).json({ message: 'Enter a valid payment amount.' }); if (payableAmount <= 0) return res.status(400).json({ message: 'This student has no due amount for this fee.' }); if (paidAmount > payableAmount) return res.status(400).json({ message: 'Payment amount cannot be greater than due amount.', dueAmount: payableAmount });
     const payment = await M.Payment.create({ feeId: fee._id, studentId: student._id, amount: paidAmount, paymentMethod: req.body.paymentMethod || 'cash', paymentDate: new Date(), collectedBy: req.user._id, notes: req.body.notes || 'Offline fee collection', receiptNumber: receiptNumber(), institutionId: req.user.institutionId });
-    const remaining = money(payableAmount - paidAmount); fee.amount = remaining; fee.status = remaining <= 0 ? 'paid' : 'pending'; fee.paidDate = remaining <= 0 ? new Date() : undefined; fee.paymentMethod = req.body.paymentMethod || 'cash'; await fee.save();
+    if (fee.studentId) { const remaining = money(payableAmount - paidAmount); fee.amount = remaining; fee.status = remaining <= 0 ? 'paid' : 'pending'; fee.paidDate = remaining <= 0 ? new Date() : undefined; fee.paymentMethod = req.body.paymentMethod || 'cash'; await fee.save(); }
     const [enrichedStudent] = await enrichUsers([student]); const created = { ...(payment.toObject ? payment.toObject() : payment), studentId: enrichedStudent, feeId: fee };
     await writeAuditLog(req, 'create', 'fee-collection', payment._id, created).catch(() => undefined); res.status(201).json({ payment: created, message: 'Fee collected successfully.' });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to collect fee.', error }); }
