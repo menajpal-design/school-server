@@ -16,6 +16,10 @@ import { runWithTenantStorage } from '../config/tenantStorage';
 const router = express.Router();
 const connections = new Map<string, Promise<mongoose.Connection>>();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
+const idOf = (v: any) => String(v?._id || v?.id || v || '');
+const safe = (v: any) => String(v || '').trim();
+const isOid = (v: any) => /^[a-f0-9]{24}$/i.test(String(v || ''));
+const show = (v: any, fallback = '-') => { const s = safe(v); return s && !isOid(s) ? s : fallback; };
 
 const normalizeMongoItems = (config: any = {}) => {
   const existing = Array.isArray(config.mongodbUris) ? config.mongodbUris : [];
@@ -30,43 +34,39 @@ async function activeMongoUri(req: any) {
   const setting: any = scoped || await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
   const items = normalizeMongoItems(setting);
   const activeMongo = items.find((item: any) => item.isActive) || items[items.length - 1];
-  const uri = String(activeMongo?.uri || setting.mongodbUrl || req.user?.institution?.settings?.mongodbUri || '').trim();
+  const uri = safe(activeMongo?.uri || setting.mongodbUrl || req.user?.institution?.settings?.mongodbUri);
   if (!uri) { const error: any = new Error('School MongoDB URI missing. Settings-এ active MongoDB URI save করুন।'); error.statusCode = 428; throw error; }
   return uri;
 }
 
-async function getConnection(req: any) {
+async function connectionFor(req: any) {
   const uri = await activeMongoUri(req);
   if (!connections.has(uri)) connections.set(uri, mongoose.createConnection(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15000, connectTimeoutMS: 15000, socketTimeoutMS: 30000, retryWrites: true }).asPromise());
-  try { const connection = await connections.get(uri)!; await connection.db.admin().ping(); return connection; }
-  catch (error: any) { connections.delete(uri); const e: any = new Error(`Active Settings MongoDB connection failed for Finance Reports: ${error?.message || 'unknown error'}`); e.statusCode = 503; throw e; }
+  const connection = await connections.get(uri)!;
+  await connection.db.admin().ping();
+  return connection;
 }
 
 async function models(req: any) {
-  const connection = await getConnection(req);
-  const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  const Class = model('Class', ClassModel);
-  const SectionModel = model('Section', Section);
-  return { Fee: model('Fee', Fee), Payment: model('Payment', Payment), Salary: model('Salary', Salary), Student: model('Student', Student), Class, Section: SectionModel, StudentInvoice: model('StudentInvoice', StudentInvoice), StudentFeePayment: model('StudentFeePayment', StudentFeePayment) };
+  const c = await connectionFor(req);
+  const model = (name: string, base: any) => c.models[name] || c.model(name, base.schema, base.collection?.name || name);
+  return { Fee: model('Fee', Fee), Payment: model('Payment', Payment), Salary: model('Salary', Salary), User: model('User', User), Student: model('Student', Student), Class: model('Class', ClassModel), Section: model('Section', Section), StudentInvoice: model('StudentInvoice', StudentInvoice), StudentFeePayment: model('StudentFeePayment', StudentFeePayment) };
 }
 
-const dayKey = (value: any) => { const date = new Date(value || Date.now()); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
-const dateRange = (query: any) => { const now = new Date(); const start = query.startDate ? new Date(`${query.startDate}T00:00:00.000Z`) : new Date(now.getFullYear(), now.getMonth(), 1); const endBase = query.endDate ? new Date(`${query.endDate}T00:00:00.000Z`) : now; const end = new Date(endBase); end.setDate(end.getDate() + 1); return { start, end }; };
+const range = (q: any) => { const now = new Date(); const start = q.startDate ? new Date(`${q.startDate}T00:00:00.000Z`) : new Date(now.getFullYear(), now.getMonth(), 1); const endBase = q.endDate ? new Date(`${q.endDate}T00:00:00.000Z`) : now; const end = new Date(endBase); end.setDate(end.getDate() + 1); return { start, end }; };
+const day = (v: any) => { const d = new Date(v || Date.now()); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
-async function enrichStudents(items: any[]) {
-  const studentIds = [...new Set(items.map((item: any) => String(item.studentId?._id || item.studentId || '')).filter(Boolean))];
-  if (!studentIds.length) return items;
-  const students = await primaryDb(() => Student.find({ _id: { $in: studentIds } }).select('userId rollNumber guardianName guardianPhone classId sectionId').lean().catch(() => []));
-  const studentMap = new Map((students as any[]).map((s: any) => [String(s._id), s]));
-  const userIds = [...new Set((students as any[]).map((s: any) => String(s.userId || '')).filter(Boolean))];
-  const users = await primaryDb(() => User.find({ _id: { $in: userIds } }).select('name username email phone avatar').lean().catch(() => []));
-  const userMap = new Map((users as any[]).map((u: any) => [String(u._id), u]));
-  return items.map((item: any) => {
-    const plain = typeof item?.toObject === 'function' ? item.toObject() : item;
-    const sid = String(plain.studentId?._id || plain.studentId || '');
-    const student: any = studentMap.get(sid);
-    if (!student) return plain;
-    return { ...plain, studentId: { ...student, userId: userMap.get(String(student.userId)) || student.userId } };
+async function enrich(M: any, rows: any[]) {
+  const ids = [...new Set(rows.map((r: any) => idOf(r.studentId?._id || r.studentId)).filter(Boolean))];
+  if (!ids.length) return rows;
+  const students = await M.Student.find({ _id: { $in: ids } }).populate('userId', 'name username email phone avatar').populate('classId', 'name grade').populate('sectionId', 'name').lean().catch(() => []);
+  const map = new Map(students.map((s: any) => [idOf(s._id), s]));
+  return rows.map((row: any) => {
+    const sid = idOf(row.studentId?._id || row.studentId);
+    const s: any = map.get(sid) || (typeof row.studentId === 'object' ? row.studentId : null);
+    if (!s) return row;
+    const student = { ...s, name: show(s.userId?.name || s.name || s.guardianName, 'Student'), rollNumber: show(s.rollNumber), className: show(s.classId?.name || s.className), sectionName: show(s.sectionId?.name || s.sectionName), guardianName: show(s.guardianName, ''), guardianPhone: show(s.guardianPhone, '') };
+    return { ...row, studentId: student, student, studentName: student.name, rollNumber: student.rollNumber, className: student.className, sectionName: student.sectionName };
   });
 }
 
@@ -75,9 +75,8 @@ router.use(authenticate, canManageFinance());
 router.get('/', async (req: any, res) => {
   try {
     const M = await models(req);
-    const { start, end } = dateRange(req.query);
+    const { start, end } = range(req.query);
     const institutionId = req.user.institutionId;
-
     const [paymentsRaw, invoicePaymentsRaw, duesRaw, invoiceDuesRaw, salariesRaw, allFeesRaw, allInvoicesRaw] = await Promise.all([
       M.Payment.find({ institutionId, paymentDate: { $gte: start, $lt: end } }).populate('feeId', 'type month year amount').sort({ paymentDate: -1 }).lean(),
       M.StudentFeePayment.find({ institutionId, paidAt: { $gte: start, $lt: end } }).populate('invoiceId', 'invoiceNo feeType month year totalAmount dueAmount').sort({ paidAt: -1 }).lean(),
@@ -87,31 +86,18 @@ router.get('/', async (req: any, res) => {
       M.Fee.find({ institutionId }).lean(),
       M.StudentInvoice.find({ institutionId }).lean(),
     ]);
-
     const invoicePayments = invoicePaymentsRaw.map((p: any) => ({ ...p, receiptNumber: p.receiptNo, paymentDate: p.paidAt || p.createdAt, feeId: p.invoiceId ? { type: p.invoiceId.feeType || 'monthly', month: p.invoiceId.month, year: p.invoiceId.year, amount: p.invoiceId.totalAmount } : undefined }));
-    const collections = await enrichStudents([...paymentsRaw, ...invoicePayments]);
-    const dues = await enrichStudents([...duesRaw, ...invoiceDuesRaw.map((inv: any) => ({ ...inv, amount: inv.dueAmount, type: inv.feeType || 'monthly', month: inv.month, year: inv.year }))]);
-    const salaries = salariesRaw;
-
+    const collections = await enrich(M, [...paymentsRaw, ...invoicePayments]);
+    const dues = await enrich(M, [...duesRaw, ...invoiceDuesRaw.map((inv: any) => ({ ...inv, amount: inv.dueAmount, type: inv.feeType || 'monthly', month: inv.month, year: inv.year }))]);
     const trendMap = new Map<string, number>();
-    for (const payment of [...paymentsRaw, ...invoicePayments] as any[]) { const key = dayKey(payment.paymentDate); trendMap.set(key, (trendMap.get(key) || 0) + Number(payment.amount || 0)); }
-    const trend = [...trendMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => ({ name, value }));
-
+    [...paymentsRaw, ...invoicePayments].forEach((p: any) => trendMap.set(day(p.paymentDate), (trendMap.get(day(p.paymentDate)) || 0) + Number(p.amount || 0)));
     const typeMap = new Map<string, number>();
-    for (const fee of allFeesRaw as any[]) { const type = fee.type || 'other'; typeMap.set(type, (typeMap.get(type) || 0) + Number(fee.amount || 0)); }
-    for (const inv of allInvoicesRaw as any[]) { const type = inv.feeType || 'monthly'; typeMap.set(type, (typeMap.get(type) || 0) + Number(inv.totalAmount || 0)); }
-    const byType = [...typeMap.entries()].map(([name, value]) => ({ name, value }));
-
-    const summary = {
-      totalCollection: [...paymentsRaw, ...invoicePayments].reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0),
-      totalDue: dues.reduce((sum: number, item: any) => sum + Number(item.amount || item.dueAmount || 0), 0),
-      totalSalary: salariesRaw.reduce((sum: number, item: any) => sum + Number(item.netSalary || 0), 0),
-      collectionCount: paymentsRaw.length + invoicePayments.length,
-      dueCount: dues.length,
-      salaryCount: salariesRaw.length,
-    };
-
-    res.json({ reports: { collections, dues, salaries, trend, byType, summary }, source: 'settings-active-mongodb-direct' });
+    allFeesRaw.forEach((f: any) => typeMap.set(f.type || 'other', (typeMap.get(f.type || 'other') || 0) + Number(f.amount || 0)));
+    allInvoicesRaw.forEach((i: any) => typeMap.set(i.feeType || 'monthly', (typeMap.get(i.feeType || 'monthly') || 0) + Number(i.totalAmount || 0)));
+    const classMap = new Map<string, any>();
+    collections.forEach((p: any) => { const key = `${p.className || p.studentId?.className || '-'}-${p.sectionName || p.studentId?.sectionName || '-'}`; const row = classMap.get(key) || { className: p.className || p.studentId?.className || '-', sectionName: p.sectionName || p.studentId?.sectionName || '-', totalAmount: 0, count: 0, students: [] }; row.totalAmount += Number(p.amount || 0); row.count += 1; row.students.push({ name: p.studentName || p.studentId?.name || 'Student', rollNumber: p.rollNumber || p.studentId?.rollNumber || '-', amount: Number(p.amount || 0), receiptNumber: p.receiptNumber || p.receiptNo, paymentDate: p.paymentDate }); classMap.set(key, row); });
+    const summary = { totalCollection: [...paymentsRaw, ...invoicePayments].reduce((s: number, p: any) => s + Number(p.amount || 0), 0), totalDue: dues.reduce((s: number, d: any) => s + Number(d.amount || d.dueAmount || 0), 0), totalSalary: salariesRaw.reduce((s: number, p: any) => s + Number(p.netSalary || 0), 0), collectionCount: paymentsRaw.length + invoicePayments.length, dueCount: dues.length, salaryCount: salariesRaw.length };
+    res.json({ reports: { collections, dues, salaries: salariesRaw, trend: [...trendMap.entries()].map(([name, value]) => ({ name, value })), byType: [...typeMap.entries()].map(([name, value]) => ({ name, value })), classSummary: [...classMap.values()], summary }, source: 'settings-active-mongodb-direct' });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load finance reports', error }); }
 });
 
