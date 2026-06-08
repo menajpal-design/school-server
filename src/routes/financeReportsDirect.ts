@@ -19,7 +19,7 @@ const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
 const idOf = (v: any) => String(v?._id || v?.id || v || '');
 const safe = (v: any) => String(v || '').trim();
 const isOid = (v: any) => /^[a-f0-9]{24}$/i.test(String(v || ''));
-const show = (v: any, fallback = '-') => { const s = safe(v); return s && !isOid(s) ? s : fallback; };
+const show = (v: any, fallback = '-') => { const s = safe(v); return s && !isOid(s) && !['undefined', 'null', 'Student', 'Unnamed student'].includes(s) ? s : fallback; };
 
 const normalizeMongoItems = (config: any = {}) => {
   const existing = Array.isArray(config.mongodbUris) ? config.mongodbUris : [];
@@ -56,17 +56,52 @@ async function models(req: any) {
 const range = (q: any) => { const now = new Date(); const start = q.startDate ? new Date(`${q.startDate}T00:00:00.000Z`) : new Date(now.getFullYear(), now.getMonth(), 1); const endBase = q.endDate ? new Date(`${q.endDate}T00:00:00.000Z`) : now; const end = new Date(endBase); end.setDate(end.getDate() + 1); return { start, end }; };
 const day = (v: any) => { const d = new Date(v || Date.now()); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
+function normalizedStudentPayload(s: any = {}) {
+  const user = s.userId || s.user || {};
+  const classObj = s.classId || s.classInfo || {};
+  const sectionObj = s.sectionId || s.sectionInfo || {};
+  return {
+    _id: idOf(s._id || s.id),
+    userId: typeof user === 'object' ? user : s.userId,
+    name: show(user?.name || s.name || s.studentName, 'Student'),
+    studentName: show(user?.name || s.name || s.studentName, 'Student'),
+    rollNumber: show(s.rollNumber || s.roll || s.rollNo),
+    roll: show(s.rollNumber || s.roll || s.rollNo),
+    className: show(classObj?.name || s.className || s.class),
+    sectionName: show(sectionObj?.name || s.sectionName || s.section),
+    section: show(sectionObj?.name || s.sectionName || s.section),
+    guardianName: show(s.guardianName || s.parentName, ''),
+    guardianPhone: show(s.guardianPhone || s.parentPhone || user?.phone, ''),
+    fatherName: show(s.fatherName, ''),
+    motherName: show(s.motherName, ''),
+  };
+}
+
 async function enrich(M: any, rows: any[]) {
-  const ids = [...new Set(rows.map((r: any) => idOf(r.studentId?._id || r.studentId)).filter(Boolean))];
-  if (!ids.length) return rows;
-  const students = await M.Student.find({ _id: { $in: ids } }).populate('userId', 'name username email phone avatar').populate('classId', 'name grade').populate('sectionId', 'name').lean().catch(() => []);
+  const ids = [...new Set(rows.map((r: any) => idOf(r.studentId?._id || r.studentId || r.student?._id || r.student)).filter(Boolean))];
+  const students = ids.length ? await M.Student.find({ _id: { $in: ids } }).populate('userId', 'name username email phone avatar').populate('classId', 'name grade').populate('sectionId', 'name').lean().catch(() => []) : [];
   const map = new Map(students.map((s: any) => [idOf(s._id), s]));
   return rows.map((row: any) => {
-    const sid = idOf(row.studentId?._id || row.studentId);
-    const s: any = map.get(sid) || (typeof row.studentId === 'object' ? row.studentId : null);
-    if (!s) return row;
-    const student = { ...s, name: show(s.userId?.name || s.name || s.guardianName, 'Student'), rollNumber: show(s.rollNumber), className: show(s.classId?.name || s.className), sectionName: show(s.sectionId?.name || s.sectionName), guardianName: show(s.guardianName, ''), guardianPhone: show(s.guardianPhone, '') };
-    return { ...row, studentId: student, student, studentName: student.name, rollNumber: student.rollNumber, className: student.className, sectionName: student.sectionName };
+    const sid = idOf(row.studentId?._id || row.studentId || row.student?._id || row.student);
+    const source = map.get(sid) || (typeof row.studentId === 'object' ? row.studentId : null) || row.student || {};
+    const student = normalizedStudentPayload(source);
+    const studentName = show(row.studentName || student.studentName || student.name, 'Student');
+    const rollNumber = show(row.rollNumber || row.roll || student.rollNumber);
+    const className = show(row.className || student.className);
+    const sectionName = show(row.sectionName || row.section || student.sectionName);
+    const guardianPhone = show(row.guardianPhone || student.guardianPhone, '');
+    return {
+      ...row,
+      studentId: { ...(typeof row.studentId === 'object' ? row.studentId : {}), ...student },
+      student,
+      studentName,
+      rollNumber,
+      roll: rollNumber,
+      className,
+      sectionName,
+      section: sectionName,
+      guardianPhone,
+    };
   });
 }
 
@@ -86,17 +121,17 @@ router.get('/', async (req: any, res) => {
       M.Fee.find({ institutionId }).lean(),
       M.StudentInvoice.find({ institutionId }).lean(),
     ]);
-    const invoicePayments = invoicePaymentsRaw.map((p: any) => ({ ...p, receiptNumber: p.receiptNo, paymentDate: p.paidAt || p.createdAt, feeId: p.invoiceId ? { type: p.invoiceId.feeType || 'monthly', month: p.invoiceId.month, year: p.invoiceId.year, amount: p.invoiceId.totalAmount } : undefined }));
+    const invoicePayments = invoicePaymentsRaw.map((p: any) => ({ ...p, amount: p.amount || p.paidAmount || p.totalPaid || p.invoiceId?.totalAmount, receiptNumber: p.receiptNo || p.receiptNumber, paymentDate: p.paidAt || p.createdAt, feeId: p.invoiceId ? { type: p.invoiceId.feeType || 'monthly', month: p.invoiceId.month, year: p.invoiceId.year, amount: p.invoiceId.totalAmount } : undefined }));
     const collections = await enrich(M, [...paymentsRaw, ...invoicePayments]);
     const dues = await enrich(M, [...duesRaw, ...invoiceDuesRaw.map((inv: any) => ({ ...inv, amount: inv.dueAmount, type: inv.feeType || 'monthly', month: inv.month, year: inv.year }))]);
     const trendMap = new Map<string, number>();
-    [...paymentsRaw, ...invoicePayments].forEach((p: any) => trendMap.set(day(p.paymentDate), (trendMap.get(day(p.paymentDate)) || 0) + Number(p.amount || 0)));
+    collections.forEach((p: any) => trendMap.set(day(p.paymentDate), (trendMap.get(day(p.paymentDate)) || 0) + Number(p.amount || 0)));
     const typeMap = new Map<string, number>();
     allFeesRaw.forEach((f: any) => typeMap.set(f.type || 'other', (typeMap.get(f.type || 'other') || 0) + Number(f.amount || 0)));
     allInvoicesRaw.forEach((i: any) => typeMap.set(i.feeType || 'monthly', (typeMap.get(i.feeType || 'monthly') || 0) + Number(i.totalAmount || 0)));
     const classMap = new Map<string, any>();
-    collections.forEach((p: any) => { const key = `${p.className || p.studentId?.className || '-'}-${p.sectionName || p.studentId?.sectionName || '-'}`; const row = classMap.get(key) || { className: p.className || p.studentId?.className || '-', sectionName: p.sectionName || p.studentId?.sectionName || '-', totalAmount: 0, count: 0, students: [] }; row.totalAmount += Number(p.amount || 0); row.count += 1; row.students.push({ name: p.studentName || p.studentId?.name || 'Student', rollNumber: p.rollNumber || p.studentId?.rollNumber || '-', amount: Number(p.amount || 0), receiptNumber: p.receiptNumber || p.receiptNo, paymentDate: p.paymentDate }); classMap.set(key, row); });
-    const summary = { totalCollection: [...paymentsRaw, ...invoicePayments].reduce((s: number, p: any) => s + Number(p.amount || 0), 0), totalDue: dues.reduce((s: number, d: any) => s + Number(d.amount || d.dueAmount || 0), 0), totalSalary: salariesRaw.reduce((s: number, p: any) => s + Number(p.netSalary || 0), 0), collectionCount: paymentsRaw.length + invoicePayments.length, dueCount: dues.length, salaryCount: salariesRaw.length };
+    collections.forEach((p: any) => { const key = `${p.className || '-'}-${p.sectionName || '-'}`; const row = classMap.get(key) || { className: p.className || '-', sectionName: p.sectionName || '-', totalAmount: 0, count: 0, students: [] }; row.totalAmount += Number(p.amount || 0); row.count += 1; row.students.push({ name: p.studentName || 'Student', rollNumber: p.rollNumber || '-', className: p.className || '-', sectionName: p.sectionName || '-', guardianPhone: p.guardianPhone || '-', amount: Number(p.amount || 0), receiptNumber: p.receiptNumber || p.receiptNo, paymentDate: p.paymentDate }); classMap.set(key, row); });
+    const summary = { totalCollection: collections.reduce((s: number, p: any) => s + Number(p.amount || 0), 0), totalDue: dues.reduce((s: number, d: any) => s + Number(d.amount || d.dueAmount || 0), 0), totalSalary: salariesRaw.reduce((s: number, p: any) => s + Number(p.netSalary || 0), 0), collectionCount: collections.length, dueCount: dues.length, salaryCount: salariesRaw.length };
     res.json({ reports: { collections, dues, salaries: salariesRaw, trend: [...trendMap.entries()].map(([name, value]) => ({ name, value })), byType: [...typeMap.entries()].map(([name, value]) => ({ name, value })), classSummary: [...classMap.values()], summary }, source: 'settings-active-mongodb-direct' });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to load finance reports', error }); }
 });
