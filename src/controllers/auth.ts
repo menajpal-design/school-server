@@ -8,11 +8,9 @@ import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import Parent from '../models/Parent';
-import { sendEmail } from '../services/emailService';
-import { logger } from '../utils/logger';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
-import { calculatePlanDue } from '../config/pricing';
-import { generateUsername } from '../utils/usernames';
+import { calculatePlanDue } from '../config/plans';
+import { generateUsername } from '../utils/credentials';
 import { randomBytes, createHash } from 'crypto';
 
 const authCookieName = process.env.AUTH_COOKIE_NAME || 'easy_school_token';
@@ -81,7 +79,7 @@ export const login = async (req: Request, res: Response) => {
     if (!tenantInstitution && institutionId && mongoose.Types.ObjectId.isValid(institutionId)) tenantInstitution = await Institution.findById(institutionId).lean();
     if (!tenantInstitution && getRequestSubdomain(req)) tenantInstitution = await Institution.findOne({ subdomain: getRequestSubdomain(req) }).lean().catch(() => null);
     if (tenantInstitution) institutionId = String(tenantInstitution._id || tenantInstitution.id);
-    let tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
     const loginLookup = async () => {
       let user = await User.findOne({ $or: [{ email: emailQuery }, { username: emailQuery }, { phone: identifier }] }).populate('institutionId').maxTimeMS(5000);
       let isMatch = user ? await bcrypt.compare(password, user.password) : false;
@@ -93,23 +91,23 @@ export const login = async (req: Request, res: Response) => {
     };
     const tenantResult = tenantContext ? await runWithTenantStorage(tenantContext, loginLookup).catch(() => null) : null;
     const loginResult = tenantResult || await loginLookup();
-    const { user, isMatch } = loginResult || {} as any;
+    const { user, isMatch } = (loginResult || {}) as any;
     if (!user || !isMatch) return res.status(400).json({ message: 'Invalid credentials', errors: [user ? 'Incorrect password' : 'User not found'] });
     if (!getRequestSubdomain(req)) { const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin']; if (!allowedRoles.includes(user.role)) return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' }); }
     void runWithTenantStorage(tenantContext, async () => User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } }).maxTimeMS(3000).exec()).catch(() => undefined);
     if (tenantContext) await syncUserToTenantStorage(tenantContext, user);
     const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
-    const refreshToken = generateRefreshToken();
-    const refreshHash = hashToken(refreshToken);
+    const newRefreshToken = generateRefreshToken();
+    const refreshHash = hashToken(newRefreshToken);
     const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
     await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec().catch(() => undefined);
     const responseUser = { id: user._id, name: user.name, username: user.username, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar, isActive: user.isActive, permissions: user.permissions || [], institutionId: (user.institutionId as any)?._id || user.institutionId, institution: serializeInstitution(user.institutionId) };
-    res.cookie(authCookieName, token, cookieOptions(0)); res.cookie(refreshCookieName, refreshToken, cookieOptions(refreshTokenDays));
+    res.cookie(authCookieName, token, cookieOptions(0)); res.cookie(refreshCookieName, newRefreshToken, cookieOptions(refreshTokenDays));
     res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) { console.error('Login error:', error); res.status(500).json({ message: 'Server error', error: String(error) }); }
 };
 
-export const refreshToken = async (req: Request, res: Response) => res.status(501).json({ message: 'Refresh token not implemented in this build' });
+export const refreshToken = async (_req: Request, res: Response) => res.status(501).json({ message: 'Refresh token not implemented in this build' });
 
 export const getProfile = async (req: Request, res: Response) => {
   try {
@@ -120,13 +118,13 @@ export const getProfile = async (req: Request, res: Response) => {
     const institutionFilter = { institutionId: user.institutionId };
     let student: any = null, teacher: any = null, staff: any = null, parent: any = null;
     if (role === 'student') {
-      student = await Student.findOne({ ...institutionFilter, userId: user._id }).populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name phone email username').lean();
+      student = await Student.findOne({ ...institutionFilter, userId: user._id }).populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name phone email username').lean().maxTimeMS(4000).catch(() => null);
     } else if (['teacher', 'class_teacher', 'subject_teacher', 'head', 'assistant_head'].includes(role)) {
-      teacher = await Teacher.findOne({ ...institutionFilter, userId: user._id }).populate('assignedClasses', 'name grade').populate('subjects', 'name code').lean();
+      teacher = await Teacher.findOne({ ...institutionFilter, userId: user._id }).populate('assignedClasses', 'name grade').populate('subjects', 'name code').lean().maxTimeMS(4000).catch(() => null);
     } else if (['staff', 'finance_officer', 'librarian'].includes(role)) {
-      staff = await Staff.findOne({ ...institutionFilter, userId: user._id }).lean();
+      staff = await Staff.findOne({ ...institutionFilter, userId: user._id }).lean().maxTimeMS(4000).catch(() => null);
     } else if (role === 'parent') {
-      parent = await Parent.findOne({ ...institutionFilter, userId: user._id }).populate({ path: 'children', populate: [{ path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }, { path: 'userId', select: 'name email avatar phone role username' }] }).lean();
+      parent = await Parent.findOne({ ...institutionFilter, userId: user._id }).populate({ path: 'children', populate: [{ path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }, { path: 'userId', select: 'name email avatar phone role username' }] }).lean().maxTimeMS(4000).catch(() => null);
     }
     const roleDetails = student || teacher || staff || parent || null;
     res.json({ user: { id: user._id, _id: user._id, name: user.name, username: user.username, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar, institutionId: institution?._id || user.institutionId, institution: serializeInstitution(institution), permissions: user.permissions || [], student, teacher, staff, parent, roleDetails, profileMissing: role === 'student' && !student } });
