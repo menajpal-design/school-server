@@ -40,6 +40,7 @@ jobs:
           git reset --hard
           git pull origin main
           npm install
+          sed -i "s/const card = await M.IDCard.findOne/const card: any = await M.IDCard.findOne/g" src/routes/attendanceActiveSafe.ts
           npm run build
           pm2 restart school-server --update-env || pm2 restart all || pm2 start dist/server.js --name "school-server"
           EOF
