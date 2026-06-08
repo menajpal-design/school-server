@@ -4,42 +4,42 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Install SSH password client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
       - name: Deploy Backend via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          use_insecure_cipher: true
-          script: |
-            # Detect server directory
-            if [ -d "$HOME/projects/school/school-server" ]; then
-              cd "$HOME/projects/school/school-server"
-            elif [ -d "$HOME/school-server" ]; then
-              cd "$HOME/school-server"
-            elif [ -d "/var/www/school-server" ]; then
-              cd "/var/www/school-server"
-            else
-              echo "School server directory not found!"
-              exit 1
-            fi
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -e
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SSH_USER@$SSH_HOST" 'bash -s' <<'EOF'
+          set -e
 
-            echo "Deploying server to $(pwd)..."
+          if [ -d "$HOME/projects/school/school-server" ]; then
+            cd "$HOME/projects/school/school-server"
+          elif [ -d "$HOME/school-server" ]; then
+            cd "$HOME/school-server"
+          elif [ -d "/var/www/school-server" ]; then
+            cd "/var/www/school-server"
+          else
+            echo "School server directory not found!"
+            exit 1
+          fi
 
-            # Pull the latest changes from Git
-            git reset --hard
-            git pull origin main
-
-            # Install dependencies
-            npm install
-
-            # Compile TypeScript code
-            npm run build
-
-            # Restart the process in PM2 and reload environment variables
-            pm2 restart school-server --update-env || pm2 restart all || pm2 start dist/server.js --name "school-server"
+          echo "Deploying server to $(pwd)..."
+          git reset --hard
+          git pull origin main
+          npm install
+          npm run build
+          pm2 restart school-server --update-env || pm2 restart all || pm2 start dist/server.js --name "school-server"
+          EOF
