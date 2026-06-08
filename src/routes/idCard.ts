@@ -30,6 +30,52 @@ async function myOwnerIds(user: any) {
   return unique(ownerIds);
 }
 
+const makeCardNumber = async (ownerType: string, institutionId: any) => {
+  const year = new Date().getFullYear();
+  const prefix = ownerType === 'student' ? 'STU' : ownerType === 'teacher' ? 'TCH' : ownerType === 'staff' ? 'STF' : 'CARD';
+  const count = await IDCard.countDocuments({ institutionId, ownerType, issuedAt: { $gte: new Date(`${year}-01-01T00:00:00Z`), $lte: new Date(`${year}-12-31T23:59:59Z`) } });
+  return `${prefix}-${year}-${String(count + 1).padStart(6, '0')}`;
+};
+
+const safeMyIdCard = async (req: any, res: any) => {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ message: 'Authentication required.' });
+    if (user.role === 'parent') return getMyIdCard(req, res);
+    if (user.role !== 'student') return getMyIdCard(req, res);
+
+    const userIds = unique([user._id, user.id]);
+    let student: any = await Student.findOne({ institutionId: user.institutionId, userId: { $in: userIds } }).populate('userId').populate('classId').populate('sectionId').populate('institutionId');
+    if (!student && user.username) {
+      student = await Student.findOne({ institutionId: user.institutionId, $or: [{ rollNumber: user.username }, { idCardNumber: user.username }, { admissionNumber: user.username }, { registrationNumber: user.username }] }).populate('userId').populate('classId').populate('sectionId').populate('institutionId');
+    }
+
+    if (!student) {
+      return res.json({
+        card: null,
+        student: null,
+        generated: false,
+        profileMissing: true,
+        message: 'Student profile is not linked with this login yet. Please contact school office to link this user with a student record.',
+      });
+    }
+
+    const ownerIds = unique([user._id, user.id, student._id, student.userId?._id, student.userId]);
+    let card: any = await IDCard.findOne({ institutionId: user.institutionId, ownerType: 'student', ownerId: { $in: ownerIds } }).populate('ownerId').populate('institutionId').sort({ createdAt: -1 });
+    if (!card) {
+      const now = new Date();
+      const validityEnd = new Date(now);
+      validityEnd.setFullYear(now.getFullYear() + 1);
+      const cardNumber = await makeCardNumber('student', user.institutionId);
+      const created = await IDCard.create({ ownerId: student.userId?._id || student.userId || user._id, ownerType: 'student', cardNumber, cardType: 'student', photoUrl: student.userId?.avatar || user.avatar || '', qrCodeData: `easy_school://idcard/${cardNumber}`, barcodeData: cardNumber, validityStart: now, validityEnd, status: 'active', issuedBy: user._id || user.id, issuedAt: now, institutionId: user.institutionId, downloadCount: 0 });
+      card = await IDCard.findById(created._id).populate('ownerId').populate('institutionId');
+    }
+    return res.json({ card, student, institution: student.institutionId, generated: true });
+  } catch (error: any) {
+    return res.status(500).json({ message: 'Failed to load my ID card safely', error: error?.message || String(error) });
+  }
+};
+
 const idCardManageGuard = (req: any, res: any, next: any) => {
   if (!req.user) return res.status(401).json({ message: 'Authentication required.' });
   if (leaderRoles.includes(req.user.role) || (Array.isArray(req.user.permissions) && req.user.permissions.includes('manage:idcard'))) return next();
@@ -69,7 +115,7 @@ const idCardScanGuard = async (req: any, res: any, next: any) => {
 router.get('/student/:studentId', authenticate, idCardGenerateGuard, generateStudentIdCard);
 router.get('/teacher/:teacherId', authenticate, idCardGenerateGuard, generateTeacherIdCard);
 router.get('/staff/:staffId', authenticate, idCardGenerateGuard, generateStaffIdCard);
-router.get('/me/card', authenticate, getMyIdCard);
+router.get('/me/card', authenticate, safeMyIdCard);
 router.get('/child/:studentId/card', authenticate, getChildIdCard);
 router.get('/owners/search', authenticate, idCardGenerateGuard, searchIdCardOwners);
 router.post('/', authenticate, idCardGenerateGuard, generateIdCardRecord);
