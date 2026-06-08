@@ -27,12 +27,37 @@ const buildAuthPayload = (message: string, token: string, user: any) => ({ messa
 const getRequestSubdomain = (req: Request) => String((req as any).subdomain || (req.headers['x-school-subdomain'] as string) || '').trim().toLowerCase();
 const ensureDatabaseReady = async () => mongoose.connection.readyState === 1;
 const normalizeRole = (role: any) => String(role || '').toLowerCase().replace(/[\s-]+/g, '_') === 'guardian' ? 'parent' : String(role || '').toLowerCase().replace(/[\s-]+/g, '_');
+const rx = (v: any) => new RegExp(String(v || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
 const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
   if (!tenantContext || !user) return;
   const plainUser = typeof user.toObject === 'function' ? user.toObject() : user;
   const payload = { ...plainUser, _id: plainUser._id, institutionId: resolveInstitutionId(plainUser.institutionId) };
   try { await runWithTenantStorage(tenantContext, async () => User.findOneAndUpdate({ _id: payload._id }, { $set: payload }, { upsert: true, new: true, setDefaultsOnInsert: true }).maxTimeMS(5000).exec()); } catch (error) { console.warn('Tenant user sync failed:', (error as any)?.message || error); }
+};
+
+const populateStudent = (query: any) => Student.findOne(query).populate('userId', 'name email avatar phone role username').populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name phone email username').lean().maxTimeMS(5000).catch(() => null);
+const findStudentForUser = async (user: any) => {
+  const institutionId = user.institutionId;
+  const userIds = [user._id, user.id].filter(Boolean);
+  let student: any = await populateStudent({ institutionId, userId: { $in: userIds } });
+  if (student) return student;
+  const or: any[] = [];
+  if (user.username) or.push({ username: user.username }, { rollNumber: user.username }, { idCardNumber: user.username }, { admissionNumber: user.username }, { registrationNumber: user.username });
+  if (user.phone) or.push({ studentPhone: user.phone }, { guardianPhone: user.phone });
+  if (user.email) or.push({ guardianEmail: user.email });
+  if (user.name) or.push({ name: user.name }, { name: rx(user.name) });
+  if (!or.length) return null;
+  const matches = await Student.find({ institutionId, $or: or }).populate('userId', 'name email avatar phone role username').populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name phone email username').limit(3).lean().maxTimeMS(5000).catch(() => []);
+  if (matches.length === 1) {
+    const matched: any = matches[0];
+    if (!matched.userId && user._id) {
+      await Student.updateOne({ _id: matched._id, institutionId }, { $set: { userId: user._id } }).catch(() => undefined);
+      matched.userId = { _id: user._id, name: user.name, email: user.email, phone: user.phone, username: user.username, avatar: user.avatar, role: user.role };
+    }
+    return matched;
+  }
+  return null;
 };
 
 export const register = async (req: Request, res: Response) => {
@@ -118,7 +143,7 @@ export const getProfile = async (req: Request, res: Response) => {
     const institutionFilter = { institutionId: user.institutionId };
     let student: any = null, teacher: any = null, staff: any = null, parent: any = null;
     if (role === 'student') {
-      student = await Student.findOne({ ...institutionFilter, userId: user._id }).populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name phone email username').lean().maxTimeMS(4000).catch(() => null);
+      student = await findStudentForUser(user);
     } else if (['teacher', 'class_teacher', 'subject_teacher', 'head', 'assistant_head'].includes(role)) {
       teacher = await Teacher.findOne({ ...institutionFilter, userId: user._id }).populate('assignedClasses', 'name grade').populate('subjects', 'name code').lean().maxTimeMS(4000).catch(() => null);
     } else if (['staff', 'finance_officer', 'librarian'].includes(role)) {
