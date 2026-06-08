@@ -1,2 +1,2 @@
-import router from './attendanceActiveScoped';
+import router from './attendanceActiveSafe';
 export default router;
