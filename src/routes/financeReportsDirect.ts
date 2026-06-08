@@ -6,6 +6,8 @@ import Payment from '../models/Payment';
 import Salary from '../models/Salary';
 import User from '../models/User';
 import Student from '../models/Student';
+import ClassModel from '../models/Class';
+import Section from '../models/Section';
 import StudentInvoice from '../models/StudentInvoice';
 import StudentFeePayment from '../models/StudentFeePayment';
 import SiteSetting from '../models/SiteSetting';
@@ -43,7 +45,9 @@ async function getConnection(req: any) {
 async function models(req: any) {
   const connection = await getConnection(req);
   const model = (name: string, base: any) => connection.models[name] || connection.model(name, base.schema, base.collection?.name || name);
-  return { Fee: model('Fee', Fee), Payment: model('Payment', Payment), Salary: model('Salary', Salary), Student: model('Student', Student), StudentInvoice: model('StudentInvoice', StudentInvoice), StudentFeePayment: model('StudentFeePayment', StudentFeePayment) };
+  const Class = model('Class', ClassModel);
+  const SectionModel = model('Section', Section);
+  return { Fee: model('Fee', Fee), Payment: model('Payment', Payment), Salary: model('Salary', Salary), Student: model('Student', Student), Class, Section: SectionModel, StudentInvoice: model('StudentInvoice', StudentInvoice), StudentFeePayment: model('StudentFeePayment', StudentFeePayment) };
 }
 
 const dayKey = (value: any) => { const date = new Date(value || Date.now()); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
