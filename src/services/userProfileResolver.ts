@@ -7,6 +7,7 @@ import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import Parent from '../models/Parent';
 import Committee from '../models/Committee';
+import { runWithTenantStorage } from '../config/tenantStorage';
 
 export type NormalizedRole = string;
 
@@ -19,6 +20,7 @@ const clean = (value: any) => String(value || '').trim();
 const isObjectId = (value: any) => mongoose.Types.ObjectId.isValid(String(value || ''));
 const regexSafe = (value: any) => clean(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const rx = (value: any) => new RegExp(regexSafe(value), 'i');
+const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
 
 export function normalizeRole(role: any): NormalizedRole {
   const value = clean(role).toLowerCase().replace(/[\s-]+/g, '_');
@@ -37,60 +39,53 @@ function generatedUsernamePrefix(username: any, name?: any) {
   return clean((match?.[1] || '').replace(/[._-]+$/g, ''));
 }
 
-async function userCandidates(user: any) {
-  const institutionId = user.institutionId;
-  const or: any[] = [];
-  if (user.username) or.push({ username: user.username }, { username: rx(user.username) });
-  if (user.email) or.push({ email: String(user.email).toLowerCase() });
-  if (user.phone) or.push({ phone: user.phone });
-  if (user.name) or.push({ name: user.name }, { name: rx(user.name) });
-  const prefix = generatedUsernamePrefix(user.username, user.name);
-  if (prefix) or.push({ name: rx(prefix) }, { username: rx(prefix) });
-  if (!or.length) return [];
-  return User.find({ institutionId, $or: or }).select('_id name username email phone avatar role institutionId isActive').limit(8).lean().maxTimeMS(5000).catch(() => []);
+function usernameFromInternalEmail(email: any) {
+  const value = clean(email).toLowerCase();
+  if (!value.endsWith('.internal.local') || !value.includes('@')) return '';
+  return value.split('@')[0];
 }
 
-const populateStudentQuery = (query: any) => Student.findOne(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate('classId', 'name grade')
-  .populate('sectionId', 'name')
-  .populate('parentId', 'name username email phone avatar role')
-  .lean().maxTimeMS(5000).catch(() => null);
-const populateStudentList = (query: any) => Student.find(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate('classId', 'name grade')
-  .populate('sectionId', 'name')
-  .populate('parentId', 'name username email phone avatar role')
-  .limit(10).lean().maxTimeMS(5000).catch(() => []);
-const populateTeacherQuery = (query: any) => Teacher.findOne(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate('assignedClasses', 'name grade')
-  .populate('subjects', 'name code')
-  .populate('institutionId', 'name type email phone address logo logoUrl website headName headSignature')
-  .lean().maxTimeMS(5000).catch(() => null);
-const populateTeacherList = (query: any) => Teacher.find(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate('assignedClasses', 'name grade')
-  .populate('subjects', 'name code')
-  .limit(10).lean().maxTimeMS(5000).catch(() => []);
-const populateStaffQuery = (query: any) => Staff.findOne(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate('institutionId', 'name type email phone address logo logoUrl website headName headSignature')
-  .lean().maxTimeMS(5000).catch(() => null);
-const populateStaffList = (query: any) => Staff.find(query)
-  .populate('userId', 'name username email phone avatar role')
-  .limit(10).lean().maxTimeMS(5000).catch(() => []);
-const populateParentQuery = (query: any) => Parent.findOne(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate({ path: 'children', populate: [{ path: 'userId', select: 'name username email phone avatar role' }, { path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }] })
-  .lean().maxTimeMS(5000).catch(() => null);
-const populateParentList = (query: any) => Parent.find(query)
-  .populate('userId', 'name username email phone avatar role')
-  .populate({ path: 'children', populate: [{ path: 'userId', select: 'name username email phone avatar role' }, { path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }] })
-  .limit(10).lean().maxTimeMS(5000).catch(() => []);
+function buildUserOr(user: any) {
+  const or: any[] = [];
+  const username = clean(user.username || usernameFromInternalEmail(user.email));
+  const email = clean(user.email).toLowerCase();
+  const phone = clean(user.phone);
+  const name = clean(user.name);
+  const prefix = generatedUsernamePrefix(username, name);
+  if (username) or.push({ username }, { username: rx(username) });
+  if (email) or.push({ email });
+  if (phone) or.push({ phone });
+  if (name) or.push({ name }, { name: rx(name) }, { username: rx(name) });
+  if (prefix) or.push({ name: rx(prefix) }, { username: rx(prefix) });
+  return or;
+}
+
+async function userCandidates(user: any) {
+  const institutionId = user.institutionId;
+  const or = buildUserOr(user);
+  if (!or.length) return [];
+  const query = { institutionId, $or: or };
+  const select = '_id name username email phone avatar role institutionId isActive';
+  const [tenantUsers, primaryUsers] = await Promise.all([
+    User.find(query).select(select).limit(15).lean().maxTimeMS(5000).catch(() => []),
+    primaryDb(() => User.find(query).select(select).limit(15).lean().maxTimeMS(5000)).catch(() => []),
+  ]);
+  const map = new Map<string, any>();
+  [...tenantUsers, ...primaryUsers].forEach((u: any) => { const id = idOf(u); if (id && !map.has(id)) map.set(id, u); });
+  return Array.from(map.values());
+}
+
+const populateStudentQuery = (query: any) => Student.findOne(query).populate('userId', 'name username email phone avatar role').populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name username email phone avatar role').lean().maxTimeMS(5000).catch(() => null);
+const populateStudentList = (query: any) => Student.find(query).populate('userId', 'name username email phone avatar role').populate('classId', 'name grade').populate('sectionId', 'name').populate('parentId', 'name username email phone avatar role').limit(20).lean().maxTimeMS(5000).catch(() => []);
+const populateTeacherQuery = (query: any) => Teacher.findOne(query).populate('userId', 'name username email phone avatar role').populate('assignedClasses', 'name grade').populate('subjects', 'name code').populate('institutionId', 'name type email phone address logo logoUrl website headName headSignature').lean().maxTimeMS(5000).catch(() => null);
+const populateTeacherList = (query: any) => Teacher.find(query).populate('userId', 'name username email phone avatar role').populate('assignedClasses', 'name grade').populate('subjects', 'name code').limit(20).lean().maxTimeMS(5000).catch(() => []);
+const populateStaffQuery = (query: any) => Staff.findOne(query).populate('userId', 'name username email phone avatar role').populate('institutionId', 'name type email phone address logo logoUrl website headName headSignature').lean().maxTimeMS(5000).catch(() => null);
+const populateStaffList = (query: any) => Staff.find(query).populate('userId', 'name username email phone avatar role').limit(20).lean().maxTimeMS(5000).catch(() => []);
+const populateParentQuery = (query: any) => Parent.findOne(query).populate('userId', 'name username email phone avatar role').populate({ path: 'children', populate: [{ path: 'userId', select: 'name username email phone avatar role' }, { path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }] }).lean().maxTimeMS(5000).catch(() => null);
+const populateParentList = (query: any) => Parent.find(query).populate('userId', 'name username email phone avatar role').populate({ path: 'children', populate: [{ path: 'userId', select: 'name username email phone avatar role' }, { path: 'classId', select: 'name grade' }, { path: 'sectionId', select: 'name' }] }).limit(20).lean().maxTimeMS(5000).catch(() => []);
 
 export async function repairProfileUserLink(profileType: string, profileId: any, userId: any, institutionId: any) {
-  const filter = { _id: profileId, institutionId, $or: [{ userId: { $exists: false } }, { userId: null }, { userId: userId }] } as any;
+  const filter = { _id: profileId, institutionId, $or: [{ userId: { $exists: false } }, { userId: null }, { userId }] } as any;
   const update = { $set: { userId } };
   if (profileType === 'student') return Student.updateOne(filter, update).catch(() => null);
   if (profileType === 'teacher') return Teacher.updateOne(filter, update).catch(() => null);
@@ -99,26 +94,38 @@ export async function repairProfileUserLink(profileType: string, profileId: any,
   return null;
 }
 
+async function resolveByCandidateUsers(modelName: 'student' | 'teacher' | 'staff' | 'parent', user: any) {
+  const institutionId = user.institutionId;
+  const candidates = await userCandidates(user);
+  const ids = compact(candidates.map((u: any) => u._id));
+  if (!ids.length) return { profile: null, ambiguous: [] as any[] };
+  let matches: any[] = [];
+  if (modelName === 'student') matches = await populateStudentList({ institutionId, userId: { $in: ids } });
+  if (modelName === 'teacher') matches = await populateTeacherList({ institutionId, userId: { $in: ids } });
+  if (modelName === 'staff') matches = await populateStaffList({ institutionId, userId: { $in: ids } });
+  if (modelName === 'parent') matches = await populateParentList({ institutionId, userId: { $in: ids } });
+  if (matches.length === 1) return { profile: matches[0], ambiguous: [] as any[] };
+  return { profile: null, ambiguous: matches };
+}
+
 export async function resolveStudentForUser(user: any) {
   const institutionId = user.institutionId;
   const directIds = compact([user._id, user.id]);
-  let student: any = await populateStudentQuery({ institutionId, userId: { $in: directIds } });
-  if (student) return { profile: student, missing: false };
+  const direct = await populateStudentQuery({ institutionId, userId: { $in: directIds } });
+  if (direct) return { profile: direct, missing: false };
 
-  const candidateUsers = await userCandidates(user);
-  const candidateIds = compact(candidateUsers.map((item: any) => item._id));
-  if (candidateIds.length) {
-    const matches = await populateStudentList({ institutionId, userId: { $in: candidateIds } });
-    if (matches.length === 1) return { profile: matches[0], missing: false, repairedFrom: 'linked_user' };
-    if (matches.length > 1) return { profile: null, missing: true, reason: 'ambiguous_match', ambiguousMatches: matches.map((m: any) => m._id) };
-  }
+  const byUser = await resolveByCandidateUsers('student', user);
+  if (byUser.profile) return { profile: byUser.profile, missing: false, repairedFrom: 'primary_or_tenant_linked_user' };
+  if (byUser.ambiguous.length > 1) return { profile: null, missing: true, reason: 'ambiguous_match', ambiguousMatches: byUser.ambiguous.map((m: any) => m._id) };
 
+  const username = clean(user.username || usernameFromInternalEmail(user.email));
+  const email = clean(user.email).toLowerCase();
+  const phone = clean(user.phone);
   const or: any[] = [];
-  if (user.username) or.push({ rollNumber: user.username }, { idCardNumber: user.username }, { admissionNumber: user.username }, { registrationNumber: user.username });
-  if (user.phone) or.push({ guardianPhone: user.phone }, { studentPhone: user.phone });
-  if (user.email) or.push({ guardianEmail: String(user.email).toLowerCase() });
-  if (!or.length) return { profile: null, missing: true, reason: 'not_found' };
-  const matches = await populateStudentList({ institutionId, $or: or });
+  if (username) or.push({ rollNumber: username }, { idCardNumber: username }, { admissionNumber: username }, { registrationNumber: username });
+  if (phone) or.push({ guardianPhone: phone }, { studentPhone: phone });
+  if (email) or.push({ guardianEmail: email });
+  const matches = or.length ? await populateStudentList({ institutionId, $or: or }) : [];
   if (matches.length === 1) {
     await repairProfileUserLink('student', matches[0]._id, user._id, institutionId);
     return { profile: { ...matches[0], userId: matches[0].userId || user }, missing: false, repairedFrom: 'student_fields' };
@@ -128,53 +135,41 @@ export async function resolveStudentForUser(user: any) {
 
 export async function resolveTeacherForUser(user: any) {
   const institutionId = user.institutionId;
-  const directIds = compact([user._id, user.id]);
-  let teacher: any = await populateTeacherQuery({ institutionId, userId: { $in: directIds } });
-  if (teacher) return { profile: teacher, missing: false };
-  const candidateIds = compact((await userCandidates(user)).map((u: any) => u._id));
-  const or: any[] = [];
-  if (candidateIds.length) or.push({ userId: { $in: candidateIds } });
-  if (user.username) or.push({ employeeId: user.username }, { idCardNumber: user.username });
-  if (!or.length) return { profile: null, missing: true, reason: 'not_found' };
-  const matches = await populateTeacherList({ institutionId, $or: or });
-  if (matches.length === 1) {
-    await repairProfileUserLink('teacher', matches[0]._id, user._id, institutionId);
-    return { profile: matches[0], missing: false, repairedFrom: 'teacher_fields' };
-  }
+  const direct = await populateTeacherQuery({ institutionId, userId: { $in: compact([user._id, user.id]) } });
+  if (direct) return { profile: direct, missing: false };
+  const byUser = await resolveByCandidateUsers('teacher', user);
+  if (byUser.profile) return { profile: byUser.profile, missing: false, repairedFrom: 'primary_or_tenant_linked_user' };
+  if (byUser.ambiguous.length > 1) return { profile: null, missing: true, reason: 'ambiguous_match', ambiguousMatches: byUser.ambiguous.map((m: any) => m._id) };
+  const username = clean(user.username || usernameFromInternalEmail(user.email));
+  const matches = username ? await populateTeacherList({ institutionId, $or: [{ employeeId: username }, { idCardNumber: username }] }) : [];
+  if (matches.length === 1) { await repairProfileUserLink('teacher', matches[0]._id, user._id, institutionId); return { profile: matches[0], missing: false, repairedFrom: 'teacher_fields' }; }
   return { profile: null, missing: true, reason: matches.length > 1 ? 'ambiguous_match' : 'not_found', ambiguousMatches: matches.map((m: any) => m._id) };
 }
 
 export async function resolveStaffForUser(user: any) {
   const institutionId = user.institutionId;
-  const directIds = compact([user._id, user.id]);
-  let staff: any = await populateStaffQuery({ institutionId, userId: { $in: directIds } });
-  if (staff) return { profile: staff, missing: false };
-  const candidateIds = compact((await userCandidates(user)).map((u: any) => u._id));
-  const or: any[] = [];
-  if (candidateIds.length) or.push({ userId: { $in: candidateIds } });
-  if (user.username) or.push({ employeeId: user.username }, { idCardNumber: user.username });
-  if (!or.length) return { profile: null, missing: true, reason: 'not_found' };
-  const matches = await populateStaffList({ institutionId, $or: or });
-  if (matches.length === 1) {
-    await repairProfileUserLink('staff', matches[0]._id, user._id, institutionId);
-    return { profile: matches[0], missing: false, repairedFrom: 'staff_fields' };
-  }
+  const direct = await populateStaffQuery({ institutionId, userId: { $in: compact([user._id, user.id]) } });
+  if (direct) return { profile: direct, missing: false };
+  const byUser = await resolveByCandidateUsers('staff', user);
+  if (byUser.profile) return { profile: byUser.profile, missing: false, repairedFrom: 'primary_or_tenant_linked_user' };
+  if (byUser.ambiguous.length > 1) return { profile: null, missing: true, reason: 'ambiguous_match', ambiguousMatches: byUser.ambiguous.map((m: any) => m._id) };
+  const username = clean(user.username || usernameFromInternalEmail(user.email));
+  const matches = username ? await populateStaffList({ institutionId, $or: [{ employeeId: username }, { idCardNumber: username }] }) : [];
+  if (matches.length === 1) { await repairProfileUserLink('staff', matches[0]._id, user._id, institutionId); return { profile: matches[0], missing: false, repairedFrom: 'staff_fields' }; }
   return { profile: null, missing: true, reason: matches.length > 1 ? 'ambiguous_match' : 'not_found', ambiguousMatches: matches.map((m: any) => m._id) };
 }
 
 export async function resolveParentForUser(user: any) {
   const institutionId = user.institutionId;
-  const directIds = compact([user._id, user.id]);
-  let parent: any = await populateParentQuery({ institutionId, userId: { $in: directIds } });
+  let parent: any = await populateParentQuery({ institutionId, userId: { $in: compact([user._id, user.id]) } });
   const childFallback: any[] = [];
   if (user.phone) childFallback.push({ guardianPhone: user.phone });
   if (user.email) childFallback.push({ guardianEmail: String(user.email).toLowerCase() });
   const childrenByContact = childFallback.length ? await populateStudentList({ institutionId, $or: childFallback }) : [];
   if (!parent) {
-    const candidateIds = compact((await userCandidates(user)).map((u: any) => u._id));
-    const matches = candidateIds.length ? await populateParentList({ institutionId, userId: { $in: candidateIds } }) : [];
-    if (matches.length === 1) parent = matches[0];
-    else if (matches.length > 1) return { profile: null, children: [], missing: true, reason: 'ambiguous_match', ambiguousMatches: matches.map((m: any) => m._id) };
+    const byUser = await resolveByCandidateUsers('parent', user);
+    if (byUser.profile) parent = byUser.profile;
+    else if (byUser.ambiguous.length > 1) return { profile: null, children: [], missing: true, reason: 'ambiguous_match', ambiguousMatches: byUser.ambiguous.map((m: any) => m._id) };
   }
   if (parent && childrenByContact.length) {
     const existing = compact(parent.children || []);
