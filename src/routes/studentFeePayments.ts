@@ -23,6 +23,7 @@ const idOf = (value: any) => String(value?._id || value?.id || value || '');
 const digits = (value: any) => String(value || '').replace(/\D/g, '');
 const invoiceNo = (studentId: any, month: number, year: number) => `INV-${year}${String(month).padStart(2, '0')}-${String(studentId).slice(-6)}-${Date.now().toString().slice(-5)}`;
 const roleOf = (user: any) => normalizeRole(user?.role);
+const GATEWAYFLOW_ORIGIN = 'https://payment-gateway-server-ten.vercel.app';
 
 const normalizeMongoItems = (config: any = {}) => {
   const existing = Array.isArray(config.mongodbUris) ? config.mongodbUris : [];
@@ -49,13 +50,30 @@ async function models(req: any) {
   return { Fee: model('Fee', Fee), Payment: model('Payment', Payment), ClassFeeStructure: model('ClassFeeStructure', ClassFeeStructure), StudentInvoice: model('StudentInvoice', StudentInvoice), StudentFeePayment: model('StudentFeePayment', StudentFeePayment), Student: model('Student', Student), Parent: model('Parent', Parent), Class: model('Class', ClassModel), Section: model('Section', Section) };
 }
 
+const publicPaymentSettings = (cfg: any = {}) => {
+  const recommended = cfg.recommendedGateway || {};
+  const enabledProviders = Array.isArray(cfg.enabledProviders) ? cfg.enabledProviders : [];
+  const onlineEnabled = Boolean(cfg.onlinePaymentEnabled ?? cfg.enabled ?? enabledProviders.some((p: string) => !['manual_cash', 'manual_bank'].includes(p)));
+  const methods = Array.isArray(recommended.paymentMethods) ? recommended.paymentMethods : String(recommended.paymentMethods || 'bkash,nagad').split(',').map((x) => x.trim()).filter(Boolean);
+  return {
+    onlineEnabled,
+    defaultProvider: cfg.defaultProvider || 'recommended_gateway',
+    enabledProviders,
+    recommendedGatewayUrl: recommended.origin || recommended.endpoint || cfg.recommendedGatewayUrl || GATEWAYFLOW_ORIGIN,
+    gatewayFlow: {
+      origin: recommended.origin || recommended.endpoint || GATEWAYFLOW_ORIGIN,
+      widgetScript: recommended.widgetScript || `${GATEWAYFLOW_ORIGIN}/widget.js`,
+      apiKey: recommended.apiKey || '',
+      receiverNumber: recommended.receiverNumber || '',
+      receiverName: recommended.receiverName || '',
+      paymentMethods: methods.length ? methods : ['bkash', 'nagad'],
+    },
+  };
+};
 const paymentSettings = async (institutionId: any) => {
   const scoped: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config', institutionId }).lean())?.value || null);
   const global: any = scoped || await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config' }).lean())?.value || {});
-  const cfg = global?.paymentGatewaySettings || {};
-  const enabledProviders = Array.isArray(cfg.enabledProviders) ? cfg.enabledProviders : [];
-  const onlineEnabled = Boolean(cfg.onlinePaymentEnabled ?? cfg.enabled ?? enabledProviders.some((p: string) => !['manual_cash', 'manual_bank'].includes(p)));
-  return { onlineEnabled, defaultProvider: cfg.defaultProvider || 'recommended_gateway', enabledProviders, recommendedGatewayUrl: cfg.recommendedGatewayUrl || cfg.recommendedGateway?.endpoint || 'https://gateway-client-rho.vercel.app/' };
+  return publicPaymentSettings(global?.paymentGatewaySettings || {});
 };
 
 async function enrichUsers(students: any[]) {
@@ -65,20 +83,7 @@ async function enrichUsers(students: any[]) {
   const map = new Map(users.map((u: any) => [String(u._id), u]));
   return students.map((s: any) => ({ ...s, userId: map.get(idOf(s.userId)) || s.userId, parentId: map.get(idOf(s.parentId)) || s.parentId }));
 }
-const normalizeStudent = (student: any) => student ? {
-  ...student,
-  _id: student._id,
-  name: student.userId?.name || student.name || 'Student',
-  className: student.classId?.name || student.className || '',
-  sectionName: student.sectionId?.name || student.sectionName || '',
-  rollNumber: student.rollNumber || '',
-  guardianName: student.guardianName || student.parentId?.name || '',
-  guardianPhone: student.guardianPhone || student.parentId?.phone || '',
-  fatherName: student.fatherName || '',
-  motherName: student.motherName || '',
-  dateOfBirth: student.dateOfBirth || '',
-  address: student.address || '',
-} : null;
+const normalizeStudent = (student: any) => student ? { ...student, _id: student._id, name: student.userId?.name || student.name || 'Student', className: student.classId?.name || student.className || '', sectionName: student.sectionId?.name || student.sectionName || '', rollNumber: student.rollNumber || '', guardianName: student.guardianName || student.parentId?.name || '', guardianPhone: student.guardianPhone || student.parentId?.phone || '', fatherName: student.fatherName || '', motherName: student.motherName || '', dateOfBirth: student.dateOfBirth || '', address: student.address || '' } : null;
 const studentFeeQuery = (student: any, institutionId: any) => ({ institutionId, $or: [{ studentId: student._id }, { studentId: { $exists: false }, classId: student.classId?._id || student.classId }, { studentId: null, classId: student.classId?._id || student.classId }] });
 const normalizeInvoicePayment = (p: any, student: any) => ({ ...p, receiptNumber: p.receiptNo || p.receiptNumber, paymentDate: p.paidAt || p.createdAt, studentId: student, feeId: p.invoiceId ? { _id: p.invoiceId._id, type: p.invoiceId.feeType || 'monthly', month: p.invoiceId.month, year: p.invoiceId.year, amount: p.invoiceId.totalAmount, paidAmount: p.invoiceId.paidAmount, dueAmount: p.invoiceId.dueAmount, dueDate: p.invoiceId.dueDate, status: p.invoiceId.status } : undefined, paymentMethod: p.paymentMethod || 'cash', notes: p.note });
 const normalizeOldPayment = (p: any, student: any) => ({ ...p, studentId: student, receiptNumber: p.receiptNumber || p.receiptNo, paymentDate: p.paymentDate || p.paidAt || p.createdAt, paymentMethod: p.paymentMethod || 'cash' });
@@ -170,6 +175,12 @@ router.post('/pay', authenticate, async (req: any, res) => {
     if (amount <= 0 || amount > num(fee.amount)) return res.status(400).json({ message: 'Invalid payment amount.' });
     const orderId = `FEE-${Date.now()}-${String(fee._id).slice(-6)}`;
     await writeAuditLog(req, 'initiate', 'student-online-fee-payment', fee._id, { orderId, amount, provider: settings.defaultProvider }).catch(() => undefined);
+    const origin = String(req.headers.origin || req.headers.referer || '').replace(/\/[^/]*$/, '');
+    const domain = (() => { try { return new URL(origin || 'https://www.easyschool.live').hostname; } catch { return 'www.easyschool.live'; } })();
+    if (settings.defaultProvider === 'recommended_gateway') {
+      if (!settings.gatewayFlow?.apiKey) return res.status(428).json({ message: 'GatewayFlow API key is not configured in school settings.' });
+      return res.json({ orderId, amount, feeId: fee._id, studentId, provider: 'recommended_gateway', gatewayUrl: settings.gatewayFlow.origin, gatewayFlow: { apiKey: settings.gatewayFlow.apiKey, domain, receiverNumber: settings.gatewayFlow.receiverNumber, paymentMethods: settings.gatewayFlow.paymentMethods, callback: `${origin || 'https://www.easyschool.live'}/finance/my-fees` } });
+    }
     res.json({ orderId, amount, feeId: fee._id, studentId, provider: settings.defaultProvider, gatewayUrl: settings.recommendedGatewayUrl, redirectUrl: `${settings.recommendedGatewayUrl}?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(String(amount))}&purpose=student_fee&feeId=${encodeURIComponent(String(fee._id))}` });
   } catch (error: any) { res.status(500).json({ message: 'Failed to initiate online fee payment', error: error?.message || error }); }
 });
