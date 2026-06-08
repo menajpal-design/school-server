@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticate } from '../middleware/auth';
 import Fee from '../models/Fee';
 import Payment from '../models/Payment';
+import ClassFeeStructure from '../models/ClassFeeStructure';
 import StudentInvoice from '../models/StudentInvoice';
 import StudentFeePayment from '../models/StudentFeePayment';
 import Student from '../models/Student';
@@ -13,6 +14,7 @@ import { writeAuditLog } from '../services/auditService';
 const router = express.Router();
 const primaryDb = <T>(fn: () => Promise<T>) => runWithTenantStorage(null, fn);
 const num = (v: any) => Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0;
+const invoiceNo = (studentId: any, month: number, year: number) => `INV-${year}${String(month).padStart(2, '0')}-${String(studentId).slice(-6)}-${Date.now().toString().slice(-5)}`;
 
 const paymentSettings = async (institutionId: any) => {
   const scoped: any = await primaryDb(async () => (await SiteSetting.findOne({ key: 'site_config', institutionId }).lean())?.value || null);
@@ -23,6 +25,41 @@ const paymentSettings = async (institutionId: any) => {
   return { onlineEnabled, defaultProvider: cfg.defaultProvider || 'recommended_gateway', enabledProviders, recommendedGatewayUrl: cfg.recommendedGatewayUrl || cfg.recommendedGateway?.endpoint || 'https://gateway-client-rho.vercel.app/' };
 };
 
+async function ensureCurrentMonthInvoiceForStudent(req: any, student: any) {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const institutionId = req.user.institutionId;
+  if (!student?._id || !student?.classId) return;
+  const existing = await StudentInvoice.exists({ institutionId, studentId: student._id, month, year, feeType: 'monthly_tuition' });
+  if (existing) return;
+  const structure = await ClassFeeStructure.findOne({
+    institutionId,
+    feeType: 'monthly_tuition',
+    classId: student.classId?._id || student.classId,
+    isActive: true,
+    $or: [{ effectiveFromYear: { $lt: year } }, { effectiveFromYear: year, effectiveFromMonth: { $lte: month } }],
+  }).sort({ effectiveFromYear: -1, effectiveFromMonth: -1 }).lean();
+  if (!structure) return;
+  await StudentInvoice.create({
+    institutionId,
+    studentId: student._id,
+    classId: student.classId?._id || student.classId,
+    section: structure.section || 'All',
+    month,
+    year,
+    feeType: 'monthly_tuition',
+    invoiceNo: invoiceNo(student._id, month, year),
+    items: [{ name: 'Monthly Tuition Fee', amount: num(structure.amount), discount: 0, lateFee: 0 }],
+    totalAmount: num(structure.amount),
+    paidAmount: 0,
+    dueAmount: num(structure.amount),
+    status: 'unpaid',
+    dueDate: new Date(year, month - 1, Math.min(Number(structure.dueDay || 10), 28)),
+    generatedBy: req.user._id,
+  });
+}
+
 const populatePayment = () => Payment.find().populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email phone' } }).populate('feeId', 'type month year amount dueDate status').populate('collectedBy', 'name role');
 const populateInvoicePayment = () => StudentFeePayment.find().populate({ path: 'studentId', populate: { path: 'userId', select: 'name avatar email phone' } }).populate('invoiceId', 'invoiceNo feeType month year totalAmount dueAmount status dueDate').populate('collectedBy', 'name role');
 const studentFeeQuery = (student: any, institutionId: any) => ({ institutionId, $or: [{ studentId: student._id }, { studentId: { $exists: false }, classId: student.classId }, { studentId: null, classId: student.classId }] });
@@ -32,6 +69,7 @@ router.get('/', authenticate, async (req: any, res) => {
   try {
     const settings = await paymentSettings(req.user.institutionId);
     const build = async (student: any) => {
+      await ensureCurrentMonthInvoiceForStudent(req, student);
       const [fees, invoices, oldPayments, invoicePayments] = await Promise.all([
         Fee.find(studentFeeQuery(student, req.user.institutionId)).populate('classId', 'name grade').sort({ dueDate: -1 }).lean(),
         StudentInvoice.find({ institutionId: req.user.institutionId, studentId: student._id }).populate('classId', 'name grade').sort({ year: -1, month: -1 }).lean(),
@@ -64,25 +102,17 @@ router.post('/pay', authenticate, async (req: any, res) => {
     const settings = await paymentSettings(req.user.institutionId);
     if (!settings.onlineEnabled) return res.status(403).json({ message: 'Online payment is not enabled for this school.' });
     const allowed: string[] = [];
-    if (req.user.role === 'student') {
-      const student: any = await Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId }).lean();
-      if (student) allowed.push(String(student._id));
-    } else if (req.user.role === 'parent') {
-      const parent: any = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId }).lean();
-      (parent?.children || []).forEach((id: any) => allowed.push(String(id)));
-    }
-    let fee: any = null;
-    let studentId = '';
+    if (req.user.role === 'student') { const student: any = await Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId }).lean(); if (student) allowed.push(String(student._id)); }
+    else if (req.user.role === 'parent') { const parent: any = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId }).lean(); (parent?.children || []).forEach((id: any) => allowed.push(String(id))); }
+    let fee: any = null; let studentId = '';
     if (String(req.body.feeId || '').startsWith('invoice-') || req.body.invoiceId) {
       const invoiceId = String(req.body.invoiceId || req.body.feeId).replace(/^invoice-/, '');
       const invoice: any = await StudentInvoice.findOne({ _id: invoiceId, institutionId: req.user.institutionId, status: { $in: ['unpaid', 'partial', 'overdue'] } }).lean();
       if (!invoice) return res.status(404).json({ message: 'Due invoice not found.' });
-      fee = { _id: `invoice-${invoice._id}`, amount: invoice.dueAmount };
-      studentId = String(invoice.studentId);
+      fee = { _id: `invoice-${invoice._id}`, amount: invoice.dueAmount }; studentId = String(invoice.studentId);
     } else {
       fee = await Fee.findOne({ _id: req.body.feeId, institutionId: req.user.institutionId, status: { $in: ['pending', 'overdue'] } }).lean();
-      if (!fee) return res.status(404).json({ message: 'Due fee not found.' });
-      studentId = String(fee.studentId || req.body.studentId || '');
+      if (!fee) return res.status(404).json({ message: 'Due fee not found.' }); studentId = String(fee.studentId || req.body.studentId || '');
     }
     if (!allowed.includes(studentId)) return res.status(403).json({ message: 'You can only pay your own or child fee.' });
     const amount = num(req.body.amount || fee.amount);
