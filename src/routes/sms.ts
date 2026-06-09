@@ -32,16 +32,16 @@ async function getMonthlySmsFacts(student: any, institutionId: any, info: Return
     Payment.findOne({ institutionId, studentId, paymentDate: { $gte: info.start, $lt: info.end } }).lean().catch(() => null),
     StudentFeePayment.findOne({ institutionId, studentId, paidAt: { $gte: info.start, $lt: info.end }, status: { $ne: 'cancelled' } }).lean().catch(() => null),
   ]);
-  let fee = 'Fee N/A';
+  let fee = 'Monthly fee not recorded';
   if (invoice) {
     const due = Number((invoice as any).dueAmount || 0);
     const paid = Number((invoice as any).paidAmount || 0);
     const status = String((invoice as any).status || '').toLowerCase();
-    if (status === 'paid' || due <= 0) fee = 'Fee Paid';
-    else if (paid > 0) fee = `Fee Due ${moneyShort(due)}`;
-    else fee = `Fee Due ${moneyShort(due || (invoice as any).totalAmount)}`;
+    if (status === 'paid' || due <= 0) fee = 'Monthly fee paid';
+    else if (paid > 0) fee = `Monthly fee due BDT ${moneyShort(due)}`;
+    else fee = `Monthly fee due BDT ${moneyShort(due || (invoice as any).totalAmount)}`;
   } else if (oldPayment || invoicePayment) {
-    fee = 'Fee Paid';
+    fee = 'Monthly fee paid';
   }
   return { presentDays, fee };
 }
@@ -49,7 +49,7 @@ async function getMonthlySmsFacts(student: any, institutionId: any, info: Return
 const monthlyGuardianMessage = async (student: any, institutionId: any, info: ReturnType<typeof getMonthRange>) => {
   const name = student.userId?.name || student.guardianName || 'Student';
   const facts = await getMonthlySmsFacts(student, institutionId, info);
-  return `${shortName(name)} ${info.shortMonth}: P${facts.presentDays}d ${facts.fee}`;
+  return `${shortName(name)} ${info.shortMonth} Summary: Present ${facts.presentDays} days. ${facts.fee}.`;
 };
 
 router.get('/head/monthly', authorize('head', 'assistant_head'), async (req, res) => {
