@@ -2,6 +2,10 @@ import express from 'express';
 import Student from '../models/Student';
 import Institution from '../models/Institution';
 import SmsLog from '../models/SmsLog';
+import Attendance from '../models/Attendance';
+import Payment from '../models/Payment';
+import StudentInvoice from '../models/StudentInvoice';
+import StudentFeePayment from '../models/StudentFeePayment';
 import { authenticate, authorize } from '../middleware/auth';
 import { sendSMS } from '../utils/sms';
 
@@ -13,12 +17,40 @@ const getMonthRange = (month?: string) => {
   const base = month && /^\d{4}-\d{2}$/.test(month) ? new Date(`${month}-01T00:00:00.000Z`) : new Date();
   const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1, 0, 0, 0, 0));
   const end = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 1, 0, 0, 0, 0));
-  return { start, end, label: `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, '0')}` };
+  return { start, end, year: start.getUTCFullYear(), monthNo: start.getUTCMonth() + 1, shortMonth: start.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }), label: `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, '0')}` };
 };
 
 const normalizePhone = (value?: string) => String(value || '').replace(/\D/g, '').replace(/^88/, '');
-const shortName = (value: any) => String(value || 'Student').replace(/[^A-Za-z0-9 ._-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 28) || 'Student';
-const monthlyGuardianMessage = (studentName: string, month: string) => `${shortName(studentName)} monthly school update for ${month}: attendance, fees and result summary are available. Please login to EasySchool.`;
+const shortName = (value: any) => String(value || 'Student').replace(/[^A-Za-z0-9 ._-]/g, '').replace(/\s+/g, ' ').trim().split(' ')[0].slice(0, 18) || 'Student';
+const moneyShort = (value: any) => String(Math.round(Number(value || 0)));
+
+async function getMonthlySmsFacts(student: any, institutionId: any, info: ReturnType<typeof getMonthRange>) {
+  const studentId = student._id;
+  const [presentDays, invoice, oldPayment, invoicePayment] = await Promise.all([
+    Attendance.countDocuments({ institutionId, studentId, date: { $gte: info.start, $lt: info.end }, status: { $in: ['present', 'late'] } }).catch(() => 0),
+    StudentInvoice.findOne({ institutionId, studentId, month: info.monthNo, year: info.year, status: { $ne: 'cancelled' } }).lean().catch(() => null),
+    Payment.findOne({ institutionId, studentId, paymentDate: { $gte: info.start, $lt: info.end } }).lean().catch(() => null),
+    StudentFeePayment.findOne({ institutionId, studentId, paidAt: { $gte: info.start, $lt: info.end }, status: { $ne: 'cancelled' } }).lean().catch(() => null),
+  ]);
+  let fee = 'Fee N/A';
+  if (invoice) {
+    const due = Number((invoice as any).dueAmount || 0);
+    const paid = Number((invoice as any).paidAmount || 0);
+    const status = String((invoice as any).status || '').toLowerCase();
+    if (status === 'paid' || due <= 0) fee = 'Fee Paid';
+    else if (paid > 0) fee = `Fee Due ${moneyShort(due)}`;
+    else fee = `Fee Due ${moneyShort(due || (invoice as any).totalAmount)}`;
+  } else if (oldPayment || invoicePayment) {
+    fee = 'Fee Paid';
+  }
+  return { presentDays, fee };
+}
+
+const monthlyGuardianMessage = async (student: any, institutionId: any, info: ReturnType<typeof getMonthRange>) => {
+  const name = student.userId?.name || student.guardianName || 'Student';
+  const facts = await getMonthlySmsFacts(student, institutionId, info);
+  return `${shortName(name)} ${info.shortMonth}: P${facts.presentDays}d ${facts.fee}`;
+};
 
 router.get('/head/monthly', authorize('head', 'assistant_head'), async (req, res) => {
   try {
@@ -71,7 +103,7 @@ router.get('/head/monthly', authorize('head', 'assistant_head'), async (req, res
 
 router.post('/head/monthly-send', authorize('head', 'assistant_head', 'admin', 'super_admin'), async (req, res) => {
   try {
-    const { label } = getMonthRange(String(req.body?.month || req.query?.month || ''));
+    const info = getMonthRange(String(req.body?.month || req.query?.month || ''));
     const institutionId = req.user.institutionId || req.body.institutionId;
     if (!institutionId) return res.status(400).json({ message: 'Institution is required.' });
     const students = await Student.find({ institutionId, isActive: true })
@@ -88,7 +120,7 @@ router.post('/head/monthly-send', authorize('head', 'assistant_head', 'admin', '
       const studentName = student.userId?.name || student.guardianName || 'Student';
       if (!phoneKey || seen.has(phoneKey)) { skipped += 1; continue; }
       seen.add(phoneKey);
-      const message = monthlyGuardianMessage(studentName, label);
+      const message = await monthlyGuardianMessage(student, institutionId, info);
       const ok = await sendSMS({
         to: student.guardianPhone,
         message,
@@ -98,14 +130,14 @@ router.post('/head/monthly-send', authorize('head', 'assistant_head', 'admin', '
         recipientId: student._id,
         recipientType: 'guardian',
         type: 'monthly_parent',
-        purpose: `monthly_guardian_summary_${label}`,
+        purpose: `monthly_guardian_summary_${info.label}`,
         studentId: student._id,
       }).catch(() => false);
       if (ok) sent += 1;
       else failed += 1;
-      results.push({ studentId: student._id, studentName, guardianName: student.guardianName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed' });
+      results.push({ studentId: student._id, studentName, guardianName: student.guardianName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed', message });
     }
-    res.json({ month: label, totalStudents: students.length, uniqueGuardians: seen.size, sent, failed, skipped, results, message: `Monthly guardian SMS completed. Sent ${sent}, failed ${failed}, skipped ${skipped}.` });
+    res.json({ month: info.label, totalStudents: students.length, uniqueGuardians: seen.size, sent, failed, skipped, results, message: `Monthly guardian SMS completed. Sent ${sent}, failed ${failed}, skipped ${skipped}.` });
   } catch (error) {
     res.status(500).json({ message: 'Failed to send monthly guardian SMS', error });
   }
