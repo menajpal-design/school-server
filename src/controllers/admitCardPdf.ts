@@ -38,6 +38,28 @@ async function imageBufferFromUrl(url?: string) {
   } catch { return null; }
 }
 
+async function qrBufferFromPayload(payload: string) {
+  try {
+    return await QRCode.toBuffer(payload || '-', {
+      type: 'png',
+      width: 360,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#0f172a', light: '#ffffff' },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function drawQrFallback(doc: PDFKit.PDFDocument, x: number, y: number, size: number) {
+  doc.save();
+  doc.rect(x, y, size, size).fill('#ffffff').stroke('#cbd5e1');
+  doc.fillColor('#0f172a').fontSize(7).font('Helvetica-Bold').text('QR', x, y + size / 2 - 8, { width: size, align: 'center' });
+  doc.fillColor('#64748b').fontSize(5).font('Helvetica').text('VERIFY', x, y + size / 2 + 3, { width: size, align: 'center' });
+  doc.restore();
+}
+
 export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
   try {
     const body: any = req.body || {};
@@ -50,8 +72,7 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
     const institutionName = moneyName(institution.name || 'Institution');
     const center = moneyName(exam.center || exam.examCenter || institution.address || body.examCenter);
     const qrPayload = body.qrData || JSON.stringify({ type: 'admit-card', name, roll, exam: exam.name || body.examName, institution: institutionName, host: req.get('host') });
-    const qrDataUrl = await QRCode.toDataURL(qrPayload, { width: 260, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0f172a', light: '#ffffff' } });
-    const qrBuffer = Buffer.from(qrDataUrl.split(',')[1], 'base64');
+    const qrBuffer = await qrBufferFromPayload(qrPayload);
     const logoBuffer = await imageBufferFromUrl(institution.logo || institution.logoUrl);
     const photoBuffer = await imageBufferFromUrl(student.photoUrl || student.avatar || student.userId?.avatar);
     const sealBuffer = await imageBufferFromUrl(institution.seal);
@@ -88,9 +109,13 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
     doc.fillColor('#0f172a').fontSize(22).font('Helvetica-Bold').text(institutionName, x0 + 95, headerY + 18, { width: w - 190, align: 'center', ellipsis: true });
     doc.fillColor('#475569').fontSize(8).font('Helvetica').text(short(institution.address, 92), x0 + 105, headerY + 45, { width: w - 210, align: 'center' });
     doc.fillColor('#64748b').fontSize(7).text([institution.phone, institution.email].filter(Boolean).join(' | '), x0 + 105, headerY + 58, { width: w - 210, align: 'center' });
-    drawRoundRect(doc, x0 + w - 78, headerY, 58, 58, 10, '#ffffff', '#cbd5e1');
-    doc.image(qrBuffer, x0 + w - 72, headerY + 6, { width: 46, height: 46 });
-    doc.fillColor('#64748b').fontSize(6).font('Helvetica-Bold').text('VERIFY QR', x0 + w - 78, headerY + 61, { width: 58, align: 'center' });
+    const qrBoxX = x0 + w - 82;
+    const qrBoxY = headerY - 2;
+    const qrBoxSize = 66;
+    drawRoundRect(doc, qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 10, '#ffffff', '#cbd5e1');
+    if (qrBuffer) doc.image(qrBuffer, qrBoxX + 6, qrBoxY + 6, { width: 54, height: 54, fit: [54, 54] });
+    else drawQrFallback(doc, qrBoxX + 8, qrBoxY + 8, 50);
+    doc.fillColor('#64748b').fontSize(6).font('Helvetica-Bold').text('VERIFY QR', qrBoxX, qrBoxY + qrBoxSize + 3, { width: qrBoxSize, align: 'center' });
 
     const examY = y0 + 96;
     drawRoundRect(doc, x0 + 18, examY, w - 165, 52, 12, '#0f172a');
