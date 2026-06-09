@@ -1,5 +1,29 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+export const FEE_TYPES = [
+  'monthly',
+  'annual',
+  'admission',
+  're_admission',
+  'exam',
+  'tuition',
+  'session',
+  'registration',
+  'id_card',
+  'admit_card',
+  'library',
+  'laboratory',
+  'transport',
+  'sports',
+  'development',
+  'computer',
+  'hostel',
+  'certificate',
+  'transfer_certificate',
+  'fine',
+  'other'
+] as const;
+
 export interface IFee extends Document {
   studentId: mongoose.Types.ObjectId;
   classId?: mongoose.Types.ObjectId;
@@ -8,7 +32,7 @@ export interface IFee extends Document {
   waiverType?: 'none' | 'free' | 'half' | 'partial';
   waiverAmount?: number;
   waiverReason?: string;
-  type: 'monthly' | 'annual' | 'exam' | 'tuition' | 'transport' | 'other';
+  type: typeof FEE_TYPES[number];
   scholarship?: number;
   discount?: number;
   month: string;
@@ -32,7 +56,7 @@ const FeeSchema: Schema = new Schema({
   waiverType: { type: String, enum: ['none', 'free', 'half', 'partial'], default: 'none' },
   waiverAmount: { type: Number, default: 0 },
   waiverReason: { type: String, trim: true },
-  type: { type: String, enum: ['monthly', 'annual', 'exam', 'tuition', 'transport', 'other'], required: true },
+  type: { type: String, enum: FEE_TYPES, required: true },
   scholarship: { type: Number, default: 0 },
   discount: { type: Number, default: 0 },
   month: { type: String, required: true },
@@ -52,5 +76,6 @@ const FeeSchema: Schema = new Schema({
 FeeSchema.index({ studentId: 1, month: 1, year: 1 });
 FeeSchema.index({ status: 1, dueDate: 1 });
 FeeSchema.index({ institutionId: 1, status: 1 });
+FeeSchema.index({ institutionId: 1, type: 1, year: 1 });
 
 export default mongoose.model<IFee>('Fee', FeeSchema);
