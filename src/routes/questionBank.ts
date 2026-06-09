@@ -20,9 +20,38 @@ const sampleQuestions = (body: any) => {
   }));
 };
 
+const extractJson = (text: string) => {
+  const cleaned = String(text || '').replace(/```json/g, '').replace(/```/g, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
+  return JSON.parse(cleaned);
+};
+
+const geminiQuestions = async (body: any) => {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
+  if (!apiKey) return { source: 'server-fallback', questions: sampleQuestions(body) };
+  const prompt = `Return JSON only. JSON shape: {"questions":[{"type":"mcq","question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","marks":1}]}. Make ${Number(body.count || 10)} ${body.mode === 'question' ? 'mixed school exam' : 'MCQ'} questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`;
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.6, responseMimeType: 'application/json' } }),
+  });
+  const data: any = await response.json();
+  if (!response.ok) return { source: 'server-fallback', providerError: data?.error?.message, questions: sampleQuestions(body) };
+  const text = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text).join('\n') || '';
+  const parsed = extractJson(text);
+  const questions = Array.isArray(parsed?.questions) && parsed.questions.length ? parsed.questions : sampleQuestions(body);
+  return { source: 'gemini-2.5-flash', questions };
+};
+
 router.post('/generate', authenticate, async (req: any, res) => {
-  if (!canManage(req.user.role)) return res.status(403).json({ message: 'Only teacher, head or assistant head can generate questions.' });
-  return res.json({ source: 'server-fallback', questions: sampleQuestions(req.body || {}) });
+  try {
+    if (!canManage(req.user.role)) return res.status(403).json({ message: 'Only teacher, head or assistant head can generate questions.' });
+    return res.json(await geminiQuestions(req.body || {}));
+  } catch (error: any) {
+    return res.status(500).json({ message: error?.message || 'Failed to generate questions' });
+  }
 });
 
 router.get('/sets', authenticate, async (req: any, res) => {
