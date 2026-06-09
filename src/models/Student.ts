@@ -20,6 +20,8 @@ export interface IStudent extends Document {
   isActive: boolean;
   idCardNumber?: string;
   idCardExpiry?: Date;
+  fingerprintId?: string;
+  biometricId?: string;
   institutionId: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -44,6 +46,8 @@ const StudentSchema: Schema = new Schema({
   isActive: { type: Boolean, default: true },
   idCardNumber: { type: String },
   idCardExpiry: { type: Date },
+  fingerprintId: { type: String, trim: true, sparse: true },
+  biometricId: { type: String, trim: true, sparse: true },
   institutionId: { type: Schema.Types.ObjectId, ref: 'Institution', required: true }
 }, {
   timestamps: true
@@ -52,6 +56,8 @@ const StudentSchema: Schema = new Schema({
 StudentSchema.index({ rollNumber: 1, institutionId: 1 });
 StudentSchema.index({ classId: 1, sectionId: 1 });
 StudentSchema.index({ userId: 1 });
+StudentSchema.index({ fingerprintId: 1, institutionId: 1 }, { sparse: true });
+StudentSchema.index({ biometricId: 1, institutionId: 1 }, { sparse: true });
 
 import { autoGenerateIdCard } from '../utils/idCardHelper';
 
