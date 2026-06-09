@@ -11,13 +11,18 @@ const canPractice = (role: string) => practiceRoles.includes(normalizeRole(role)
 
 const sampleQuestions = (body: any) => {
   const count = Math.max(1, Math.min(100, Number(body.count || 10)));
-  return Array.from({ length: count }).map((_, i) => ({
-    type: body.mode === 'question' ? 'short' : 'mcq',
-    question: `${i + 1}. ${body.subjectName || body.subject || 'Subject'} - ${body.syllabus || 'syllabus'} question?`,
-    options: body.mode === 'question' ? [] : ['A) Option 1', 'B) Option 2', 'C) Option 3', 'D) Option 4'],
-    answer: body.mode === 'question' ? '' : 'A',
-    marks: Number(body.markPerQuestion || 1),
-  }));
+  return Array.from({ length: count }).map((_, i) => {
+    const isQuestion = body.mode === 'question';
+    return {
+      type: isQuestion ? 'cq' : 'mcq',
+      question: isQuestion
+        ? `${i + 1}. ${body.subjectName || body.subject || 'Subject'} - ${body.syllabus || 'syllabus'} থেকে একটি সৃজনশীল/CQ প্রশ্ন তৈরি করুন।\nক) জ্ঞানমূলক প্রশ্ন\nখ) অনুধাবনমূলক প্রশ্ন\nগ) প্রয়োগমূলক প্রশ্ন\nঘ) উচ্চতর দক্ষতামূলক প্রশ্ন`
+        : `${i + 1}. ${body.subjectName || body.subject || 'Subject'} - ${body.syllabus || 'syllabus'} MCQ question?`,
+      options: isQuestion ? [] : ['A) Option 1', 'B) Option 2', 'C) Option 3', 'D) Option 4'],
+      answer: isQuestion ? 'Teacher verification required' : 'A',
+      marks: Number(body.markPerQuestion || (isQuestion ? 10 : 1)),
+    };
+  });
 };
 
 const extractJson = (text: string) => {
@@ -31,7 +36,10 @@ const extractJson = (text: string) => {
 const geminiQuestions = async (body: any) => {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
   if (!apiKey) return { source: 'server-fallback', questions: sampleQuestions(body) };
-  const prompt = `Return JSON only. JSON shape: {"questions":[{"type":"mcq","question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","marks":1}]}. Make ${Number(body.count || 10)} ${body.mode === 'question' ? 'mixed school exam' : 'MCQ'} questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`;
+  const isQuestion = body.mode === 'question';
+  const prompt = isQuestion
+    ? `Return JSON only. JSON shape: {"questions":[{"type":"cq","question":"Creative question stem and sub questions ক খ গ ঘ","options":[],"answer":"Teacher verification required","marks":10}]}. Make ${Number(body.count || 8)} Bengali CQ/Creative Questions. Every question must include ক) জ্ঞানমূলক, খ) অনুধাবনমূলক, গ) প্রয়োগমূলক, ঘ) উচ্চতর দক্ষতামূলক sub-questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`
+    : `Return JSON only. JSON shape: {"questions":[{"type":"mcq","question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","marks":1}]}. Make ${Number(body.count || 10)} MCQ questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`;
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
