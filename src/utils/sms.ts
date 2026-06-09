@@ -32,7 +32,6 @@ const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => { const digits = String(value || '').replace(/\D/g, '').replace(/^88/, ''); return digits && !digits.startsWith('0') ? `0${digits}` : digits; };
 const asciiOnly = (value: any) => String(value || '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
 const compactUrl = (value: string) => String(value || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
-const compactDomain = (value: string) => compactUrl(value).replace(/\/login$/i, '');
 
 const parseGatewayResponse = (text: string) => {
   const raw = String(text || '').trim();
@@ -63,7 +62,6 @@ const getInstitutionSmsBranding = async (institutionId?: any) => {
 };
 
 const GSM_7_REGEX = /^[A-Za-z0-9 @£$¥èéùìòÇ\nØøCRÅå_"'!#%&()\-:;<=>?¡ÄÖÑÜ§¿äöñüà^{}\[~\]|€\/\.\+,]*$/;
-function computeSmsSegments(message: string) { const msg = String(message || ''); const isGsm7 = GSM_7_REGEX.test(msg); if (isGsm7) return msg.length <= 160 ? 1 : Math.ceil(msg.length / 153); return msg.length <= 70 ? 1 : Math.ceil(msg.length / 67); }
 const oneCreditMessage = (message: string) => { const msg = String(message || '').replace(/\s+/g, ' ').trim(); const isGsm7 = GSM_7_REGEX.test(msg); const limit = isGsm7 ? 160 : 70; return msg.length <= limit ? msg : msg.slice(0, limit); };
 const forceOneCreditOptions = (options: SMSOptions): SMSOptions => ({ ...options, message: oneCreditMessage(options.message || '') });
 const replaceLoginPart = (message: string, loginUrl: string) => {
@@ -91,15 +89,19 @@ const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOp
 const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units); return Boolean(quota.allowed); };
 const buildChargeMeta = (options: SMSOptions, count = 1) => { const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose); const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose); return { smsChargeRate, smsChargeAmount }; };
 const badKey = (value: string) => !value || value.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(value);
+const badUrl = (value: string) => !value || /your_|REPLACE|demo|placeholder|example|localhost|127\.0\.0\.1/i.test(value);
 const resolveSmsConfig = async (options: SMSOptions) => {
   const institution = options.institutionId ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean() : null;
   const institutionSettings: any = (institution as any)?.settings || {};
   const globalEnabled = process.env.SMS_ENABLED !== 'false';
-  const provider = String(options.smsProvider || institutionSettings.smsProvider || process.env.SMS_PROVIDER || SMS_PROVIDER || 'smslayer').toLowerCase();
-  const apiUrl = String(options.smsApiUrl || institutionSettings.smsApiUrl || process.env.SMS_API_URL || SMS_API_URL || DEFAULT_SMS_API_URL).trim();
+  const envProvider = String(process.env.SMS_PROVIDER || SMS_PROVIDER || 'smslayer').toLowerCase();
+  const provider = String(options.smsProvider || envProvider || institutionSettings.smsProvider || 'smslayer').toLowerCase();
+  const envUrl = String(process.env.SMS_API_URL || SMS_API_URL || DEFAULT_SMS_API_URL).trim();
+  const settingUrl = String(options.smsApiUrl || institutionSettings.smsApiUrl || '').trim();
+  const apiUrl = provider === 'smslayer' ? (badUrl(envUrl) ? DEFAULT_SMS_API_URL : envUrl) : (badUrl(settingUrl) ? (badUrl(envUrl) ? DEFAULT_SMS_API_URL : envUrl) : settingUrl);
   const envKey = String(process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || process.env.SMSLAYER_API_KEY || process.env.SMS_KEY || process.env.API_KEY || SMS_API_KEY || '').trim();
   const settingKey = String(options.smsApiKey || institutionSettings.smsApiKey || '').trim();
-  const apiKey = badKey(settingKey) ? (badKey(envKey) ? '' : envKey) : settingKey;
+  const apiKey = badKey(envKey) ? (badKey(settingKey) ? '' : settingKey) : envKey;
   const enabled = typeof options.smsEnabled === 'boolean' ? options.smsEnabled : typeof institutionSettings.smsEnabled === 'boolean' ? institutionSettings.smsEnabled : globalEnabled;
   return { institution, provider, apiUrl, apiKey, enabled };
 };
