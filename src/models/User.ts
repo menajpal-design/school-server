@@ -14,6 +14,8 @@ export interface IUser extends Document {
   motherName?: string;
   address?: string;
   bloodGroup?: string;
+  fingerprintId?: string;
+  biometricId?: string;
   isActive: boolean;
   lastLogin?: Date;
   permissions: string[];
@@ -40,6 +42,8 @@ const UserSchema: Schema = new Schema({
   address: { type: String, trim: true },
   bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
   gender: { type: String, enum: ['male', 'female', 'other'] },
+  fingerprintId: { type: String, trim: true, sparse: true },
+  biometricId: { type: String, trim: true, sparse: true },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   permissions: [{ type: String }],
@@ -61,6 +65,8 @@ UserSchema.add({
 UserSchema.index({ email: 1, institutionId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ username: 1, institutionId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ role: 1, institutionId: 1 });
+UserSchema.index({ fingerprintId: 1, institutionId: 1 }, { sparse: true });
+UserSchema.index({ biometricId: 1, institutionId: 1 }, { sparse: true });
 
 const dropLegacy = () => {
   const col = mongoose.connection.collection('users');
