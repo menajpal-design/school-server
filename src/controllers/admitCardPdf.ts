@@ -22,9 +22,15 @@ function drawRoundRect(doc: PDFKit.PDFDocument, x: number, y: number, w: number,
   doc.restore();
 }
 
+function safeText(doc: PDFKit.PDFDocument, value: any, x: number, y: number, options: PDFKit.Mixins.TextOptions = {}) {
+  doc.text(String(value || ''), x, y, { lineBreak: false, ...options });
+}
+
 function labelValue(doc: PDFKit.PDFDocument, x: number, y: number, label: string, value: string, width = 280) {
-  doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold').text(label.toUpperCase(), x, y, { width: 78, continued: false });
-  doc.fillColor('#0f172a').fontSize(9).font('Helvetica-Bold').text(value || '-', x + 78, y - 1, { width: width - 78, height: 12, ellipsis: true });
+  doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold');
+  safeText(doc, label.toUpperCase(), x, y, { width: 78, continued: false });
+  doc.fillColor('#0f172a').fontSize(9).font('Helvetica-Bold');
+  safeText(doc, value || '-', x + 78, y - 1, { width: width - 78, height: 12, ellipsis: true });
   doc.strokeColor('#e2e8f0').lineWidth(0.5).moveTo(x, y + 15).lineTo(x + width, y + 15).stroke();
 }
 
@@ -55,8 +61,10 @@ async function qrBufferFromPayload(payload: string) {
 function drawQrFallback(doc: PDFKit.PDFDocument, x: number, y: number, size: number) {
   doc.save();
   doc.rect(x, y, size, size).fill('#ffffff').stroke('#cbd5e1');
-  doc.fillColor('#0f172a').fontSize(7).font('Helvetica-Bold').text('QR', x, y + size / 2 - 8, { width: size, align: 'center' });
-  doc.fillColor('#64748b').fontSize(5).font('Helvetica').text('VERIFY', x, y + size / 2 + 3, { width: size, align: 'center' });
+  doc.fillColor('#0f172a').fontSize(7).font('Helvetica-Bold');
+  safeText(doc, 'QR', x, y + size / 2 - 8, { width: size, align: 'center' });
+  doc.fillColor('#64748b').fontSize(5).font('Helvetica');
+  safeText(doc, 'VERIFY', x, y + size / 2 + 3, { width: size, align: 'center' });
   doc.restore();
 }
 
@@ -78,7 +86,7 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
     const sealBuffer = await imageBufferFromUrl(institution.seal);
     const signBuffer = await imageBufferFromUrl(institution.headSignature);
 
-    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 18, bufferPages: false });
+    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, bufferPages: false, autoFirstPage: true });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
     doc.on('end', () => {
@@ -103,34 +111,44 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
     const logoX = x0 + 18, headerY = y0 + 20;
     drawRoundRect(doc, logoX, headerY, 58, 58, 12, '#ffffff', '#cbd5e1');
     if (logoBuffer) doc.image(logoBuffer, logoX + 7, headerY + 7, { width: 44, height: 44, fit: [44, 44] });
-    else doc.fillColor('#0f766e').fontSize(18).font('Helvetica-Bold').text('ES', logoX + 16, headerY + 20);
+    else { doc.fillColor('#0f766e').fontSize(18).font('Helvetica-Bold'); safeText(doc, 'ES', logoX + 16, headerY + 20); }
 
-    doc.fillColor('#047857').fontSize(8).font('Helvetica-Bold').text('OFFICIAL ADMIT CARD', x0, headerY + 2, { width: w, align: 'center', characterSpacing: 2 });
-    doc.fillColor('#0f172a').fontSize(22).font('Helvetica-Bold').text(institutionName, x0 + 95, headerY + 18, { width: w - 190, align: 'center', ellipsis: true });
-    doc.fillColor('#475569').fontSize(8).font('Helvetica').text(short(institution.address, 92), x0 + 105, headerY + 45, { width: w - 210, align: 'center' });
-    doc.fillColor('#64748b').fontSize(7).text([institution.phone, institution.email].filter(Boolean).join(' | '), x0 + 105, headerY + 58, { width: w - 210, align: 'center' });
+    doc.fillColor('#047857').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'OFFICIAL ADMIT CARD', x0, headerY + 2, { width: w, align: 'center', characterSpacing: 2 });
+    doc.fillColor('#0f172a').fontSize(22).font('Helvetica-Bold');
+    safeText(doc, institutionName, x0 + 95, headerY + 18, { width: w - 190, align: 'center', ellipsis: true });
+    doc.fillColor('#475569').fontSize(8).font('Helvetica');
+    safeText(doc, short(institution.address, 92), x0 + 105, headerY + 45, { width: w - 210, align: 'center' });
+    doc.fillColor('#64748b').fontSize(7);
+    safeText(doc, [institution.phone, institution.email].filter(Boolean).join(' | '), x0 + 105, headerY + 58, { width: w - 210, align: 'center' });
     const qrBoxX = x0 + w - 82;
     const qrBoxY = headerY - 2;
     const qrBoxSize = 66;
     drawRoundRect(doc, qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 10, '#ffffff', '#cbd5e1');
     if (qrBuffer) doc.image(qrBuffer, qrBoxX + 6, qrBoxY + 6, { width: 54, height: 54, fit: [54, 54] });
     else drawQrFallback(doc, qrBoxX + 8, qrBoxY + 8, 50);
-    doc.fillColor('#64748b').fontSize(6).font('Helvetica-Bold').text('VERIFY QR', qrBoxX, qrBoxY + qrBoxSize + 3, { width: qrBoxSize, align: 'center' });
+    doc.fillColor('#64748b').fontSize(6).font('Helvetica-Bold');
+    safeText(doc, 'VERIFY QR', qrBoxX, qrBoxY + qrBoxSize + 3, { width: qrBoxSize, align: 'center' });
 
     const examY = y0 + 96;
     drawRoundRect(doc, x0 + 18, examY, w - 165, 52, 12, '#0f172a');
-    doc.fillColor('#a7f3d0').fontSize(8).font('Helvetica-Bold').text('EXAMINATION', x0 + 30, examY + 12, { characterSpacing: 2 });
-    doc.fillColor('#ffffff').fontSize(15).font('Helvetica-Bold').text(short(exam.name || body.examName || 'Admit Card', 72), x0 + 30, examY + 29, { width: w - 190, ellipsis: true });
+    doc.fillColor('#a7f3d0').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'EXAMINATION', x0 + 30, examY + 12, { characterSpacing: 2 });
+    doc.fillColor('#ffffff').fontSize(15).font('Helvetica-Bold');
+    safeText(doc, short(exam.name || body.examName || 'Admit Card', 72), x0 + 30, examY + 29, { width: w - 190, ellipsis: true });
     drawRoundRect(doc, x0 + w - 132, examY, 112, 52, 12, '#f8fafc', '#cbd5e1');
-    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold').text('CENTER CODE', x0 + w - 118, examY + 13, { characterSpacing: 1.2 });
-    doc.fillColor('#0f172a').fontSize(13).font('Helvetica-Bold').text(exam.centerCode || body.centerCode || '-', x0 + w - 118, examY + 30, { width: 90, ellipsis: true });
+    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold');
+    safeText(doc, 'CENTER CODE', x0 + w - 118, examY + 13, { characterSpacing: 1.2 });
+    doc.fillColor('#0f172a').fontSize(13).font('Helvetica-Bold');
+    safeText(doc, exam.centerCode || body.centerCode || '-', x0 + w - 118, examY + 30, { width: 90, ellipsis: true });
 
     const bodyY = y0 + 162;
     const infoW = 338;
     const photoW = 112;
     const centerW = w - 18 - infoW - photoW - 24 - 18;
     drawRoundRect(doc, x0 + 18, bodyY, infoW, 155, 12, '#ffffff', '#e2e8f0');
-    doc.fillColor('#0f766e').fontSize(8).font('Helvetica-Bold').text('CANDIDATE INFORMATION', x0 + 30, bodyY + 12, { characterSpacing: 2 });
+    doc.fillColor('#0f766e').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'CANDIDATE INFORMATION', x0 + 30, bodyY + 12, { characterSpacing: 2 });
     labelValue(doc, x0 + 30, bodyY + 32, 'Name', name, infoW - 24);
     labelValue(doc, x0 + 30, bodyY + 52, 'Roll / ID', roll, infoW - 24);
     labelValue(doc, x0 + 30, bodyY + 72, 'Class / Group', moneyName(student.className || student.stream || body.stream), infoW - 24);
@@ -140,19 +158,25 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
 
     const photoX = x0 + 18 + infoW + 12;
     drawRoundRect(doc, photoX, bodyY, photoW, 155, 12, '#f8fafc', '#e2e8f0');
-    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold').text('CANDIDATE PHOTO', photoX, bodyY + 12, { width: photoW, align: 'center', characterSpacing: 1 });
+    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold');
+    safeText(doc, 'CANDIDATE PHOTO', photoX, bodyY + 12, { width: photoW, align: 'center', characterSpacing: 1 });
     drawRoundRect(doc, photoX + 21, bodyY + 32, 70, 90, 8, '#e2e8f0', '#cbd5e1');
     if (photoBuffer) doc.image(photoBuffer, photoX + 21, bodyY + 32, { width: 70, height: 90, fit: [70, 90] });
-    else doc.fillColor('#94a3b8').fontSize(10).text('PHOTO', photoX + 21, bodyY + 72, { width: 70, align: 'center' });
-    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold').text(`Roll: ${roll}`, photoX + 8, bodyY + 131, { width: photoW - 16, align: 'center', ellipsis: true });
+    else { doc.fillColor('#94a3b8').fontSize(10); safeText(doc, 'PHOTO', photoX + 21, bodyY + 72, { width: 70, align: 'center' }); }
+    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, `Roll: ${roll}`, photoX + 8, bodyY + 131, { width: photoW - 16, align: 'center', ellipsis: true });
 
     const centerX = photoX + photoW + 12;
     drawRoundRect(doc, centerX, bodyY, centerW, 155, 12, '#ffffff', '#e2e8f0');
-    doc.fillColor('#0f766e').fontSize(8).font('Helvetica-Bold').text('EXAM CENTER', centerX + 14, bodyY + 12, { characterSpacing: 2 });
-    doc.fillColor('#0f172a').fontSize(9).font('Helvetica-Bold').text(short(center, 95), centerX + 14, bodyY + 35, { width: centerW - 28, height: 48 });
+    doc.fillColor('#0f766e').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'EXAM CENTER', centerX + 14, bodyY + 12, { characterSpacing: 2 });
+    doc.fillColor('#0f172a').fontSize(9).font('Helvetica-Bold');
+    doc.text(short(center, 95), centerX + 14, bodyY + 35, { width: centerW - 28, height: 48, lineBreak: false });
     doc.strokeColor('#cbd5e1').moveTo(centerX + 14, bodyY + 92).lineTo(centerX + centerW - 14, bodyY + 92).dash(2, { space: 2 }).stroke().undash();
-    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold').text('EXAM DATE', centerX + 14, bodyY + 108, { characterSpacing: 1.4 });
-    doc.fillColor('#0f172a').fontSize(13).font('Helvetica-Bold').text(dateText(exam.date || exam.startDate || body.examDate), centerX + 14, bodyY + 126);
+    doc.fillColor('#64748b').fontSize(7).font('Helvetica-Bold');
+    safeText(doc, 'EXAM DATE', centerX + 14, bodyY + 108, { characterSpacing: 1.4 });
+    doc.fillColor('#0f172a').fontSize(13).font('Helvetica-Bold');
+    safeText(doc, dateText(exam.date || exam.startDate || body.examDate), centerX + 14, bodyY + 126);
 
     const tableY = y0 + 333;
     const tableH = 142;
@@ -161,34 +185,39 @@ export const renderServerAdmitCardPdf = async (req: Request, res: Response) => {
     const tableX = x0 + 18;
     let tx = tableX;
     doc.rect(tableX, tableY, w - 36, 24).fill('#0f172a');
-    ['SL', 'Subject / Course', 'Exam Date', 'Duration', 'Centre'].forEach((head, i) => { doc.fillColor('#fff').fontSize(8).font('Helvetica-Bold').text(head, tx + 6, tableY + 8, { width: col[i] - 10, align: i === 0 ? 'center' : 'left' }); tx += col[i]; });
+    ['SL', 'Subject / Course', 'Exam Date', 'Duration', 'Centre'].forEach((head, i) => { doc.fillColor('#fff').fontSize(8).font('Helvetica-Bold'); safeText(doc, head, tx + 6, tableY + 8, { width: col[i] - 10, align: i === 0 ? 'center' : 'left' }); tx += col[i]; });
     rows.slice(0, 6).forEach((r: any, idx: number) => {
       const y = tableY + 24 + idx * 19;
       doc.rect(tableX, y, w - 36, 19).fill(idx % 2 ? '#f8fafc' : '#ffffff');
       let x = tableX;
       const vals = [String(idx + 1), short(r.courseCode || r.code || '-', 42), short(r.examDate || r.date || dateText(exam.date || exam.startDate), 18), short(r.examTime || r.time || r.duration || '-', 14), short(r.examCentre || r.centreName || r.centre || center, 52)];
-      vals.forEach((v, i) => { doc.fillColor('#0f172a').fontSize(7.6).font(i === 1 ? 'Helvetica-Bold' : 'Helvetica').text(v, x + 6, y + 6, { width: col[i] - 10, height: 10, ellipsis: true, align: i === 0 ? 'center' : 'left' }); x += col[i]; });
+      vals.forEach((v, i) => { doc.fillColor('#0f172a').fontSize(7.6).font(i === 1 ? 'Helvetica-Bold' : 'Helvetica'); safeText(doc, v, x + 6, y + 6, { width: col[i] - 10, height: 10, ellipsis: true, align: i === 0 ? 'center' : 'left' }); x += col[i]; });
       doc.strokeColor('#e2e8f0').lineWidth(0.5).moveTo(tableX, y).lineTo(tableX + w - 36, y).stroke();
     });
 
     const footerY = y0 + 492;
     drawRoundRect(doc, x0 + 18, footerY, 345, 66, 12, '#fff7ed', '#fed7aa');
-    doc.fillColor('#9a3412').fontSize(8).font('Helvetica-Bold').text('INSTRUCTIONS', x0 + 30, footerY + 10, { characterSpacing: 1.2 });
-    doc.fillColor('#475569').fontSize(7.2).font('Helvetica')
-      .text('1. Bring this admit card and school ID card to the exam hall.', x0 + 30, footerY + 25)
-      .text('2. Mobile phone, smart watch and unauthorized notes are not allowed.', x0 + 30, footerY + 36)
-      .text('3. Report to the exam hall at least 20 minutes before exam time.', x0 + 30, footerY + 47);
+    doc.fillColor('#9a3412').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'INSTRUCTIONS', x0 + 30, footerY + 10, { characterSpacing: 1.2 });
+    doc.fillColor('#475569').fontSize(7.2).font('Helvetica');
+    safeText(doc, '1. Bring this admit card and school ID card to the exam hall.', x0 + 30, footerY + 25, { width: 320 });
+    safeText(doc, '2. Mobile phone, smart watch and unauthorized notes are not allowed.', x0 + 30, footerY + 36, { width: 320 });
+    safeText(doc, '3. Report to the exam hall at least 20 minutes before exam time.', x0 + 30, footerY + 47, { width: 320 });
     const signX = x0 + 410;
     const sealX = x0 + 605;
     if (signBuffer) doc.image(signBuffer, signX + 42, footerY + 4, { width: 80, height: 32, fit: [80, 32] });
     doc.strokeColor('#0f172a').lineWidth(0.8).moveTo(signX, footerY + 43).lineTo(signX + 150, footerY + 43).stroke();
-    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold').text(moneyName(institution.headName || body.headName || 'Head Teacher'), signX, footerY + 48, { width: 150, align: 'center', ellipsis: true });
-    doc.fillColor('#64748b').fontSize(6).text('AUTHORIZED SIGNATURE', signX, footerY + 59, { width: 150, align: 'center' });
+    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, moneyName(institution.headName || body.headName || 'Head Teacher'), signX, footerY + 48, { width: 150, align: 'center', ellipsis: true });
+    doc.fillColor('#64748b').fontSize(6).font('Helvetica');
+    safeText(doc, 'AUTHORIZED SIGNATURE', signX, footerY + 59, { width: 150, align: 'center' });
     if (sealBuffer) doc.image(sealBuffer, sealX + 54, footerY + 3, { width: 42, height: 32, fit: [42, 32] });
     else drawRoundRect(doc, sealX + 58, footerY + 2, 34, 24, 10, '#ffffff', '#cbd5e1');
     doc.strokeColor('#0f172a').lineWidth(0.8).moveTo(sealX, footerY + 43).lineTo(sealX + 150, footerY + 43).stroke();
-    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold').text('Office Seal', sealX, footerY + 48, { width: 150, align: 'center' });
-    doc.fillColor('#64748b').fontSize(6).text('INSTITUTION VERIFICATION', sealX, footerY + 59, { width: 150, align: 'center' });
+    doc.fillColor('#334155').fontSize(8).font('Helvetica-Bold');
+    safeText(doc, 'Office Seal', sealX, footerY + 48, { width: 150, align: 'center' });
+    doc.fillColor('#64748b').fontSize(6).font('Helvetica');
+    safeText(doc, 'INSTITUTION VERIFICATION', sealX, footerY + 59, { width: 150, align: 'center' });
 
     doc.end();
   } catch (error: any) {
