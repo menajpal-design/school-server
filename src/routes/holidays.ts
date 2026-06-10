@@ -22,7 +22,7 @@ const findByKeys = (obj: any, keys: string[]): any => {
   for (const value of Object.values(obj)) { const found = findByKeys(value, keys); if (found !== undefined) return found; }
   return undefined;
 };
-const weeklyDayKeys = ['weeklyDays', 'weeklyOffDays', 'weeklyOff', 'weeklyHoliday', 'weeklyHolidays', 'weekendDays', 'weekend', 'weekends', 'offDays', 'holidayDays', 'closedDays', 'schoolClosedDays', 'schoolWeeklyOffDays', 'schoolWeekendDays'];
+const weeklyDayKeys = ['weeklyClosedDays', 'weeklyDays', 'weeklyOffDays', 'weeklyOff', 'weeklyHoliday', 'weeklyHolidays', 'weekendDays', 'weekend', 'weekends', 'offDays', 'holidayDays', 'closedDays', 'schoolClosedDays', 'schoolWeeklyOffDays', 'schoolWeekendDays'];
 const weeklyColorKeys = ['weeklyColor', 'weeklyOffColor', 'weeklyHolidayColor', 'weeklyHolidaysColor', 'weekendColor', 'weekendDayColor', 'holidayColor', 'closedDayColor', 'schoolClosedDayColor', 'schoolWeeklyOffColor', 'attendanceHolidayColor'];
 const settingsData = async (institutionId: any) => SiteSetting.find({ institutionId, key: { $in: ['app_control_settings', 'site_config', 'holiday_settings', 'attendance_settings', 'settings'] } }).lean();
 const settingsWeeklyDays = async (institutionId: any) => { const settings = await settingsData(institutionId); for (const setting of settings) { const found = findByKeys(setting.value, weeklyDayKeys); if (found !== undefined) return normalizeWeeklyDays(found); } return [5, 6]; };
@@ -155,8 +155,9 @@ router.put('/:id', authenticate, async (req: any, res) => {
 router.delete('/:id', authenticate, async (req: any, res) => {
   try {
     if (!canManageHolidays(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant/Admin can manage holidays.' });
-    await Holiday.findOneAndUpdate({ _id: req.params.id, institutionId: req.user.institutionId }, { $set: { isEnabled: false, isSchoolClosed: false } });
-    res.json({ message: 'Holiday disabled' });
+    const holiday = await Holiday.findOneAndDelete({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!holiday) return res.status(404).json({ message: 'Holiday not found' });
+    res.json({ message: 'Holiday deleted' });
   } catch (error: any) {
     res.status(500).json({ message: error?.message || 'Failed to delete holiday', error });
   }
