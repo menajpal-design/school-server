@@ -27,7 +27,16 @@ async function normalizePayload(req: any) {
   const allowedSubjectIds = new Set(subjects.map((item: any) => String(item._id)));
   const subjectMarks = rawMarks
     .filter((item: any) => allowedSubjectIds.has(String(item?.subjectId)))
-    .map((item: any) => ({ subjectId: item.subjectId, date: toDate(item.date), duration: Number(item.duration) || 120, totalMarks: Number(item.totalMarks) || 100, passingMarks: Number(item.passingMarks) || 33 }));
+    .map((item: any) => ({
+      subjectId: item.subjectId,
+      date: toDate(item.date),
+      duration: Number(item.duration) || 120,
+      totalMarks: Number(item.totalMarks) || 100,
+      passingMarks: Number(item.passingMarks) || 33,
+      isCompleted: item.isCompleted === true,
+      completedAt: item.completedAt ? toDate(item.completedAt) : undefined,
+      resultEntryEnabled: item.resultEntryEnabled === true,
+    }));
   const firstSubject = subjectMarks[0]?.subjectId;
   const isPublished = req.body.isPublished === true && subjectMarks.length > 0;
   return {
@@ -101,6 +110,28 @@ router.put('/:id', examManageGuard, async (req: any, res) => {
     res.json({ exam: updated, message: 'Exam updated successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to update exam', error });
+  }
+});
+
+router.patch('/:id/subjects/:subjectId/complete', examManageGuard, async (req: any, res) => {
+  try {
+    if (!isValidId(req.params.id) || !isValidId(req.params.subjectId)) return res.status(400).json({ message: 'Invalid exam or subject id.' });
+    const complete = req.body?.complete !== false;
+    const exam: any = await Exam.findOne({ _id: req.params.id, institutionId: req.user.institutionId });
+    if (!exam) return res.status(404).json({ message: 'Exam not found.' });
+    const marks = Array.isArray(exam.subjectMarks) ? exam.subjectMarks : [];
+    const item = marks.find((mark: any) => String(mark.subjectId) === String(req.params.subjectId));
+    if (!item) return res.status(404).json({ message: 'Subject schedule not found in this exam.' });
+    item.isCompleted = complete;
+    item.resultEntryEnabled = complete;
+    item.completedAt = complete ? new Date() : undefined;
+    const allCompleted = marks.length > 0 && marks.every((mark: any) => mark.isCompleted === true);
+    exam.status = allCompleted ? 'completed' : (exam.status === 'completed' ? 'scheduled' : exam.status);
+    await exam.save();
+    const updated = await populateExam().where({ _id: exam._id, institutionId: req.user.institutionId }).findOne();
+    res.json({ exam: updated, message: complete ? 'Subject exam marked as completed. Result entry enabled.' : 'Subject completion removed.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update subject completion', error });
   }
 });
 
