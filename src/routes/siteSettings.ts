@@ -7,6 +7,7 @@ import SettingsAuditLog from '../models/SettingsAuditLog';
 const router = express.Router();
 const SITE_CONFIG_KEY = 'site_config';
 const APP_CONTROL_KEY = 'app_control_settings';
+const HOLIDAY_SETTINGS_KEY = 'holiday_settings';
 const MONGO_WARNING_MB = 475;
 const allowedRoles = ['admin', 'super_admin', 'head'];
 const secretKeyPattern = /(password|pass|secret|token|api[_-]?key|apikey|key|uri|url|mongodb|mongo|imgbb|sms|email_pass|access[_-]?token|refresh[_-]?token)/i;
@@ -137,6 +138,24 @@ router.put('/site-config', async (req: any, res) => {
     await audit(req, SITE_CONFIG_KEY, 'update', changedFields(req.body));
     res.json({ config: maskHistoryConfig(setting.value || {}), hasMongoUrl: Boolean(next.mongodbUrl || normalizeMongoItems(next).length), warningLimits: { mongoMb: MONGO_WARNING_MB }, message: 'Site config saved securely. Secrets are masked in responses.' });
   } catch (error) { res.status(500).json({ message: 'Failed to save site config', error }); }
+});
+
+router.get('/holiday-settings', async (req: any, res) => {
+  try {
+    const setting = await SiteSetting.findOne(scopedQuery(req, HOLIDAY_SETTINGS_KEY)).lean();
+    res.json({ settings: setting?.value || {} });
+  } catch (error) { res.status(500).json({ message: 'Failed to load holiday settings', error }); }
+});
+
+router.put('/holiday-settings', async (req: any, res) => {
+  try {
+    const body = req.body || {};
+    const weeklyClosedDays = Array.isArray(body.weeklyClosedDays) ? body.weeklyClosedDays : [];
+    const next = { ...body, weeklyClosedDays, weeklyDays: weeklyClosedDays, updatedAt: new Date().toISOString() };
+    const setting = await SiteSetting.findOneAndUpdate(scopedQuery(req, HOLIDAY_SETTINGS_KEY), { value: next, isSecret: false, institutionId: req.user.institutionId, updatedBy: req.user._id }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    await audit(req, HOLIDAY_SETTINGS_KEY, 'update', changedFields(req.body));
+    res.json({ settings: setting.value || {}, message: 'Holiday settings saved.' });
+  } catch (error) { res.status(500).json({ message: 'Failed to save holiday settings', error }); }
 });
 
 router.get('/app-controls', async (req: any, res) => {
