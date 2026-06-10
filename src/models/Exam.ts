@@ -9,7 +9,7 @@ export interface IExam extends Document {
   startDate: Date;
   endDate: Date;
   date?: Date;
-  duration?: number; // in minutes
+  duration?: number;
   totalMarks?: number;
   passingMarks?: number;
   subjectMarks: {
@@ -18,6 +18,9 @@ export interface IExam extends Document {
     duration: number;
     totalMarks: number;
     passingMarks: number;
+    isCompleted?: boolean;
+    completedAt?: Date;
+    resultEntryEnabled?: boolean;
   }[];
   approvalRequired: boolean;
   status: 'draft' | 'scheduled' | 'approved' | 'published' | 'completed';
@@ -48,6 +51,9 @@ const ExamSchema: Schema = new Schema({
     duration: { type: Number, required: true, default: 120 },
     totalMarks: { type: Number, required: true, default: 100 },
     passingMarks: { type: Number, required: true, default: 33 },
+    isCompleted: { type: Boolean, default: false },
+    completedAt: { type: Date },
+    resultEntryEnabled: { type: Boolean, default: false },
   }],
   approvalRequired: { type: Boolean, default: false },
   status: { type: String, enum: ['draft', 'scheduled', 'approved', 'published', 'completed'], default: 'scheduled' },
@@ -60,7 +66,6 @@ const ExamSchema: Schema = new Schema({
   timestamps: true
 });
 
-// Indexes
 ExamSchema.index({ subjectId: 1, date: 1 });
 ExamSchema.index({ classId: 1, type: 1 });
 ExamSchema.index({ institutionId: 1, date: 1 });
