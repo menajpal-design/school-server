@@ -22,7 +22,13 @@ jobs:
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           set -e
-          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SSH_USER@$SSH_HOST" 'bash -s' <<'EOF'
+          sshpass -p "$SSH_PASSWORD" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'EOF'
           set -e
 
           if [ -d "$HOME/projects/school/school-server" ]; then
@@ -38,9 +44,38 @@ jobs:
 
           echo "Deploying server to $(pwd)..."
           git reset --hard
-          git pull origin main
-          npm install
-          sed -i "s/const card = await M.IDCard.findOne/const card: any = await M.IDCard.findOne/g" src/routes/attendanceActiveSafe.ts
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          echo "Activating Node 20 if nvm exists..."
+          export NVM_DIR="$HOME/.nvm"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            . "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
+          fi
+
+          echo "Node and npm version:"
+          node -v
+          npm -v
+
+          echo "Installing dependencies..."
+          npm install --no-audit --no-fund --prefer-offline
+
+          if [ -f src/routes/attendanceActiveSafe.ts ]; then
+            sed -i "s/const card = await M.IDCard.findOne/const card: any = await M.IDCard.findOne/g" src/routes/attendanceActiveSafe.ts
+          fi
+
+          echo "Building TypeScript server with keep-alive output..."
+          ( while true; do echo "build still running... $(date -u +%H:%M:%S)"; sleep 25; done ) &
+          KEEPALIVE_PID=$!
+          trap 'kill $KEEPALIVE_PID 2>/dev/null || true' EXIT
           npm run build
-          pm2 restart school-server --update-env || pm2 restart all || pm2 start dist/server.js --name "school-server"
+          kill $KEEPALIVE_PID 2>/dev/null || true
+          trap - EXIT
+
+          echo "Restarting PM2 server..."
+          pm2 restart school-server --update-env || pm2 restart all --update-env || pm2 start dist/server.js --name "school-server"
+          pm2 save || true
           EOF
