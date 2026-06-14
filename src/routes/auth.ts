@@ -311,6 +311,8 @@ router.get('/email-diagnostic', async (_req, res) => {
       gmail_587: await checkPort('smtp.gmail.com', 587),
       gmail_465: await checkPort('smtp.gmail.com', 465),
       sendgrid_587: await checkPort('smtp.sendgrid.net', 587),
+      sendgrid_2525: await checkPort('smtp.sendgrid.net', 2525),
+      brevo_2525: await checkPort('smtp-relay.brevo.com', 2525),
       configured_port: smtpHost ? await checkPort(smtpHost, Number(smtpPort)) : null,
     };
 
