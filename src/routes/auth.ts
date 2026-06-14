@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { register, login, updateProfile, changePassword, logout, refreshToken } from '../controllers/auth';
 import { authenticate } from '../middleware/auth';
@@ -83,40 +84,97 @@ router.post('/forgot-password', async (req, res) => {
 
     const emailQuery = identifier.toLowerCase();
 
-    // Look up user directly first
-    let user = await User.findOne({ 
-      $or: [
-        { email: emailQuery }, 
-        { username: emailQuery }, 
-        { phone: identifier }
-      ] 
-    }).populate('institutionId');
+    // ── MULTI-TENANT CONTEXT RESOLUTION ──────────────────────────────
+    // Resolve subdomain with multi-layer fallback
+    const extractSubdomain = () => {
+      const explicit = String(
+        req.body.subdomain || 
+        req.query.subdomain || 
+        req.headers['x-school-subdomain'] || 
+        req.headers['x-client-subdomain'] || 
+        (req as any).subdomain || 
+        ''
+      ).trim().toLowerCase();
+      
+      const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'support']);
+      if (explicit && !RESERVED_SUBDOMAINS.has(explicit)) return explicit;
 
-    // If not found, check if it's a student roll or guardian identifier
-    if (!user) {
-      const student = await Student.findOne({ 
-        $or: [
-          { rollNumber: identifier }, 
-          { guardianPhone: identifier }, 
-          { guardianEmail: emailQuery }
-        ] 
-      }).select('userId').lean();
+      const host = String(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname || '')
+        .replace(/^https?:\/\//i, '')
+        .replace(/:\d+$/, '')
+        .replace(/^www\./i, '')
+        .toLowerCase();
 
-      if (student?.userId) {
-        user = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+      const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
+      if (!host || host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}` || host === 'localhost' || host === '127.0.0.1') return '';
+      if (host.endsWith(`.${MAIN_DOMAIN}`)) {
+        const sub = host.slice(0, -1 * (`.${MAIN_DOMAIN}`).length).split('.').pop() || '';
+        return RESERVED_SUBDOMAINS.has(sub) ? '' : sub;
       }
+      return '';
+    };
+
+    const subdomain = extractSubdomain();
+    let tenantInstitution: any = null;
+    if (subdomain) {
+      tenantInstitution = await Institution.findOne({ subdomain }).lean().catch(() => null);
+    }
+    
+    // Fallback: Check if there is an institutionId in headers, query, or body
+    const headerInstId = req.headers['x-institution-id'] || req.body.institutionId || req.query.institutionId;
+    if (!tenantInstitution && headerInstId && mongoose.Types.ObjectId.isValid(String(headerInstId))) {
+      tenantInstitution = await Institution.findById(headerInstId).lean().catch(() => null);
     }
 
-    if (!user) {
+    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+
+    // ── LOOKUP USER INSIDE TENANT CONTEXT ─────────────────────────────
+    const lookupUser = async () => {
+      // Look up user directly first
+      let userDoc = await User.findOne({ 
+        $or: [
+          { email: emailQuery }, 
+          { username: emailQuery }, 
+          { phone: identifier }
+        ] 
+      }).populate('institutionId');
+
+      // If not found, check if it's a student roll or guardian identifier
+      if (!userDoc) {
+        const student = await Student.findOne({ 
+          $or: [
+            { rollNumber: identifier }, 
+            { guardianPhone: identifier }, 
+            { guardianEmail: emailQuery }
+          ] 
+        }).select('userId').lean();
+
+        if (student?.userId) {
+          userDoc = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        }
+      }
+
+      if (!userDoc) return null;
+
+      // Determine the email to send to
+      let targetEmail = userDoc.email;
+      if (!targetEmail && userDoc.role === 'student') {
+        const student = await Student.findOne({ userId: userDoc._id }).select('guardianEmail').lean();
+        targetEmail = student?.guardianEmail;
+      }
+
+      return { user: userDoc, targetEmail };
+    };
+
+    const result = tenantContext 
+      ? await runWithTenantStorage(tenantContext, lookupUser).catch(() => null) 
+      : await lookupUser();
+
+    if (!result || !result.user) {
       return res.status(404).json({ message: 'No user account found matching the provided details.' });
     }
 
-    // Determine the email to send to
-    let targetEmail = user.email;
-    if (!targetEmail && user.role === 'student') {
-      const student = await Student.findOne({ userId: user._id }).select('guardianEmail').lean();
-      targetEmail = student?.guardianEmail;
-    }
+    const { user, targetEmail } = result;
 
     if (!targetEmail) {
       return res.status(400).json({ 
@@ -133,17 +191,14 @@ router.post('/forgot-password', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(tempPass, 10);
 
-    // Save temporary password in primary database
-    user.password = hashedPassword;
-    await user.save();
-
-    // Sync to tenant storage if configured
-    const tenantInstitution = await Institution.findById(user.institutionId).lean().catch(() => null);
-    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+    // Save temporary password in primary database and/or tenant database
     if (tenantContext) {
       await runWithTenantStorage(tenantContext, async () => {
         await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
-      }).catch((err) => console.warn('Tenant password sync failed:', err?.message || err));
+      });
+    } else {
+      user.password = hashedPassword;
+      await user.save();
     }
 
     // Send email with the temporary password
