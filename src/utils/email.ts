@@ -81,7 +81,7 @@ const getDisabledMessage = (count: number, bulk = false) =>
     ? `Email service is not configured. Configure SENDGRID_USERNAME/SENDGRID_PASSWORD or SMTP_USER/SMTP_PASS before sending bulk email to ${count} recipients.`
     : `Email service is not configured. Configure SENDGRID_USERNAME/SENDGRID_PASSWORD or SMTP_USER/SMTP_PASS before sending mail to ${count} recipient${count === 1 ? '' : 's'}.`;
 
-export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
+export const sendEmailDetail = async (options: EmailOptions): Promise<{ success: boolean; error?: string }> => {
   try {
     const transport = getEmailTransport();
     const recipients = Array.isArray(options.to) ? options.to.join(', ') : options.to;
@@ -90,18 +90,18 @@ export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
       const message = getDisabledMessage(Array.isArray(options.to) ? options.to.length : 1);
       if (process.env.NODE_ENV === 'production') {
         console.error(message);
-        return false;
+        return { success: false, error: 'Email service is not configured (credentials missing or placeholder)' };
       }
 
       console.log(message);
       console.log(`Email would be sent to ${recipients}`);
-      return true;
+      return { success: true };
     }
 
     const from = options.from || process.env.EMAIL_FROM || transport.from;
     if (!from) {
       console.error('EMAIL_FROM or SMTP/SendGrid user is required to send mail');
-      return false;
+      return { success: false, error: 'EMAIL_FROM or SMTP/SendGrid user is required' };
     }
 
     await transport.transporter.sendMail({
@@ -114,11 +114,16 @@ export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
     });
 
     console.log(`Email sent to ${recipients}`);
-    return true;
-  } catch (error) {
+    return { success: true };
+  } catch (error: any) {
     console.error('Error sending email:', error);
-    return false;
+    return { success: false, error: error?.message || String(error) };
   }
+};
+
+export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
+  const result = await sendEmailDetail(options);
+  return result.success;
 };
 
 export const sendBulkEmails = async (recipients: string[], subject: string, html: string): Promise<boolean> => {

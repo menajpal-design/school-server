@@ -9,7 +9,7 @@ import Institution from '../models/Institution';
 import User from '../models/User';
 import Student from '../models/Student';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
-import { sendEmail, isEmailConfigured } from '../utils/email';
+import { sendEmailDetail, isEmailConfigured } from '../utils/email';
 import { resolveProfileForUser } from '../services/userProfileResolver';
 
 const router = express.Router();
@@ -224,21 +224,23 @@ router.post('/forgot-password', async (req, res) => {
       </div>
     `;
 
-    const emailSent = await sendEmail({
+    const emailResult = await sendEmailDetail({
       to: targetEmail,
       subject: emailSubject,
       html: emailHtml,
       text: `Dear ${user.name},\n\nWe received a request to recover the password for your account.\n\nYour temporary password is: ${tempPass}\n\nPlease change this password immediately from your profile after logging in.\n\nBest regards,\nEasySchool Team`
     });
 
-    if (!emailSent) {
+    if (!emailResult.success) {
       const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false' && isEmailConfigured();
       if (!emailEnabled) {
         return res.status(503).json({ 
-          message: 'পাসওয়ার্ড পুনরুদ্ধার ইমেল সিস্টেমটি কনফিগার করা নেই বা বন্ধ আছে। আপনার অ্যাকাউন্ট পাসওয়ার্ড রিসেট করতে অনুগ্রহ করে স্কুল অ্যাডমিনের সাথে যোগাযোগ করুন। (Password recovery email service is not configured or disabled. Please contact your school administrator to reset your password.)' 
+          message: `পাসওয়ার্ড পুনরুদ্ধার ইমেল সিস্টেমটি কনফিগার করা নেই বা বন্ধ আছে। (${emailResult.error || 'SMTP configuration missing'})` 
         });
       }
-      return res.status(500).json({ message: 'Failed to send recovery email. Please contact support or try again later.' });
+      return res.status(500).json({ 
+        message: `Failed to send recovery email. (${emailResult.error || 'SMTP error'}). Please contact support or try again later.` 
+      });
     }
 
     return res.json({ message: 'A temporary password has been sent to the email address linked to your account.' });
