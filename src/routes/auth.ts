@@ -191,14 +191,17 @@ router.post('/forgot-password', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(tempPass, 10);
 
-    // Save temporary password in primary database and/or tenant database
-    if (tenantContext) {
-      await runWithTenantStorage(tenantContext, async () => {
+    // Save temporary password in primary database
+    await runWithTenantStorage(null, async () => {
+      await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
+    });
+
+    // Save temporary password in tenant database if it exists
+    const resolvedTenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (resolvedTenantContext) {
+      await runWithTenantStorage(resolvedTenantContext, async () => {
         await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
       });
-    } else {
-      user.password = hashedPassword;
-      await user.save();
     }
 
     // Send email with the temporary password

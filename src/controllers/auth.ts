@@ -159,10 +159,17 @@ export const getProfile = async (req: Request, res: Response) => {
 export const updateProfile = async (req: Request, res: Response) => {
   try {
     const { name, phone, avatar } = req.body;
-    const user = await User.findById((req as any).user._id);
+    const user = await User.findById((req as any).user._id).populate('institutionId');
     if (!user) return res.status(404).json({ message: 'User not found' });
     user.name = name || user.name; user.phone = phone || user.phone; user.avatar = avatar || user.avatar;
     await user.save();
+
+    // Synchronize profile changes to tenant storage
+    const tenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
+
     res.json({ message: 'Profile updated successfully', user: { id: user._id, _id: user._id, name: user.name, username: user.username, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar } });
   } catch (error) { res.status(500).json({ message: 'Server error', error: String(error) }); }
 };
@@ -170,11 +177,19 @@ export const updateProfile = async (req: Request, res: Response) => {
 export const changePassword = async (req: Request, res: Response) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const user = await User.findById((req as any).user._id);
+    const user = await User.findById((req as any).user._id).populate('institutionId');
     if (!user) return res.status(404).json({ message: 'User not found' });
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) return res.status(400).json({ message: 'Current password is incorrect' });
-    user.password = await bcrypt.hash(newPassword, 10); await user.save();
+    user.password = await bcrypt.hash(newPassword, 10); 
+    await user.save();
+
+    // Synchronize password change to tenant storage
+    const tenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
+
     res.json({ message: 'Password changed successfully' });
   } catch (error) { res.status(500).json({ message: 'Server error', error: String(error) }); }
 };

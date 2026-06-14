@@ -1,7 +1,8 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
-import { authenticate, authorize } from '../middleware/auth';
+import { authenticate, authorize, syncUserToTenantStorage } from '../middleware/auth';
+import { resolveTenantStorageContext } from '../config/tenantStorage';
 import getTenantIdFromReq from '../utils/tenant';
 import User from '../models/User';
 import ClassModel from '../models/Class';
@@ -64,20 +65,67 @@ router.use(authorize('head', 'admin', 'super_admin'));
 router.get('/', (req, res) => { User.find(buildUserListQuery(req)).select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt').sort({ createdAt: -1 }).then((users) => res.json({ users })).catch((error) => res.status(500).json({ message: 'Failed to load users', error })); });
 router.get('/all', (req, res) => { User.find(buildUserListQuery(req)).select('name username email role phone avatar isActive lastLogin permissions institutionId createdAt updatedAt').sort({ createdAt: -1 }).then((users) => res.json({ users })).catch((error) => res.status(500).json({ message: 'Failed to load users', error })); });
 router.get('/permissions', (req, res) => { const managedRoles = getManagedRoles(req.user?.role); if (!managedRoles.length) return res.json({ roles: [], matrix: {}, permissions: [] }); User.find({ ...scopedUserQuery(req), role: { $in: managedRoles } }).select('role permissions').then((users) => { const roles = [...new Set(users.map((user) => user.role))]; const matrix = roles.reduce((acc: any, role) => { acc[role] = [...new Set(users.filter((user) => user.role === role).flatMap((user) => user.permissions || []))]; return acc; }, {}); res.json({ roles, matrix, permissions: [...new Set(users.flatMap((user) => user.permissions || []))] }); }).catch((error) => res.status(500).json({ message: 'Failed to load permissions', error })); });
-router.patch('/:id/status', async (req, res) => { try { const managedRoles = getManagedRoles(req.user?.role); const user = await User.findOneAndUpdate({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } }, { isActive: req.body.isActive }, { new: true }).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt'); if (!user) return res.status(404).json({ message: 'User not found' }); res.json({ user }); } catch (error) { res.status(500).json({ message: 'Failed to update user status', error }); } });
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const managedRoles = getManagedRoles(req.user?.role);
+    const user = await User.findOneAndUpdate(
+      { _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } },
+      { isActive: req.body.isActive },
+      { new: true }
+    ).populate('institutionId');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Sync status change to tenant DB
+    const tenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
+
+    res.json({ user });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to update user status', error });
+  }
+});
 router.patch('/:id/role', async (req: any, res) => {
   try {
     const nextRole = String(req.body.role || '') as UserRole; const managedRoles = getManagedRoles(req.user?.role);
     if (!validRoles.includes(nextRole)) return res.status(400).json({ message: 'Invalid role' });
     if (!managedRoles.includes(nextRole)) return res.status(403).json({ message: 'You can only assign lower roles.' });
-    const target = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } });
+    const target = await User.findOne({ _id: req.params.id, ...scopedUserQuery(req), role: { $in: managedRoles } }).populate('institutionId');
     if (!target) return res.status(404).json({ message: 'User not found' });
     await syncClassTeacherProfile(req, target, nextRole, req.body.classTeacherClassId);
-    target.role = nextRole; await target.save();
+    target.role = nextRole; 
+    await target.save();
+
+    // Sync role change to tenant DB
+    const tenantContext = target.institutionId ? resolveTenantStorageContext(target.institutionId) : null;
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, target);
+    }
+
     const user = await User.findById(target._id).select('name email role phone avatar isActive lastLogin permissions createdAt updatedAt');
     res.json({ user });
   } catch (error: any) { res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to update user role', error }); }
 });
-router.post('/:id/reset-password', async (req, res) => { try { const password = String(req.body.password || 'User@123'); const query = isPlatformAdmin(req.user?.role) ? { _id: req.params.id } : { _id: req.params.id, ...scopedUserQuery(req), role: { $in: getManagedRoles(req.user?.role) } }; const user = await User.findOne(query); if (!user) return res.status(404).json({ message: 'User not found' }); user.password = await bcrypt.hash(password, 10); await user.save(); res.json({ message: 'Password reset successfully', temporaryPassword: password }); } catch (error) { res.status(500).json({ message: 'Failed to reset password', error }); } });
+router.post('/:id/reset-password', async (req, res) => {
+  try {
+    const password = String(req.body.password || 'User@123');
+    const query = isPlatformAdmin(req.user?.role) ? { _id: req.params.id } : { _id: req.params.id, ...scopedUserQuery(req), role: { $in: getManagedRoles(req.user?.role) } };
+    const user = await User.findOne(query).populate('institutionId');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    user.password = await bcrypt.hash(password, 10);
+    await user.save();
+
+    // Synchronize password reset to tenant storage
+    const tenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (tenantContext) {
+      await syncUserToTenantStorage(tenantContext, user);
+    }
+
+    res.json({ message: 'Password reset successfully', temporaryPassword: password });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to reset password', error });
+  }
+});
 router.put('/permissions', async (req, res) => { try { if (!['head', 'admin', 'super_admin'].includes(req.user.role)) return res.status(403).json({ message: 'Only Head or Admin can update permissions' }); const matrix = req.body.matrix || {}; await Promise.all(Object.entries(matrix).map(([role, permissions]) => User.updateMany({ ...scopedUserQuery(req), role }, { permissions: Array.isArray(permissions) ? permissions : [] }))); res.json({ message: 'Permissions updated', matrix }); } catch (error) { res.status(500).json({ message: 'Failed to update permissions', error }); } });
 export default router;

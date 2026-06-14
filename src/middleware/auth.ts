@@ -4,7 +4,7 @@ import User from '../models/User';
 import Institution from '../models/Institution';
 import { resolveTenantStorageContext, runWithTenantStorage } from '../config/tenantStorage';
 
-const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
+export const syncUserToTenantStorage = async (tenantContext: any, user: any) => {
   if (!tenantContext || !user?._id) return;
   const plainUser = typeof user.toObject === 'function' ? user.toObject({ depopulate: true, versionKey: false }) : user;
   const payload = { ...plainUser, _id: plainUser._id, institutionId: plainUser.institutionId?._id || plainUser.institutionId };
