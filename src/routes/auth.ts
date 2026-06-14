@@ -11,6 +11,7 @@ import Student from '../models/Student';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
 import { sendEmailDetail, isEmailConfigured, getEmailTransport } from '../utils/email';
 import { resolveProfileForUser } from '../services/userProfileResolver';
+import net from 'net';
 
 const router = express.Router();
 
@@ -282,12 +283,44 @@ router.get('/email-diagnostic', async (_req, res) => {
       EMAIL_FROM: emailFrom || 'not_configured',
     };
 
+    // Helper to test if a port is open via TCP socket
+    const checkPort = (host: string, port: number, timeoutMs = 3000) => {
+      return new Promise<{ open: boolean; error?: string }>((resolve) => {
+        const socket = new net.Socket();
+        const timer = setTimeout(() => {
+          socket.destroy();
+          resolve({ open: false, error: 'Connection timeout (3s)' });
+        }, timeoutMs);
+
+        socket.connect(port, host, () => {
+          clearTimeout(timer);
+          socket.end();
+          resolve({ open: true });
+        });
+
+        socket.on('error', (err) => {
+          clearTimeout(timer);
+          socket.destroy();
+          resolve({ open: false, error: err.message || String(err) });
+        });
+      });
+    };
+
+    // Perform socket tests on common email ports
+    const portChecks = {
+      gmail_587: await checkPort('smtp.gmail.com', 587),
+      gmail_465: await checkPort('smtp.gmail.com', 465),
+      sendgrid_587: await checkPort('smtp.sendgrid.net', 587),
+      configured_port: smtpHost ? await checkPort(smtpHost, Number(smtpPort)) : null,
+    };
+
     const transport = getEmailTransport();
     if (!transport) {
       return res.json({
         success: false,
         message: 'No email transport is configured or active according to environment variables.',
         envInfo,
+        portChecks,
       });
     }
 
@@ -315,6 +348,7 @@ router.get('/email-diagnostic', async (_req, res) => {
         ? 'Email server connection verified successfully!'
         : `Email server connection failed: ${verificationResult.error}`,
       envInfo,
+      portChecks,
       verificationError: verificationResult.error || null,
     });
   } catch (error: any) {
