@@ -184,3 +184,7 @@ export const sendNotificationEmail = async (email: string, title: string, body: 
     text: body,
   });
 };
+
+export const isEmailConfigured = (): boolean => {
+  return getEmailTransport() !== null;
+};
