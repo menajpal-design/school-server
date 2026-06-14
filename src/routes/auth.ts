@@ -229,6 +229,12 @@ router.post('/forgot-password', async (req, res) => {
     });
 
     if (!emailSent) {
+      const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+      if (!emailEnabled) {
+        return res.status(503).json({ 
+          message: 'পাসওয়ার্ড পুনরুদ্ধার ইমেল সিস্টেমটি কনফিগার করা নেই বা বন্ধ আছে। আপনার অ্যাকাউন্ট পাসওয়ার্ড রিসেট করতে অনুগ্রহ করে স্কুল অ্যাডমিনের সাথে যোগাযোগ করুন। (Password recovery email service is not configured or disabled. Please contact your school administrator to reset your password.)' 
+        });
+      }
       return res.status(500).json({ message: 'Failed to send recovery email. Please contact support or try again later.' });
     }
 

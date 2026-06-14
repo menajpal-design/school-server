@@ -27,24 +27,37 @@ interface EmailTransport {
 }
 
 const getEmailTransport = (): EmailTransport | null => {
+  const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+  if (!emailEnabled) {
+    return null;
+  }
+
   const sendgridUser = process.env.SENDGRID_USERNAME || '';
   const sendgridPass = process.env.SENDGRID_PASSWORD || '';
   const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
   const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
 
-  if (sendgridUser && sendgridPass) {
+  const isPlaceholder = (user: string) => 
+    !user || 
+    user.includes('your_email') || 
+    user.includes('example.com');
+
+  if (sendgridUser && sendgridPass && !isPlaceholder(sendgridUser)) {
     return {
       transporter: nodemailer.createTransport({
         host: 'smtp.sendgrid.net',
         port: 587,
         secure: false,
         auth: { user: sendgridUser, pass: sendgridPass },
+        connectionTimeout: 5000,
+        socketTimeout: 5000,
+        greetingTimeout: 5000,
       }),
       from: process.env.EMAIL_FROM || sendgridUser,
     };
   }
 
-  if (smtpUser && smtpPass) {
+  if (smtpUser && smtpPass && !isPlaceholder(smtpUser)) {
     const port = Number(process.env.SMTP_PORT || 587);
     return {
       transporter: nodemailer.createTransport({
@@ -52,6 +65,9 @@ const getEmailTransport = (): EmailTransport | null => {
         port,
         secure: port === 465,
         auth: { user: smtpUser, pass: smtpPass },
+        connectionTimeout: 5000,
+        socketTimeout: 5000,
+        greetingTimeout: 5000,
       }),
       from: process.env.EMAIL_FROM || smtpUser,
     };
