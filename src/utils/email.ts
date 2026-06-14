@@ -26,7 +26,7 @@ interface EmailTransport {
   from: string;
 }
 
-const getEmailTransport = (): EmailTransport | null => {
+export const getEmailTransport = (): EmailTransport | null => {
   const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
   if (!emailEnabled) {
     return null;

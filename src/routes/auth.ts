@@ -9,7 +9,7 @@ import Institution from '../models/Institution';
 import User from '../models/User';
 import Student from '../models/Student';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
-import { sendEmailDetail, isEmailConfigured } from '../utils/email';
+import { sendEmailDetail, isEmailConfigured, getEmailTransport } from '../utils/email';
 import { resolveProfileForUser } from '../services/userProfileResolver';
 
 const router = express.Router();
@@ -252,6 +252,77 @@ router.post('/forgot-password', async (req, res) => {
 
 router.get('/check-users', async (_req, res) => {
   return res.json({ message: 'User check endpoint is available' });
+});
+
+router.get('/email-diagnostic', async (_req, res) => {
+  try {
+    const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const smtpPort = process.env.SMTP_PORT || '587';
+    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
+    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
+    const sendgridUser = process.env.SENDGRID_USERNAME || '';
+    const sendgridPass = process.env.SENDGRID_PASSWORD || '';
+    const emailFrom = process.env.EMAIL_FROM || '';
+
+    const mask = (str: string) => {
+      if (!str) return 'not_configured';
+      if (str.length <= 4) return '****';
+      return `${str.substring(0, 2)}...${str.substring(str.length - 2)}`;
+    };
+
+    const envInfo = {
+      EMAIL_ENABLED: emailEnabled,
+      SMTP_HOST: smtpHost,
+      SMTP_PORT: smtpPort,
+      SMTP_USER: mask(smtpUser),
+      SMTP_PASS: mask(smtpPass),
+      SENDGRID_USERNAME: mask(sendgridUser),
+      SENDGRID_PASSWORD: mask(sendgridPass),
+      EMAIL_FROM: emailFrom || 'not_configured',
+    };
+
+    const transport = getEmailTransport();
+    if (!transport) {
+      return res.json({
+        success: false,
+        message: 'No email transport is configured or active according to environment variables.',
+        envInfo,
+      });
+    }
+
+    // Attempt verification of SMTP transporter connection
+    const verificationPromise = new Promise<{ success: boolean; error?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        resolve({ success: false, error: 'Connection verification timed out (5s)' });
+      }, 5000);
+
+      (transport.transporter as any).verify((err: any) => {
+        clearTimeout(timer);
+        if (err) {
+          resolve({ success: false, error: err.message || String(err) });
+        } else {
+          resolve({ success: true });
+        }
+      });
+    });
+
+    const verificationResult = await verificationPromise;
+
+    return res.json({
+      success: verificationResult.success,
+      message: verificationResult.success 
+        ? 'Email server connection verified successfully!'
+        : `Email server connection failed: ${verificationResult.error}`,
+      envInfo,
+      verificationError: verificationResult.error || null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: `Diagnostic execution failed: ${error?.message || String(error)}`,
+    });
+  }
 });
 
 export default router;
