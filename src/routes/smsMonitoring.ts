@@ -41,9 +41,81 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
 router.patch('/purchases/:id/status', authenticate, authorize('admin', 'super_admin'), async (req: any, res: Response) => { try { const status = String(req.body.status || '').toLowerCase(); if (!['pending', 'approved', 'rejected', 'paid'].includes(status)) return res.status(400).json({ message: 'Invalid status.' }); const request: any = await SmsPurchaseRequest.findById(req.params.id); if (!request) return res.status(404).json({ message: 'SMS purchase request not found.' }); request.status = status; request.approvedBy = req.user?._id || req.user?.id; request.approvedAt = status === 'pending' ? undefined : (request.approvedAt || new Date()); request.paidAt = status === 'paid' ? (request.paidAt || new Date()) : request.paidAt; if ((status === 'approved' || status === 'paid') && !request.creditedAt) { const qty = Number(request.quantity || 0); await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.monthlySmsLimit': qty } }); request.creditedAt = new Date(); request.creditedQuantity = qty; } await request.save(); res.json({ message: `SMS purchase request marked as ${status}.`, request }); } catch (error) { res.status(500).json({ message: 'Failed to update SMS purchase status', error }); } });
 
 router.get('/', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
-  try { const { status, parentId, studentId, type, startDate, endDate } = req.query; const tenantId = getTenantIdFromReq(req); if (!tenantId) return res.status(400).json({ error: 'Institution not found' }); const filter: any = { institutionId: tenantId }; if (status) filter.status = status; if (parentId) filter.parentId = parentId; if (studentId) filter.studentId = studentId; if (type) filter.type = type; if (startDate || endDate) { filter.sentAt = {}; if (startDate) filter.sentAt.$gte = new Date(startDate as string); if (endDate) filter.sentAt.$lte = new Date(endDate as string); } const smsLogs = await SmsLog.find(filter).populate('parentId', 'userId').populate('studentId', 'name').sort({ sentAt: -1 }).limit(500); res.json({ total: smsLogs.length, data: smsLogs.map((log) => log.toObject()) }); } catch (error) { res.status(500).json({ error: 'Failed to fetch SMS logs' }); }
+  try {
+    const { status, parentId, studentId, type, startDate, endDate, institutionId } = req.query;
+    const filter: any = {};
+
+    if (isSystemAdmin(req)) {
+      if (institutionId) {
+        filter.institutionId = institutionId;
+      }
+    } else {
+      const tenantId = getTenantIdFromReq(req);
+      if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
+      filter.institutionId = tenantId;
+    }
+
+    if (status) filter.status = status;
+    if (parentId) filter.parentId = parentId;
+    if (studentId) filter.studentId = studentId;
+    if (type) filter.type = type;
+    if (startDate || endDate) {
+      filter.sentAt = {};
+      if (startDate) filter.sentAt.$gte = new Date(startDate as string);
+      if (endDate) filter.sentAt.$lte = new Date(endDate as string);
+    }
+
+    const smsLogs = await SmsLog.find(filter)
+      .populate('parentId', 'userId')
+      .populate('studentId', 'name')
+      .sort({ sentAt: -1 })
+      .limit(500);
+
+    res.json({ total: smsLogs.length, data: smsLogs.map((log) => log.toObject()) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch SMS logs' });
+  }
 });
 router.get('/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => { try { const parent = await Parent.findById(req.params.parentId); if (!parent) return res.status(404).json({ error: 'Parent not found' }); const smsLogs = await SmsLog.find({ institutionId: getTenantIdFromReq(req), parentId: req.params.parentId }).populate('studentId', 'name').sort({ sentAt: -1 }); res.json({ parent: { id: parent._id, children: parent.children || [] }, logs: smsLogs }); } catch (error) { res.status(500).json({ error: 'Failed to fetch parent SMS logs' }); } });
-router.get('/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => { try { const days = Number(req.query.days || 30); const startDate = new Date(); startDate.setDate(startDate.getDate() - days); const totalSent = await SmsLog.countDocuments({ institutionId: getTenantIdFromReq(req), sentAt: { $gte: startDate } }); res.json({ period: `Last ${days} days`, totalSent }); } catch (error) { res.status(500).json({ error: 'Failed to fetch SMS statistics' }); } });
+router.get('/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
+  try {
+    const days = Number(req.query.days || 30);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const filter: any = { sentAt: { $gte: startDate } };
+
+    if (isSystemAdmin(req)) {
+      if (req.query.institutionId) {
+        filter.institutionId = req.query.institutionId;
+      }
+    } else {
+      const tenantId = getTenantIdFromReq(req);
+      if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
+      filter.institutionId = tenantId;
+    }
+
+    const totalSent = await SmsLog.countDocuments(filter);
+
+    const statusBreakdown = await SmsLog.aggregate([
+      { $match: filter },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    const typeBreakdown = await SmsLog.aggregate([
+      { $match: filter },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      period: `Last ${days} days`,
+      totalSent,
+      statusBreakdown,
+      typeBreakdown
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch SMS statistics' });
+  }
+});
 
 export default router;
