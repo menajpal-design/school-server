@@ -183,42 +183,37 @@ router.post('/forgot-password', async (req, res) => {
       });
     }
 
-    // Generate temporary password
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let tempPass = '';
-    for (let i = 0; i < 8; i++) {
-      tempPass += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
+    // Generate 6-digit random code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
-    const hashedPassword = await bcrypt.hash(tempPass, 10);
-
-    // Save temporary password in primary database
+    // Save temporary code in primary database
     await runWithTenantStorage(null, async () => {
-      await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
+      await User.updateOne({ _id: user._id }, { $set: { resetPasswordCode: resetCode, resetPasswordExpires: codeExpires } });
     });
 
-    // Save temporary password in tenant database if it exists
+    // Save temporary code in tenant database if it exists
     const resolvedTenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
     if (resolvedTenantContext) {
       await runWithTenantStorage(resolvedTenantContext, async () => {
-        await User.updateOne({ _id: user._id }, { $set: { password: hashedPassword } });
+        await User.updateOne({ _id: user._id }, { $set: { resetPasswordCode: resetCode, resetPasswordExpires: codeExpires } });
       });
     }
 
-    // Send email with the temporary password
-    const emailSubject = 'Temporary Password - EasySchool Password Recovery';
+    // Send email with the verification code
+    const emailSubject = 'Verification Code - EasySchool Password Recovery';
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
         <h2 style="color: #4f46e5; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">EASY SCHOOL PASSWORD RECOVERY</h2>
         <p>Dear ${user.name},</p>
         <p>We received a request to recover the password for your account (Username: <strong>${user.username || user.email}</strong>).</p>
         <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0; border-radius: 4px;">
-          <p style="margin: 0; font-size: 14px; color: #64748b;">Your temporary password is:</p>
-          <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; letter-spacing: 2px; color: #1e293b;">${tempPass}</p>
+          <p style="margin: 0; font-size: 14px; color: #64748b;">Your 6-digit verification code is:</p>
+          <p style="margin: 5px 0 0 0; font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #1e293b; text-align: center;">${resetCode}</p>
         </div>
+        <p>This code is valid for 15 minutes. Please do not share this code with anyone.</p>
         <p style="color: #ef4444; font-weight: bold;">Important Safety Notice:</p>
-        <p>After logging in, please change this temporary password immediately from your profile settings.</p>
-        <p>If you did not request this password recovery, you can ignore this email or contact your administrator.</p>
+        <p>If you did not request this password recovery, you can ignore this email safely.</p>
         <p style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 12px; color: #64748b;">
           This is an automated message from the EasySchool System. Please do not reply directly to this email.
         </p>
@@ -229,7 +224,7 @@ router.post('/forgot-password', async (req, res) => {
       to: targetEmail,
       subject: emailSubject,
       html: emailHtml,
-      text: `Dear ${user.name},\n\nWe received a request to recover the password for your account.\n\nYour temporary password is: ${tempPass}\n\nPlease change this password immediately from your profile after logging in.\n\nBest regards,\nEasySchool Team`
+      text: `Dear ${user.name},\n\nWe received a request to recover the password for your account.\n\nYour verification code is: ${resetCode}\n\nThis code is valid for 15 minutes.\n\nBest regards,\nEasySchool Team`
     });
 
     if (!emailResult.success) {
@@ -244,10 +239,147 @@ router.post('/forgot-password', async (req, res) => {
       });
     }
 
-    return res.json({ message: 'A temporary password has been sent to the email address linked to your account.' });
+    return res.json({ message: 'A verification code has been sent to the email address linked to your account.' });
   } catch (error: any) {
     console.error('Forgot password error:', error);
     return res.status(500).json({ message: 'An internal server error occurred while processing password recovery.', error: error?.message || String(error) });
+  }
+});
+
+router.post('/reset-password-with-code', async (req, res) => {
+  try {
+    const identifier = String(req.body.identifier || '').trim();
+    const code = String(req.body.code || '').trim();
+    const newPassword = String(req.body.newPassword || '').trim();
+
+    if (!identifier || !code || !newPassword) {
+      return res.status(400).json({ message: 'Email/username/phone, verification code, and new password are required.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
+    }
+
+    const emailQuery = identifier.toLowerCase();
+
+    // ── MULTI-TENANT CONTEXT RESOLUTION ──────────────────────────────
+    const extractSubdomain = () => {
+      const explicit = String(
+        req.body.subdomain || 
+        req.query.subdomain || 
+        req.headers['x-school-subdomain'] || 
+        req.headers['x-client-subdomain'] || 
+        (req as any).subdomain || 
+        ''
+      ).trim().toLowerCase();
+      
+      const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'support']);
+      if (explicit && !RESERVED_SUBDOMAINS.has(explicit)) return explicit;
+
+      const host = String(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname || '')
+        .replace(/^https?:\/\//i, '')
+        .replace(/:\d+$/, '')
+        .replace(/^www\./i, '')
+        .toLowerCase();
+
+      const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
+      if (!host || host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}` || host === 'localhost' || host === '127.0.0.1') return '';
+      if (host.endsWith(`.${MAIN_DOMAIN}`)) {
+        const sub = host.slice(0, -1 * (`.${MAIN_DOMAIN}`).length).split('.').pop() || '';
+        return RESERVED_SUBDOMAINS.has(sub) ? '' : sub;
+      }
+      return '';
+    };
+
+    const subdomain = extractSubdomain();
+    let tenantInstitution: any = null;
+    if (subdomain) {
+      tenantInstitution = await Institution.findOne({ subdomain }).lean().catch(() => null);
+    }
+    
+    const headerInstId = req.headers['x-institution-id'] || req.body.institutionId || req.query.institutionId;
+    if (!tenantInstitution && headerInstId && mongoose.Types.ObjectId.isValid(String(headerInstId))) {
+      tenantInstitution = await Institution.findById(headerInstId).lean().catch(() => null);
+    }
+
+    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+
+    // ── LOOKUP USER INSIDE CONTEXT ─────────────────────────────
+    const lookupUser = async () => {
+      let userDoc = await User.findOne({ 
+        $or: [
+          { email: emailQuery }, 
+          { username: emailQuery }, 
+          { phone: identifier }
+        ] 
+      }).populate('institutionId');
+
+      if (!userDoc) {
+        const student = await Student.findOne({ 
+          $or: [
+            { rollNumber: identifier }, 
+            { guardianPhone: identifier }, 
+            { guardianEmail: emailQuery }
+          ] 
+        }).select('userId').lean();
+
+        if (student?.userId) {
+          userDoc = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        }
+      }
+      return userDoc;
+    };
+
+    const user = tenantContext 
+      ? await runWithTenantStorage(tenantContext, lookupUser).catch(() => null) 
+      : await lookupUser();
+
+    if (!user) {
+      return res.status(404).json({ message: 'No user account found matching the provided details.' });
+    }
+
+    // Verify verification code and expiration
+    const dbCode = user.resetPasswordCode;
+    const dbExpires = user.resetPasswordExpires;
+
+    if (!dbCode || dbCode !== code) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    if (!dbExpires || new Date(dbExpires).getTime() < Date.now()) {
+      return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Save new password and clear code in primary database
+    await runWithTenantStorage(null, async () => {
+      await User.updateOne(
+        { _id: user._id }, 
+        { 
+          $set: { password: hashedPassword },
+          $unset: { resetPasswordCode: 1, resetPasswordExpires: 1 } 
+        }
+      );
+    });
+
+    // Save new password and clear code in tenant database if it exists
+    const resolvedTenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (resolvedTenantContext) {
+      await runWithTenantStorage(resolvedTenantContext, async () => {
+        await User.updateOne(
+          { _id: user._id }, 
+          { 
+            $set: { password: hashedPassword },
+            $unset: { resetPasswordCode: 1, resetPasswordExpires: 1 } 
+          }
+        );
+      });
+    }
+
+    return res.json({ message: 'Your password has been reset successfully. You can now login with your new password.' });
+  } catch (error: any) {
+    console.error('Reset password code error:', error);
+    return res.status(500).json({ message: 'An internal server error occurred while resetting your password.', error: error?.message || String(error) });
   }
 });
 

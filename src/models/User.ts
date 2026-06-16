@@ -20,6 +20,8 @@ export interface IUser extends Document {
   lastLogin?: Date;
   permissions: string[];
   institutionId: mongoose.Types.ObjectId;
+  resetPasswordCode?: string;
+  resetPasswordExpires?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -58,7 +60,9 @@ UserSchema.add({
     tokenHash: { type: String },
     createdAt: { type: Date, default: Date.now },
     expiresAt: { type: Date }
-  }]
+  }],
+  resetPasswordCode: { type: String },
+  resetPasswordExpires: { type: Date }
 });
 
 // Index for better query performance
