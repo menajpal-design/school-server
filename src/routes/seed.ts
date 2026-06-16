@@ -17,6 +17,9 @@ import IDCard from '../models/IDCard';
 const router = express.Router();
 
 router.post('/seed', async (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ message: 'Seeding is disabled in production.' });
+  }
   try {
     // Check if demo data already exists
     const existingUser = await User.findOne({ email: 'head@demoschool.edu' });

@@ -2,7 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { register, login, updateProfile, changePassword, logout, refreshToken } from '../controllers/auth';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorize } from '../middleware/auth';
 import { validateBody } from '../validators/common';
 import { changePasswordSchema, loginSchema, registerSchema } from '../validators/auth';
 import Institution from '../models/Institution';
@@ -255,7 +255,7 @@ router.get('/check-users', async (_req, res) => {
   return res.json({ message: 'User check endpoint is available' });
 });
 
-router.get('/email-diagnostic', async (_req, res) => {
+router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'), async (_req, res) => {
   try {
     const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
     const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';

@@ -15,11 +15,75 @@ const requestAllowed = (req: any) => ['head', 'admin', 'super_admin'].includes(r
 const institutionFromReq = (req: any) => isSystemAdmin(req) && (req.body?.institutionId || req.query?.institutionId) ? String(req.body?.institutionId || req.query?.institutionId) : String(getTenantIdFromReq(req) || req.user?.institutionId || '');
 
 router.get('/sms-diagnostic', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
-  try { const tenantId = getTenantIdFromReq(req); const institution = await Institution.findById(tenantId).select('settings billing name').lean(); const settings: any = (institution as any)?.settings || {}; const billing: any = (institution as any)?.billing || {}; const rawKey = String(settings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '').trim(); const hasValidKey = rawKey.length >= 8 && !/your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey); const smsBalance = Number(billing.smsBalance ?? 0); res.json({ diagnosis: { institutionName: (institution as any)?.name, smsEnabled: settings.smsEnabled ?? true, provider: settings.smsProvider || process.env.SMS_PROVIDER || 'anoncify', smsBalance, hasValidKey, verdict: hasValidKey ? '✅ SMS should be working' : '❌ NO VALID API KEY' } }); } catch (error) { res.status(500).json({ message: 'Diagnostic failed', error }); }
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const institution = await Institution.findById(institutionId).select('settings billing name').lean();
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    const settings: any = (institution as any)?.settings || {};
+    const billing: any = (institution as any)?.billing || {};
+    const rawKey = String(settings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '').trim();
+    const hasValidKey = rawKey.length >= 8 && !/your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
+    const smsBalance = Number(billing.smsBalance ?? 0);
+    res.json({
+      diagnosis: {
+        institutionName: (institution as any)?.name,
+        smsEnabled: settings.smsEnabled ?? true,
+        provider: settings.smsProvider || process.env.SMS_PROVIDER || 'anoncify',
+        smsBalance,
+        hasValidKey,
+        verdict: hasValidKey ? '✅ SMS should be working' : '❌ NO VALID API KEY'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Diagnostic failed', error });
+  }
 });
-router.get('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => { try { const institution: any = await Institution.findById(getTenantIdFromReq(req)).select('settings').lean(); const s: any = institution?.settings || {}; res.json({ smsEnabled: s.smsEnabled ?? true, smsProvider: s.smsProvider || 'anoncify', smsApiUrl: s.smsApiUrl || 'https://anoncify.xyz/api/sms', smsApiKeySet: Boolean(s.smsApiKey) }); } catch (error) { res.status(500).json({ message: 'Failed to fetch SMS settings', error }); } });
-router.post('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => { try { const update: any = {}; if (req.body.smsApiKey !== undefined) update['settings.smsApiKey'] = String(req.body.smsApiKey || '').trim(); if (req.body.smsEnabled !== undefined) update['settings.smsEnabled'] = Boolean(req.body.smsEnabled); if (req.body.smsProvider !== undefined) update['settings.smsProvider'] = String(req.body.smsProvider || 'anoncify').toLowerCase(); if (req.body.smsApiUrl !== undefined) update['settings.smsApiUrl'] = String(req.body.smsApiUrl || '').trim(); await Institution.findByIdAndUpdate(getTenantIdFromReq(req), { $set: update }); res.json({ message: 'SMS settings saved successfully' }); } catch (error) { res.status(500).json({ message: 'Failed to save SMS settings', error }); } });
-router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => { try { const phone = String(req.body?.phone || '').trim(); if (!phone) return res.status(400).json({ message: 'phone number required in body' }); const result = await sendSMS({ to: phone, message: 'EASY SCHOOL SMS test message.', institutionId: getTenantIdFromReq(req), type: 'notification', purpose: 'sms_test' }); res.json({ sent: result, phone }); } catch (error) { res.status(500).json({ message: 'SMS test failed', error }); } });
+router.get('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const institution: any = await Institution.findById(institutionId).select('settings').lean();
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    const s: any = institution?.settings || {};
+    res.json({
+      smsEnabled: s.smsEnabled ?? true,
+      smsProvider: s.smsProvider || 'anoncify',
+      smsApiUrl: s.smsApiUrl || 'https://anoncify.xyz/api/sms',
+      smsApiKeySet: Boolean(s.smsApiKey)
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch SMS settings', error });
+  }
+});
+router.post('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const update: any = {};
+    if (req.body.smsApiKey !== undefined) update['settings.smsApiKey'] = String(req.body.smsApiKey || '').trim();
+    if (req.body.smsEnabled !== undefined) update['settings.smsEnabled'] = Boolean(req.body.smsEnabled);
+    if (req.body.smsProvider !== undefined) update['settings.smsProvider'] = String(req.body.smsProvider || 'anoncify').toLowerCase();
+    if (req.body.smsApiUrl !== undefined) update['settings.smsApiUrl'] = String(req.body.smsApiUrl || '').trim();
+    const institution = await Institution.findByIdAndUpdate(institutionId, { $set: update }, { new: true });
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    res.json({ message: 'SMS settings saved successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to save SMS settings', error });
+  }
+});
+router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const phone = String(req.body?.phone || '').trim();
+    if (!phone) return res.status(400).json({ message: 'phone number required in body' });
+    const result = await sendSMS({ to: phone, message: 'EASY SCHOOL SMS test message.', institutionId, type: 'notification', purpose: 'sms_test' });
+    res.json({ sent: result, phone });
+  } catch (error) {
+    res.status(500).json({ message: 'SMS test failed', error });
+  }
+});
 
 router.get('/purchases', authenticate, async (req: any, res: Response) => {
   try { const role = roleOf(req); if (!['head', 'assistant_head', 'finance_officer', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Access denied.' }); const institutionId = institutionFromReq(req); const filter: any = {}; if (!isSystemAdmin(req) || institutionId) filter.institutionId = institutionId; const requests = await SmsPurchaseRequest.find(filter).populate('institutionId', 'name phone email').populate('requestedBy', 'name username phone role').populate('approvedBy', 'name username role').sort({ createdAt: -1 }).limit(100).lean(); res.json({ requests, unitPrice: smsUnitPrice(), total: requests.length }); } catch (error) { res.status(500).json({ message: 'Failed to load SMS purchase requests', error }); }
