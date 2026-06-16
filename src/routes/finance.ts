@@ -10,6 +10,7 @@ import Staff from '../models/Staff';
 import IDCard from '../models/IDCard';
 import Attendance from '../models/Attendance';
 import { writeAuditLog } from '../services/auditService';
+import SmsTopup from '../models/SmsTopup';
 
 const router = express.Router();
 
@@ -354,32 +355,38 @@ router.post('/salary', authenticate, canManageFinance(), async (req, res) => {
   }
 });
 
-router.get('/my-fees', authenticate, async (req, res) => {
+router.get('/my-fees', authenticate, async (req: any, res) => {
   try {
-    const now = new Date();
-    const currentMonth = now.toLocaleString('en-US', { month: 'long' });
-    const currentYear = now.getFullYear();
     if (req.user.role === 'student') {
       const student = await Student.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
-      const fees = student ? await Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ dueDate: -1 }) : [];
-      return res.json({ fees, children: [] as any[] });
+      if (!student) {
+        return res.json({ fees: [], payments: [], children: [] });
+      }
+      const fees = await Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ dueDate: -1 }).lean();
+      const payments = await Payment.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ paymentDate: -1 }).lean();
+      return res.json({ fees, payments, children: [] });
     }
-    const parent = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
-    if (!parent) return res.json({ fees: [] as any[], children: [] as any[] });
-    const childrenRaw = await Promise.all(parent.children.map(async (childId) => {
-      const student = await Student.findById(childId).populate('userId', 'name avatar');
-      if (!student) return null;
-      const fees = await Fee.find({
-        studentId: student._id,
-        institutionId: req.user.institutionId,
-        year: currentYear,
-        $or: [{ month: currentMonth }, { month: 'All Months' }],
-      });
-      return { student, fees };
-    }));
-    res.json({ fees: [] as any[], children: childrenRaw.filter(Boolean) });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to load fee data', error });
+
+    if (req.user.role === 'parent') {
+      const parent = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId }).lean();
+      if (!parent || !Array.isArray(parent.children) || parent.children.length === 0) {
+        return res.json({ fees: [], payments: [], children: [] });
+      }
+      
+      const children = await Student.find({ _id: { $in: parent.children }, institutionId: req.user.institutionId })
+        .populate('userId', 'name avatar')
+        .lean();
+      
+      const childIds = children.map(c => c._id);
+      const fees = await Fee.find({ studentId: { $in: childIds }, institutionId: req.user.institutionId }).sort({ dueDate: -1 }).lean();
+      const payments = await Payment.find({ studentId: { $in: childIds }, institutionId: req.user.institutionId }).sort({ paymentDate: -1 }).lean();
+      
+      return res.json({ fees, payments, children });
+    }
+
+    return res.status(400).json({ message: 'Only students and parents can view fee details.' });
+  } catch (error: any) {
+    res.status(500).json({ message: 'Failed to load fee data', error: error?.message || String(error) });
   }
 });
 
@@ -404,7 +411,7 @@ router.get('/audit', authenticate, canManageFinance(), async (req, res) => {
 
     const payments = await Payment.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
     const salaries = await Salary.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
-    const smsTopups = await (require('../models/SmsTopup').default).find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
+    const smsTopups = await SmsTopup.find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
     const fees = await Fee.find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
 
     const totalIncome = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
@@ -427,7 +434,7 @@ router.get('/audit/export', authenticate, canManageFinance(), async (req, res) =
 
     const payments = await Payment.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
     const salaries = await Salary.find({ institutionId: req.user.institutionId, paymentDate: { $gte: start, $lte: end } }).lean();
-    const smsTopups = await (require('../models/SmsTopup').default).find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
+    const smsTopups = await SmsTopup.find({ institutionId: req.user.institutionId, createdAt: { $gte: start, $lte: end } }).lean();
 
     if (fmt === 'csv') {
       res.setHeader('Content-Type', 'text/csv');
