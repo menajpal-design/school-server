@@ -75,7 +75,7 @@ export const activateBilling = (billing: any, at = new Date()) => {
 export const isSubscriptionExpired = (institution: any) => {
   const billing = institution?.billing || {};
   const expiresAt = billing?.subscriptionExpiresAt || billing?.planExpiry || billing?.validUntil || billing?.billingPeriodEnd || billing?.expiresAt;
-  if (billing?.billingStatus && billing.billingStatus !== 'active') return true;
+  if (billing?.billingStatus && billing.billingStatus !== 'active' && billing.billingStatus !== 'trial') return true;
   const dueAmount = Number(billing?.dueAmount || 0);
   const receivedAmount = Number(billing?.receivedAmount || 0);
   const balance = Math.max(dueAmount - receivedAmount, 0);

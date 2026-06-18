@@ -79,7 +79,49 @@ export const register = async (req: Request, res: Response) => {
       const billingCycle = req.body.billingCycle === 'yearly' ? 'yearly' : 'monthly';
       const selected = calculatePlanDue(req.body.planCode, billingCycle, true, 0);
       const paymentAmount = Number(req.body.receivedAmount || 0);
-      institution = await Institution.create({ name: req.body.institutionName || `${name}'s Institution`, type: 'school', address: 'Not provided', phone: phone || 'Not provided', email, headId: userId, billing: { planCode: selected.plan.code, planName: selected.plan.name, studentLimit: selected.plan.studentLimit, monthlyPrice: selected.plan.monthlyPrice, yearlyPrice: selected.plan.yearlyPrice, monthlySmsLimit: selected.plan.monthlySmsLimit, yearlyDiscountPercent: selected.plan.yearlyDiscountPercent, billingCycle, useEasySchoolStorage: true, storageMonthlyPrice: 100, baseDueAmount: selected.baseAmount + selected.storageAmount, storageAmount: selected.storageAmount, dueAmount: selected.total, billingStatus: 'pending', isPaymentReceived: paymentAmount > 0 || Boolean(req.body.paymentTrxId), receivedAmount: paymentAmount, paymentGateway: req.body.paymentGateway || 'bkash', paymentTrxId: req.body.paymentTrxId, paymentSenderNumber: req.body.paymentSenderNumber, smsChargeAmount: 0, smsChargeBreakdown: {}, smsBalance: 0 }, settings: { backupSettings: { frequency: 'weekly', location: 'local', collections: [] } } });
+      const hasPayment = paymentAmount > 0 || Boolean(req.body.paymentTrxId);
+      const trialDurationMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+      const trialExpiresAt = new Date(Date.now() + trialDurationMs);
+
+      institution = await Institution.create({
+        name: req.body.institutionName || `${name}'s Institution`,
+        type: 'school',
+        address: 'Not provided',
+        phone: phone || 'Not provided',
+        email,
+        headId: userId,
+        billing: {
+          planCode: selected.plan.code,
+          planName: selected.plan.name,
+          studentLimit: selected.plan.studentLimit,
+          monthlyPrice: selected.plan.monthlyPrice,
+          yearlyPrice: selected.plan.yearlyPrice,
+          monthlySmsLimit: selected.plan.monthlySmsLimit,
+          yearlyDiscountPercent: selected.plan.yearlyDiscountPercent,
+          billingCycle,
+          useEasySchoolStorage: true,
+          storageMonthlyPrice: 100,
+          baseDueAmount: selected.baseAmount + selected.storageAmount,
+          storageAmount: selected.storageAmount,
+          dueAmount: selected.total,
+          billingStatus: hasPayment ? 'pending' : 'trial',
+          isPaymentReceived: hasPayment,
+          receivedAmount: paymentAmount,
+          paymentGateway: req.body.paymentGateway || 'bkash',
+          paymentTrxId: req.body.paymentTrxId,
+          paymentSenderNumber: req.body.paymentSenderNumber,
+          smsChargeAmount: 0,
+          smsChargeBreakdown: {},
+          smsBalance: selected.plan.monthlySmsLimit || 100,
+          activatedAt: hasPayment ? undefined : new Date(),
+          subscriptionStartedAt: hasPayment ? undefined : new Date(),
+          subscriptionExpiresAt: hasPayment ? undefined : trialExpiresAt,
+          planExpiry: hasPayment ? undefined : trialExpiresAt,
+        },
+        settings: {
+          backupSettings: { frequency: 'weekly', location: 'local', collections: [] }
+        }
+      });
       institutionId = institution._id;
     }
     const tenantContext = institution ? resolveTenantStorageContext(institution) : null;

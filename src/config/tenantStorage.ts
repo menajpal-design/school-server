@@ -214,7 +214,7 @@ export const resolveTenantStorageContext = (institution: any): TenantStorageCont
   let primaryUri = '';
   const allowPersonalWhenNoStorage = Boolean(settings.allowPersonalMongo === true || settings.allowPersonalStorage === true);
   const hasPersonalConfigured = Boolean(activeUri || normalized.length);
-  const billingAllowsStorage = billing && billing.billingStatus === 'active' && (Number(billing.storageAmount || 0) > 0);
+  const billingAllowsStorage = billing && (billing.billingStatus === 'active' || billing.billingStatus === 'trial') && (Number(billing.storageAmount || 0) > 0);
   if (!usesEasySchoolStorage) primaryUri = activeUri || normalized[0] || '';
   else if (usesEasySchoolStorage && !billingAllowsStorage && hasPersonalConfigured && allowPersonalWhenNoStorage) primaryUri = activeUri || normalized[0] || '';
   primaryUri = cleanMongoUri(primaryUri);
