@@ -613,11 +613,17 @@ router.post('/sms/topup/payment', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    const popupVerified = Boolean(
-      popupPaymentResponse?.status === 'verified' ||
-      popupPaymentResponse?.data?.status === 'verified' ||
-      popupVerification?.status === 'verified'
-    );
+    const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
+    const hasVerifiedStatus =
+      ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
+      ['verified', 'success', 'paid'].includes(getStatus(popupVerification));
+
+    const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
+    const details = popupVerification || payload.verification || {};
+    const paymentAmount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
+    const amountMatches = paymentAmount === amount;
+
+    const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
 
     if (!verification.verified && !popupVerified) {
       return res.status(400).json({ message: verification.message || 'SMS top-up payment verification failed', verification });
@@ -690,11 +696,17 @@ router.post('/sms/package/purchase', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    const popupVerified = Boolean(
-      popupPaymentResponse?.status === 'verified' ||
-      popupPaymentResponse?.data?.status === 'verified' ||
-      popupVerification?.status === 'verified'
-    );
+    const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
+    const hasVerifiedStatus =
+      ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
+      ['verified', 'success', 'paid'].includes(getStatus(popupVerification));
+
+    const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
+    const details = popupVerification || payload.verification || {};
+    const paymentAmount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
+    const amountMatches = paymentAmount === smsPackage.price;
+
+    const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
 
     if (!verification.verified && !popupVerified) {
       return res.status(400).json({ message: verification.message || 'SMS package payment verification failed', verification });
