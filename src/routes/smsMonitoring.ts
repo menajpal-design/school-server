@@ -122,11 +122,18 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
         domain: process.env.PAYMENT_GATEWAY_DOMAIN,
       });
 
-      const popupVerified = Boolean(
-        popupPaymentResponse?.status === 'verified' ||
-        popupPaymentResponse?.data?.status === 'verified' ||
-        popupVerification?.status === 'verified'
-      );
+      const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
+      const hasVerifiedStatus =
+        ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
+        ['verified', 'success', 'paid'].includes(getStatus(popupVerification)) ||
+        ['verified', 'success', 'paid'].includes(String(req.body.popupPaymentStatus || '').toLowerCase());
+
+      const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
+      const details = popupVerification || payload.verification || {};
+      const amount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
+      const amountMatches = amount === totalAmount;
+
+      const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
 
       paidByPopup = verification.verified || popupVerified;
 
