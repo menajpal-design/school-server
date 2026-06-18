@@ -124,9 +124,9 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
 
       const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
       const hasVerifiedStatus =
-        ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
-        ['verified', 'success', 'paid'].includes(getStatus(popupVerification)) ||
-        ['verified', 'success', 'paid'].includes(String(req.body.popupPaymentStatus || '').toLowerCase());
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification)) ||
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(String(req.body.popupPaymentStatus || '').toLowerCase());
 
       const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
       const details = popupVerification || payload.verification || {};

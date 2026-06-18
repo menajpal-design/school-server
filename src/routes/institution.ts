@@ -112,7 +112,7 @@ const isPopupVerifiedPayment = (input: any = {}, dueAmount = 0) => {
   const details = input.popupVerification || payload.verification || {};
   const status = String(input.popupPaymentStatus || payload.status || '').toLowerCase();
   const amount = Number(input.receivedAmount ?? payload.amount ?? details.amount ?? 0);
-  const hasVerifiedStatus = ['verified', 'success', 'paid'].includes(status) || input.type === 'payment_status';
+  const hasVerifiedStatus = ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(status) || input.type === 'payment_status';
   const hasRequiredRefs = Boolean(input.paymentTrxId || payload.transaction_id || payload.payment_ref || details.transaction_id || details.payment_ref);
   const amountMatches = Number(dueAmount || 0) > 0 && amount === Number(dueAmount);
   return hasVerifiedStatus && hasRequiredRefs && amountMatches;
@@ -615,8 +615,8 @@ router.post('/sms/topup/payment', authenticate, async (req, res) => {
 
     const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
     const hasVerifiedStatus =
-      ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
-      ['verified', 'success', 'paid'].includes(getStatus(popupVerification));
+      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
+      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification));
 
     const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
     const details = popupVerification || payload.verification || {};
@@ -698,8 +698,8 @@ router.post('/sms/package/purchase', authenticate, async (req, res) => {
 
     const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
     const hasVerifiedStatus =
-      ['verified', 'success', 'paid'].includes(getStatus(popupPaymentResponse)) ||
-      ['verified', 'success', 'paid'].includes(getStatus(popupVerification));
+      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
+      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification));
 
     const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
     const details = popupVerification || payload.verification || {};

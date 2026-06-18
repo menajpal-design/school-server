@@ -43,7 +43,11 @@ export const verifyGatewayPayment = async (input: VerifyPaymentInput) => {
     });
 
     const data: any = await response.json().catch(() => ({}));
-    const verified = response.ok && (data.verified === true || data.success === true || data.status === 'success' || data.status === 'verified');
+    const verified = response.ok && (
+      data.verified === true ||
+      data.success === true ||
+      ['success', 'verified', 'already_verified', 'manual_accepted'].includes(data.status)
+    );
     return {
       configured: true,
       verified,
