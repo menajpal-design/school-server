@@ -19,6 +19,8 @@ Insert the hosted widget and a Pay button. For plain HTML:
 
 <button
   onclick="GatewayWidget.open({
+    apiKey: 'your_website_api_key',
+    domain: 'your-merchant-domain.com',
     amount: 500,
     callback: 'https://your-merchant-site.com/payment-return',
     onComplete: (result) => console.log('payment complete', result)
@@ -36,6 +38,8 @@ function PayButton() {
     <button
       onClick={() => {
         window.GatewayWidget.open({
+          apiKey: process.env.NEXT_PUBLIC_GATEWAY_API_KEY,
+          domain: 'your-merchant-domain.com',
           amount: 500,
           callback: 'https://your-merchant-site.com/payment-return',
           onComplete: (result) => console.log(result)
@@ -164,6 +168,11 @@ Suggested workflow:
 
 ### 9. Troubleshooting
 
+- **Validation Errors:** If the checkout popup does not open and displays an alert:
+  - `Gateway API key is required`: Make sure `apiKey` is provided in the options object and is not empty.
+  - `Valid merchant domain is required`: Verify the `domain` option is set correctly.
+  - `API key is not allowed for this domain`: Confirm that the domain matches your brand's configured domain in the merchant portal and that you are using the corresponding live API key.
+- If a popup does not open without any alert message, check the browser's popup blocker settings.
 - If a popup does not open, confirm `window.GATEWAY_WIDGET_URL` or the script source is set correctly.
 - If verification fails, compare sender number formatting and the exact amount.
 - If a portal route looks blank after refresh, use the portal route directly (e.g., `/portal/transactions`).
@@ -175,7 +184,12 @@ Suggested workflow:
   window.GATEWAY_WIDGET_URL = "https://payment-gateway-server-ten.vercel.app";
 </script>
 <script src="https://payment-gateway-server-ten.vercel.app/widget.js"></script>
-<button onclick="GatewayWidget.open({ amount: 500, callback: 'https://your-merchant-site.com/return' })">Pay Now</button>
+<button onclick="GatewayWidget.open({
+  apiKey: 'your_website_api_key',
+  domain: 'your-merchant-domain.com',
+  amount: 500,
+  callback: 'https://your-merchant-site.com/return'
+})">Pay Now</button>
 ```
 
 ---
@@ -205,6 +219,8 @@ Best practices (সংশ্লিষ্ট টিপস):
 ```html
 <script src="https://payment-gateway-server-ten.vercel.app/widget.js"></script>
 <button onclick="GatewayWidget.open({
+  apiKey: 'your_website_api_key',
+  domain: 'your-merchant-domain.com',
   amount: 250,
   preferredMethods: ['bkash','nagad'],
   callback: 'https://your-merchant-site.com/payment-return',
