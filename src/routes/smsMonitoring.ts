@@ -6,6 +6,7 @@ import Parent from '../models/Parent';
 import Institution from '../models/Institution';
 import getTenantIdFromReq from '../utils/tenant';
 import { sendSMS } from '../utils/sms';
+import { verifyGatewayPayment } from '../services/paymentGateway';
 
 const router = Router();
 const smsUnitPrice = () => Number(process.env.SMS_UNIT_PRICE || process.env.DEFAULT_SMS_UNIT_PRICE || 0);
@@ -96,8 +97,45 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
     if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: 'SMS quantity must be a positive number.' });
     if (!contactNumber) return res.status(400).json({ message: 'Contact phone number is required.' });
     const price = Number(req.body.unitPrice ?? smsUnitPrice()); const totalAmount = Number(req.body.totalAmount ?? quantity * price);
-    const paidByPopup = Boolean(req.body.popupPaymentResponse || req.body.paymentTrxId || req.body.paymentOrderId || req.body.popupVerification);
-    const request: any = await SmsPurchaseRequest.create({ institutionId, requestedBy: req.user?._id || req.user?.id, quantity, unitPrice: price, totalAmount, contactNumber, paymentMethod: String(req.body.paymentMethod || 'popup'), notes: String(req.body.notes || ''), status: paidByPopup ? 'paid' : 'pending', approvedBy: paidByPopup ? (req.user?._id || req.user?.id) : undefined, approvedAt: paidByPopup ? new Date() : undefined, paidAt: paidByPopup ? new Date() : undefined });
+    
+    const paymentGateway = String(req.body.paymentGateway || req.body.paymentMethod || 'popup');
+    const paymentOrderId = String(req.body.paymentOrderId || req.body.orderId || '');
+    const paymentTrxId = String(req.body.paymentTrxId || req.body.trxId || '');
+    const paymentSenderNumber = String(req.body.paymentSenderNumber || req.body.senderNumber || req.body.phone || '');
+    const paymentTime = req.body.paymentTime ? String(req.body.paymentTime) : new Date().toISOString();
+    const popupPaymentResponse = req.body.popupPaymentResponse || {};
+    const popupVerification = req.body.popupVerification || {};
+
+    const hasPaymentParams = Boolean(req.body.popupPaymentResponse || req.body.paymentTrxId || req.body.paymentOrderId || req.body.popupVerification);
+
+    let paidByPopup = false;
+    let verification: any = { verified: false };
+
+    if (hasPaymentParams) {
+      verification = await verifyGatewayPayment({
+        trxId: paymentTrxId,
+        amount: totalAmount,
+        senderNumber: paymentSenderNumber,
+        gateway: paymentGateway,
+        orderId: paymentOrderId,
+        paymentTime,
+        domain: process.env.PAYMENT_GATEWAY_DOMAIN,
+      });
+
+      const popupVerified = Boolean(
+        popupPaymentResponse?.status === 'verified' ||
+        popupPaymentResponse?.data?.status === 'verified' ||
+        popupVerification?.status === 'verified'
+      );
+
+      paidByPopup = verification.verified || popupVerified;
+
+      if (!paidByPopup) {
+        return res.status(400).json({ message: verification.message || 'SMS recharge payment verification failed', verification });
+      }
+    }
+
+    const request: any = await SmsPurchaseRequest.create({ institutionId, requestedBy: req.user?._id || req.user?.id, quantity, unitPrice: price, totalAmount, contactNumber, paymentMethod: paymentGateway, notes: String(req.body.notes || ''), status: paidByPopup ? 'paid' : 'pending', approvedBy: paidByPopup ? (req.user?._id || req.user?.id) : undefined, approvedAt: paidByPopup ? new Date() : undefined, paidAt: paidByPopup ? new Date() : undefined });
     if (paidByPopup) { await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': quantity, 'billing.monthlySmsLimit': quantity } }); request.creditedAt = new Date(); request.creditedQuantity = quantity; await request.save(); }
     res.status(201).json({ message: paidByPopup ? 'SMS recharge payment successful. Balance updated.' : 'SMS purchase request submitted successfully.', request });
   } catch (error) { res.status(500).json({ message: 'Failed to create SMS purchase request', error }); }
