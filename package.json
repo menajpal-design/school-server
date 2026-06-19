@@ -4,9 +4,9 @@
   "description": "easy school School Management System Backend",
   "main": "index.js",
   "scripts": {
-    "start": "node scripts/patchAdminLoginRoles.cjs && node --enable-source-maps dist/server.js",
+    "start": "node --enable-source-maps dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "node scripts/patchAdminLoginRoles.cjs && tsc",
+    "build": "tsc",
     "heroku-postbuild": "npm run build",
     "test": "jest --passWithNoTests",
     "seed": "npm run build && node dist/scripts/seed.js",
