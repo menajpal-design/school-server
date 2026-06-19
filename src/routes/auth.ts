@@ -9,9 +9,8 @@ import Institution from '../models/Institution';
 import User from '../models/User';
 import Student from '../models/Student';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
-import { sendEmailDetail, isEmailConfigured, getEmailTransport } from '../utils/email';
+import { sendEmailDetail, isEmailConfigured } from '../utils/email';
 import { resolveProfileForUser } from '../services/userProfileResolver';
-import net from 'net';
 
 const router = express.Router();
 
@@ -389,108 +388,70 @@ router.get('/check-users', async (_req, res) => {
 
 router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'), async (_req, res) => {
   try {
+    const brevoApiKey = process.env.BREVO_API_KEY || '';
+    const emailFrom   = process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '';
     const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
-    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-    const smtpPort = process.env.SMTP_PORT || '587';
-    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
-    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
-    const sendgridUser = process.env.SENDGRID_USERNAME || '';
-    const sendgridPass = process.env.SENDGRID_PASSWORD || '';
-    const emailFrom = process.env.EMAIL_FROM || '';
 
     const mask = (str: string) => {
       if (!str) return 'not_configured';
-      if (str.length <= 4) return '****';
-      return `${str.substring(0, 2)}...${str.substring(str.length - 2)}`;
+      if (str.length <= 6) return '****';
+      return `${str.substring(0, 4)}...${str.substring(str.length - 4)}`;
     };
 
     const envInfo = {
-      EMAIL_ENABLED: emailEnabled,
-      SMTP_HOST: smtpHost,
-      SMTP_PORT: smtpPort,
-      SMTP_USER: mask(smtpUser),
-      SMTP_PASS: mask(smtpPass),
-      SENDGRID_USERNAME: mask(sendgridUser),
-      SENDGRID_PASSWORD: mask(sendgridPass),
-      EMAIL_FROM: emailFrom || 'not_configured',
+      EMAIL_ENABLED:   emailEnabled,
+      BREVO_API_KEY:   mask(brevoApiKey),
+      BREVO_FROM_NAME: process.env.BREVO_FROM_NAME || 'not_configured',
+      EMAIL_FROM:      emailFrom || 'not_configured',
     };
 
-    // Helper to test if a port is open via TCP socket
-    const checkPort = (host: string, port: number, timeoutMs = 3000) => {
-      return new Promise<{ open: boolean; error?: string }>((resolve) => {
-        const socket = new net.Socket();
-        const timer = setTimeout(() => {
-          socket.destroy();
-          resolve({ open: false, error: 'Connection timeout (3s)' });
-        }, timeoutMs);
-
-        socket.connect(port, host, () => {
-          clearTimeout(timer);
-          socket.end();
-          resolve({ open: true });
-        });
-
-        socket.on('error', (err) => {
-          clearTimeout(timer);
-          socket.destroy();
-          resolve({ open: false, error: err.message || String(err) });
-        });
-      });
-    };
-
-    // Perform socket tests on common email ports
-    const portChecks = {
-      gmail_587: await checkPort('smtp.gmail.com', 587),
-      gmail_465: await checkPort('smtp.gmail.com', 465),
-      sendgrid_587: await checkPort('smtp.sendgrid.net', 587),
-      sendgrid_2525: await checkPort('smtp.sendgrid.net', 2525),
-      brevo_2525: await checkPort('smtp-relay.brevo.com', 2525),
-      configured_port: smtpHost ? await checkPort(smtpHost, Number(smtpPort)) : null,
-    };
-
-    const transport = getEmailTransport();
-    if (!transport) {
+    if (!brevoApiKey || !emailFrom) {
       return res.json({
         success: false,
-        message: 'No email transport is configured or active according to environment variables.',
+        message: 'Brevo API is not configured. Set BREVO_API_KEY and EMAIL_FROM in environment.',
         envInfo,
-        portChecks,
       });
     }
 
-    // Attempt verification of SMTP transporter connection
-    const verificationPromise = new Promise<{ success: boolean; error?: string }>((resolve) => {
-      const timer = setTimeout(() => {
-        resolve({ success: false, error: 'Connection verification timed out (5s)' });
-      }, 5000);
-
-      (transport.transporter as any).verify((err: any) => {
-        clearTimeout(timer);
-        if (err) {
-          resolve({ success: false, error: err.message || String(err) });
+    // Live connectivity test — call Brevo account info endpoint
+    let apiReachable = false;
+    let apiError: string | null = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      try {
+        const testRes = await fetch('https://api.brevo.com/v3/account', {
+          headers: { 'api-key': brevoApiKey, 'accept': 'application/json' },
+          signal: controller.signal,
+        });
+        if (testRes.ok) {
+          apiReachable = true;
         } else {
-          resolve({ success: true });
+          const errText = await testRes.text().catch(() => testRes.statusText);
+          apiError = `Brevo API responded ${testRes.status}: ${errText}`;
         }
-      });
-    });
-
-    const verificationResult = await verificationPromise;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e: any) {
+      apiError = e?.message?.includes('abort') ? 'Brevo API request timed out (6s)' : e?.message || String(e);
+    }
 
     return res.json({
-      success: verificationResult.success,
-      message: verificationResult.success 
-        ? 'Email server connection verified successfully!'
-        : `Email server connection failed: ${verificationResult.error}`,
+      success: apiReachable,
+      message: apiReachable
+        ? '✅ Brevo API key is valid and reachable.'
+        : `❌ Brevo API check failed: ${apiError}`,
       envInfo,
-      portChecks,
-      verificationError: verificationResult.error || null,
+      apiError: apiError || null,
     });
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      message: `Diagnostic execution failed: ${error?.message || String(error)}`,
+      message: `Diagnostic failed: ${error?.message || String(error)}`,
     });
   }
 });
+
 
 export default router;
