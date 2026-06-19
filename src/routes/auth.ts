@@ -1,0 +1,496 @@
+import express from 'express';
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+import { register, login, updateProfile, changePassword, logout, refreshToken } from '../controllers/auth';
+import { authenticate, authorize } from '../middleware/auth';
+import { validateBody } from '../validators/common';
+import { changePasswordSchema, loginSchema, registerSchema } from '../validators/auth';
+import Institution from '../models/Institution';
+import User from '../models/User';
+import Student from '../models/Student';
+import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
+import { sendEmailDetail, isEmailConfigured, getEmailTransport } from '../utils/email';
+import { resolveProfileForUser } from '../services/userProfileResolver';
+import net from 'net';
+
+const router = express.Router();
+
+const serializeInstitution = (institution: any) => institution ? {
+  _id: institution._id || institution.id,
+  id: institution._id || institution.id,
+  name: institution.name,
+  type: institution.type,
+  email: institution.email,
+  phone: institution.phone,
+  address: institution.address,
+  logo: institution.logo,
+  logoUrl: institution.logoUrl,
+  website: institution.website,
+  isActive: institution.isActive,
+  headName: institution.headName,
+  headSignature: institution.headSignature,
+} : null;
+
+router.post('/register', validateBody(registerSchema), register);
+router.post('/login', validateBody(loginSchema), login);
+router.post('/logout', logout);
+router.post('/refresh', refreshToken);
+
+router.get('/profile', authenticate, async (req: any, res) => {
+  try {
+    const user = req.user;
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const resolved = await resolveProfileForUser(user);
+    const institution = resolved.institution || req.institution || user.institution || await Institution.findById(user.institutionId).lean().catch(() => null);
+    return res.json({
+      user: {
+        id: user._id,
+        _id: user._id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        avatar: user.avatar,
+        institutionId: institution?._id || user.institutionId,
+        institution: serializeInstitution(institution),
+        permissions: user.permissions || [],
+        roleDetails: resolved.roleDetails,
+        student: resolved.student,
+        teacher: resolved.teacher,
+        staff: resolved.staff,
+        parent: resolved.parent,
+        committee: resolved.committee,
+        children: resolved.children || [],
+        profileMissing: resolved.profileMissing,
+        profileMissingReason: resolved.profileMissingReason,
+        ambiguousMatches: resolved.ambiguousMatches || [],
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: 'Failed to resolve profile', error: error?.message || String(error) });
+  }
+});
+
+router.put('/profile', authenticate, updateProfile);
+router.put('/change-password', authenticate, validateBody(changePasswordSchema), changePassword);
+router.post('/change-password', authenticate, validateBody(changePasswordSchema), changePassword);
+
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const identifier = String(req.body.identifier || '').trim();
+    if (!identifier) {
+      return res.status(400).json({ message: 'Email, username, or phone number is required.' });
+    }
+
+    const emailQuery = identifier.toLowerCase();
+
+    // ── MULTI-TENANT CONTEXT RESOLUTION ──────────────────────────────
+    // Resolve subdomain with multi-layer fallback
+    const extractSubdomain = () => {
+      const explicit = String(
+        req.body.subdomain || 
+        req.query.subdomain || 
+        req.headers['x-school-subdomain'] || 
+        req.headers['x-client-subdomain'] || 
+        (req as any).subdomain || 
+        ''
+      ).trim().toLowerCase();
+      
+      const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'support']);
+      if (explicit && !RESERVED_SUBDOMAINS.has(explicit)) return explicit;
+
+      const host = String(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname || '')
+        .replace(/^https?:\/\//i, '')
+        .replace(/:\d+$/, '')
+        .replace(/^www\./i, '')
+        .toLowerCase();
+
+      const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
+      if (!host || host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}` || host === 'localhost' || host === '127.0.0.1') return '';
+      if (host.endsWith(`.${MAIN_DOMAIN}`)) {
+        const sub = host.slice(0, -1 * (`.${MAIN_DOMAIN}`).length).split('.').pop() || '';
+        return RESERVED_SUBDOMAINS.has(sub) ? '' : sub;
+      }
+      return '';
+    };
+
+    const subdomain = extractSubdomain();
+    let tenantInstitution: any = null;
+    if (subdomain) {
+      tenantInstitution = await Institution.findOne({ subdomain }).lean().catch(() => null);
+    }
+    
+    // Fallback: Check if there is an institutionId in headers, query, or body
+    const headerInstId = req.headers['x-institution-id'] || req.body.institutionId || req.query.institutionId;
+    if (!tenantInstitution && headerInstId && mongoose.Types.ObjectId.isValid(String(headerInstId))) {
+      tenantInstitution = await Institution.findById(headerInstId).lean().catch(() => null);
+    }
+
+    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+
+    // ── LOOKUP USER INSIDE TENANT CONTEXT ─────────────────────────────
+    const lookupUser = async () => {
+      // Look up user directly first
+      let userDoc = await User.findOne({ 
+        $or: [
+          { email: emailQuery }, 
+          { username: emailQuery }, 
+          { phone: identifier }
+        ] 
+      }).populate('institutionId');
+
+      // If not found, check if it's a student roll or guardian identifier
+      if (!userDoc) {
+        const student = await Student.findOne({ 
+          $or: [
+            { rollNumber: identifier }, 
+            { guardianPhone: identifier }, 
+            { guardianEmail: emailQuery }
+          ] 
+        }).select('userId').lean();
+
+        if (student?.userId) {
+          userDoc = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        }
+      }
+
+      if (!userDoc) return null;
+
+      // Determine the email to send to
+      let targetEmail = userDoc.email;
+      if (!targetEmail && userDoc.role === 'student') {
+        const student = await Student.findOne({ userId: userDoc._id }).select('guardianEmail').lean();
+        targetEmail = student?.guardianEmail;
+      }
+
+      return { user: userDoc, targetEmail };
+    };
+
+    const result = tenantContext 
+      ? await runWithTenantStorage(tenantContext, lookupUser).catch(() => null) 
+      : await lookupUser();
+
+    if (!result || !result.user) {
+      return res.status(404).json({ message: 'No user account found matching the provided details.' });
+    }
+
+    const { user, targetEmail } = result;
+
+    if (!targetEmail) {
+      return res.status(400).json({ 
+        message: 'This user account does not have a linked email address. Please contact your school administrator to reset your password.' 
+      });
+    }
+
+    // Generate 6-digit random code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    // Save temporary code in primary database
+    await runWithTenantStorage(null, async () => {
+      await User.updateOne({ _id: user._id }, { $set: { resetPasswordCode: resetCode, resetPasswordExpires: codeExpires } });
+    });
+
+    // Save temporary code in tenant database if it exists
+    const resolvedTenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (resolvedTenantContext) {
+      await runWithTenantStorage(resolvedTenantContext, async () => {
+        await User.updateOne({ _id: user._id }, { $set: { resetPasswordCode: resetCode, resetPasswordExpires: codeExpires } });
+      });
+    }
+
+    // Send email with the verification code
+    const emailSubject = 'Verification Code - EasySchool Password Recovery';
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+        <h2 style="color: #4f46e5; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">EASY SCHOOL PASSWORD RECOVERY</h2>
+        <p>Dear ${user.name},</p>
+        <p>We received a request to recover the password for your account (Username: <strong>${user.username || user.email}</strong>).</p>
+        <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0; border-radius: 4px;">
+          <p style="margin: 0; font-size: 14px; color: #64748b;">Your 6-digit verification code is:</p>
+          <p style="margin: 5px 0 0 0; font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #1e293b; text-align: center;">${resetCode}</p>
+        </div>
+        <p>This code is valid for 15 minutes. Please do not share this code with anyone.</p>
+        <p style="color: #ef4444; font-weight: bold;">Important Safety Notice:</p>
+        <p>If you did not request this password recovery, you can ignore this email safely.</p>
+        <p style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 12px; color: #64748b;">
+          This is an automated message from the EasySchool System. Please do not reply directly to this email.
+        </p>
+      </div>
+    `;
+
+    const emailResult = await sendEmailDetail({
+      to: targetEmail,
+      subject: emailSubject,
+      html: emailHtml,
+      text: `Dear ${user.name},\n\nWe received a request to recover the password for your account.\n\nYour verification code is: ${resetCode}\n\nThis code is valid for 15 minutes.\n\nBest regards,\nEasySchool Team`
+    });
+
+    if (!emailResult.success) {
+      const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false' && isEmailConfigured();
+      if (!emailEnabled) {
+        return res.status(503).json({ 
+          message: `পাসওয়ার্ড পুনরুদ্ধার ইমেল সিস্টেমটি কনফিগার করা নেই বা বন্ধ আছে। (${emailResult.error || 'SMTP configuration missing'})` 
+        });
+      }
+      return res.status(500).json({ 
+        message: `Failed to send recovery email. (${emailResult.error || 'SMTP error'}). Please contact support or try again later.` 
+      });
+    }
+
+    return res.json({ message: 'A verification code has been sent to the email address linked to your account.' });
+  } catch (error: any) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({ message: 'An internal server error occurred while processing password recovery.', error: error?.message || String(error) });
+  }
+});
+
+router.post('/reset-password-with-code', async (req, res) => {
+  try {
+    const identifier = String(req.body.identifier || '').trim();
+    const code = String(req.body.code || '').trim();
+    const newPassword = String(req.body.newPassword || '').trim();
+
+    if (!identifier || !code || !newPassword) {
+      return res.status(400).json({ message: 'Email/username/phone, verification code, and new password are required.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
+    }
+
+    const emailQuery = identifier.toLowerCase();
+
+    // ── MULTI-TENANT CONTEXT RESOLUTION ──────────────────────────────
+    const extractSubdomain = () => {
+      const explicit = String(
+        req.body.subdomain || 
+        req.query.subdomain || 
+        req.headers['x-school-subdomain'] || 
+        req.headers['x-client-subdomain'] || 
+        (req as any).subdomain || 
+        ''
+      ).trim().toLowerCase();
+      
+      const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'admin', 'mail', 'support']);
+      if (explicit && !RESERVED_SUBDOMAINS.has(explicit)) return explicit;
+
+      const host = String(req.query.domain || req.headers['x-client-domain'] || req.headers.host || req.hostname || '')
+        .replace(/^https?:\/\//i, '')
+        .replace(/:\d+$/, '')
+        .replace(/^www\./i, '')
+        .toLowerCase();
+
+      const MAIN_DOMAIN = (process.env.MAIN_DOMAIN || 'easyschool.live').toLowerCase();
+      if (!host || host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}` || host === 'localhost' || host === '127.0.0.1') return '';
+      if (host.endsWith(`.${MAIN_DOMAIN}`)) {
+        const sub = host.slice(0, -1 * (`.${MAIN_DOMAIN}`).length).split('.').pop() || '';
+        return RESERVED_SUBDOMAINS.has(sub) ? '' : sub;
+      }
+      return '';
+    };
+
+    const subdomain = extractSubdomain();
+    let tenantInstitution: any = null;
+    if (subdomain) {
+      tenantInstitution = await Institution.findOne({ subdomain }).lean().catch(() => null);
+    }
+    
+    const headerInstId = req.headers['x-institution-id'] || req.body.institutionId || req.query.institutionId;
+    if (!tenantInstitution && headerInstId && mongoose.Types.ObjectId.isValid(String(headerInstId))) {
+      tenantInstitution = await Institution.findById(headerInstId).lean().catch(() => null);
+    }
+
+    const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
+
+    // ── LOOKUP USER INSIDE CONTEXT ─────────────────────────────
+    const lookupUser = async () => {
+      let userDoc = await User.findOne({ 
+        $or: [
+          { email: emailQuery }, 
+          { username: emailQuery }, 
+          { phone: identifier }
+        ] 
+      }).populate('institutionId');
+
+      if (!userDoc) {
+        const student = await Student.findOne({ 
+          $or: [
+            { rollNumber: identifier }, 
+            { guardianPhone: identifier }, 
+            { guardianEmail: emailQuery }
+          ] 
+        }).select('userId').lean();
+
+        if (student?.userId) {
+          userDoc = await User.findOne({ _id: student.userId, role: 'student' }).populate('institutionId');
+        }
+      }
+      return userDoc;
+    };
+
+    const user = tenantContext 
+      ? await runWithTenantStorage(tenantContext, lookupUser).catch(() => null) 
+      : await lookupUser();
+
+    if (!user) {
+      return res.status(404).json({ message: 'No user account found matching the provided details.' });
+    }
+
+    // Verify verification code and expiration
+    const dbCode = user.resetPasswordCode;
+    const dbExpires = user.resetPasswordExpires;
+
+    if (!dbCode || dbCode !== code) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    if (!dbExpires || new Date(dbExpires).getTime() < Date.now()) {
+      return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Save new password and clear code in primary database
+    await runWithTenantStorage(null, async () => {
+      await User.updateOne(
+        { _id: user._id }, 
+        { 
+          $set: { password: hashedPassword },
+          $unset: { resetPasswordCode: 1, resetPasswordExpires: 1 } 
+        }
+      );
+    });
+
+    // Save new password and clear code in tenant database if it exists
+    const resolvedTenantContext = user.institutionId ? resolveTenantStorageContext(user.institutionId) : null;
+    if (resolvedTenantContext) {
+      await runWithTenantStorage(resolvedTenantContext, async () => {
+        await User.updateOne(
+          { _id: user._id }, 
+          { 
+            $set: { password: hashedPassword },
+            $unset: { resetPasswordCode: 1, resetPasswordExpires: 1 } 
+          }
+        );
+      });
+    }
+
+    return res.json({ message: 'Your password has been reset successfully. You can now login with your new password.' });
+  } catch (error: any) {
+    console.error('Reset password code error:', error);
+    return res.status(500).json({ message: 'An internal server error occurred while resetting your password.', error: error?.message || String(error) });
+  }
+});
+
+router.get('/check-users', async (_req, res) => {
+  return res.json({ message: 'User check endpoint is available' });
+});
+
+router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'), async (_req, res) => {
+  try {
+    const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const smtpPort = process.env.SMTP_PORT || '587';
+    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
+    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
+    const sendgridUser = process.env.SENDGRID_USERNAME || '';
+    const sendgridPass = process.env.SENDGRID_PASSWORD || '';
+    const emailFrom = process.env.EMAIL_FROM || '';
+
+    const mask = (str: string) => {
+      if (!str) return 'not_configured';
+      if (str.length <= 4) return '****';
+      return `${str.substring(0, 2)}...${str.substring(str.length - 2)}`;
+    };
+
+    const envInfo = {
+      EMAIL_ENABLED: emailEnabled,
+      SMTP_HOST: smtpHost,
+      SMTP_PORT: smtpPort,
+      SMTP_USER: mask(smtpUser),
+      SMTP_PASS: mask(smtpPass),
+      SENDGRID_USERNAME: mask(sendgridUser),
+      SENDGRID_PASSWORD: mask(sendgridPass),
+      EMAIL_FROM: emailFrom || 'not_configured',
+    };
+
+    // Helper to test if a port is open via TCP socket
+    const checkPort = (host: string, port: number, timeoutMs = 3000) => {
+      return new Promise<{ open: boolean; error?: string }>((resolve) => {
+        const socket = new net.Socket();
+        const timer = setTimeout(() => {
+          socket.destroy();
+          resolve({ open: false, error: 'Connection timeout (3s)' });
+        }, timeoutMs);
+
+        socket.connect(port, host, () => {
+          clearTimeout(timer);
+          socket.end();
+          resolve({ open: true });
+        });
+
+        socket.on('error', (err) => {
+          clearTimeout(timer);
+          socket.destroy();
+          resolve({ open: false, error: err.message || String(err) });
+        });
+      });
+    };
+
+    // Perform socket tests on common email ports
+    const portChecks = {
+      gmail_587: await checkPort('smtp.gmail.com', 587),
+      gmail_465: await checkPort('smtp.gmail.com', 465),
+      sendgrid_587: await checkPort('smtp.sendgrid.net', 587),
+      sendgrid_2525: await checkPort('smtp.sendgrid.net', 2525),
+      brevo_2525: await checkPort('smtp-relay.brevo.com', 2525),
+      configured_port: smtpHost ? await checkPort(smtpHost, Number(smtpPort)) : null,
+    };
+
+    const transport = getEmailTransport();
+    if (!transport) {
+      return res.json({
+        success: false,
+        message: 'No email transport is configured or active according to environment variables.',
+        envInfo,
+        portChecks,
+      });
+    }
+
+    // Attempt verification of SMTP transporter connection
+    const verificationPromise = new Promise<{ success: boolean; error?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        resolve({ success: false, error: 'Connection verification timed out (5s)' });
+      }, 5000);
+
+      (transport.transporter as any).verify((err: any) => {
+        clearTimeout(timer);
+        if (err) {
+          resolve({ success: false, error: err.message || String(err) });
+        } else {
+          resolve({ success: true });
+        }
+      });
+    });
+
+    const verificationResult = await verificationPromise;
+
+    return res.json({
+      success: verificationResult.success,
+      message: verificationResult.success 
+        ? 'Email server connection verified successfully!'
+        : `Email server connection failed: ${verificationResult.error}`,
+      envInfo,
+      portChecks,
+      verificationError: verificationResult.error || null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: `Diagnostic execution failed: ${error?.message || String(error)}`,
+    });
+  }
+});
+
+export default router;

@@ -1,0 +1,230 @@
+import { Router, Request, Response } from 'express';
+import { authenticate, authorize, normalizeRole } from '../middleware/auth';
+import SmsLog from '../models/SmsLog';
+import SmsPurchaseRequest from '../models/SmsPurchaseRequest';
+import Parent from '../models/Parent';
+import Institution from '../models/Institution';
+import getTenantIdFromReq from '../utils/tenant';
+import { sendSMS } from '../utils/sms';
+import { verifyGatewayPayment } from '../services/paymentGateway';
+
+const router = Router();
+const smsUnitPrice = () => Number(process.env.SMS_UNIT_PRICE || process.env.DEFAULT_SMS_UNIT_PRICE || 0);
+const roleOf = (req: any) => normalizeRole(req.user?.role) || req.user?.role;
+const isSystemAdmin = (req: any) => ['admin', 'super_admin'].includes(roleOf(req));
+const requestAllowed = (req: any) => ['head', 'admin', 'super_admin'].includes(roleOf(req));
+const institutionFromReq = (req: any) => isSystemAdmin(req) && (req.body?.institutionId || req.query?.institutionId) ? String(req.body?.institutionId || req.query?.institutionId) : String(getTenantIdFromReq(req) || req.user?.institutionId || '');
+
+router.get('/sms-diagnostic', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const institution = await Institution.findById(institutionId).select('settings billing name').lean();
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    const settings: any = (institution as any)?.settings || {};
+    const billing: any = (institution as any)?.billing || {};
+    const rawKey = String(settings.smsApiKey || process.env.SMS_API_KEY || process.env.ANONCIFY_SMS_API_KEY || '').trim();
+    const hasValidKey = rawKey.length >= 8 && !/your_|REPLACE|demo|test_key|placeholder|example/i.test(rawKey);
+    const smsBalance = Number(billing.smsBalance ?? 0);
+    res.json({
+      diagnosis: {
+        institutionName: (institution as any)?.name,
+        smsEnabled: settings.smsEnabled ?? true,
+        provider: settings.smsProvider || process.env.SMS_PROVIDER || 'anoncify',
+        smsBalance,
+        hasValidKey,
+        verdict: hasValidKey ? '✅ SMS should be working' : '❌ NO VALID API KEY'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Diagnostic failed', error });
+  }
+});
+router.get('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const institution: any = await Institution.findById(institutionId).select('settings').lean();
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    const s: any = institution?.settings || {};
+    res.json({
+      smsEnabled: s.smsEnabled ?? true,
+      smsProvider: s.smsProvider || 'anoncify',
+      smsApiUrl: s.smsApiUrl || 'https://anoncify.xyz/api/sms',
+      smsApiKeySet: Boolean(s.smsApiKey)
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch SMS settings', error });
+  }
+});
+router.post('/sms-settings', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const update: any = {};
+    if (req.body.smsApiKey !== undefined) update['settings.smsApiKey'] = String(req.body.smsApiKey || '').trim();
+    if (req.body.smsEnabled !== undefined) update['settings.smsEnabled'] = Boolean(req.body.smsEnabled);
+    if (req.body.smsProvider !== undefined) update['settings.smsProvider'] = String(req.body.smsProvider || 'anoncify').toLowerCase();
+    if (req.body.smsApiUrl !== undefined) update['settings.smsApiUrl'] = String(req.body.smsApiUrl || '').trim();
+    const institution = await Institution.findByIdAndUpdate(institutionId, { $set: update }, { new: true });
+    if (!institution) return res.status(404).json({ message: 'Institution not found.' });
+    res.json({ message: 'SMS settings saved successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to save SMS settings', error });
+  }
+});
+router.post('/sms-test', authenticate, authorize('admin', 'super_admin', 'head'), async (req: Request, res: Response) => {
+  try {
+    const institutionId = institutionFromReq(req as any);
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const phone = String(req.body?.phone || '').trim();
+    if (!phone) return res.status(400).json({ message: 'phone number required in body' });
+    const result = await sendSMS({ to: phone, message: 'EASY SCHOOL SMS test message.', institutionId, type: 'notification', purpose: 'sms_test' });
+    res.json({ sent: result, phone });
+  } catch (error) {
+    res.status(500).json({ message: 'SMS test failed', error });
+  }
+});
+
+router.get('/purchases', authenticate, async (req: any, res: Response) => {
+  try { const role = roleOf(req); if (!['head', 'assistant_head', 'finance_officer', 'admin', 'super_admin'].includes(role)) return res.status(403).json({ message: 'Access denied.' }); const institutionId = institutionFromReq(req); const filter: any = {}; if (!isSystemAdmin(req) || institutionId) filter.institutionId = institutionId; const requests = await SmsPurchaseRequest.find(filter).populate('institutionId', 'name phone email').populate('requestedBy', 'name username phone role').populate('approvedBy', 'name username role').sort({ createdAt: -1 }).limit(100).lean(); res.json({ requests, unitPrice: smsUnitPrice(), total: requests.length }); } catch (error) { res.status(500).json({ message: 'Failed to load SMS purchase requests', error }); }
+});
+router.post('/purchases', authenticate, async (req: any, res: Response) => {
+  try {
+    if (!requestAllowed(req)) return res.status(403).json({ message: 'Only Head/Admin can request SMS purchase.' });
+    const institutionId = institutionFromReq(req); const quantity = Number(req.body.quantity || req.body.credits || 0); const contactNumber = String(req.body.contactNumber || req.body.phone || '').trim();
+    if (!institutionId) return res.status(400).json({ message: 'Institution not found.' });
+    if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: 'SMS quantity must be a positive number.' });
+    if (!contactNumber) return res.status(400).json({ message: 'Contact phone number is required.' });
+    const price = Number(req.body.unitPrice ?? smsUnitPrice()); const totalAmount = Number(req.body.totalAmount ?? quantity * price);
+    
+    const paymentGateway = String(req.body.paymentGateway || req.body.paymentMethod || 'popup');
+    const paymentOrderId = String(req.body.paymentOrderId || req.body.orderId || '');
+    const paymentTrxId = String(req.body.paymentTrxId || req.body.trxId || '');
+    const paymentSenderNumber = String(req.body.paymentSenderNumber || req.body.senderNumber || req.body.phone || '');
+    const paymentTime = req.body.paymentTime ? String(req.body.paymentTime) : new Date().toISOString();
+    const popupPaymentResponse = req.body.popupPaymentResponse || {};
+    const popupVerification = req.body.popupVerification || {};
+
+    const hasPaymentParams = Boolean(req.body.popupPaymentResponse || req.body.paymentTrxId || req.body.paymentOrderId || req.body.popupVerification);
+
+    let paidByPopup = false;
+    let verification: any = { verified: false };
+
+    if (hasPaymentParams) {
+      verification = await verifyGatewayPayment({
+        trxId: paymentTrxId,
+        amount: totalAmount,
+        senderNumber: paymentSenderNumber,
+        gateway: paymentGateway,
+        orderId: paymentOrderId,
+        paymentTime,
+        domain: process.env.PAYMENT_GATEWAY_DOMAIN,
+      });
+
+      const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
+      const hasVerifiedStatus =
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification)) ||
+        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(String(req.body.popupPaymentStatus || '').toLowerCase());
+
+      const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
+      const details = popupVerification || payload.verification || {};
+      const amount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
+      const amountMatches = amount === totalAmount;
+
+      const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
+
+      paidByPopup = verification.verified || popupVerified;
+
+      if (!paidByPopup) {
+        return res.status(400).json({ message: verification.message || 'SMS recharge payment verification failed', verification });
+      }
+    }
+
+    const request: any = await SmsPurchaseRequest.create({ institutionId, requestedBy: req.user?._id || req.user?.id, quantity, unitPrice: price, totalAmount, contactNumber, paymentMethod: paymentGateway, notes: String(req.body.notes || ''), status: paidByPopup ? 'paid' : 'pending', approvedBy: paidByPopup ? (req.user?._id || req.user?.id) : undefined, approvedAt: paidByPopup ? new Date() : undefined, paidAt: paidByPopup ? new Date() : undefined });
+    if (paidByPopup) { await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': quantity, 'billing.monthlySmsLimit': quantity } }); request.creditedAt = new Date(); request.creditedQuantity = quantity; await request.save(); }
+    res.status(201).json({ message: paidByPopup ? 'SMS recharge payment successful. Balance updated.' : 'SMS purchase request submitted successfully.', request });
+  } catch (error) { res.status(500).json({ message: 'Failed to create SMS purchase request', error }); }
+});
+router.patch('/purchases/:id/status', authenticate, authorize('admin', 'super_admin'), async (req: any, res: Response) => { try { const status = String(req.body.status || '').toLowerCase(); if (!['pending', 'approved', 'rejected', 'paid'].includes(status)) return res.status(400).json({ message: 'Invalid status.' }); const request: any = await SmsPurchaseRequest.findById(req.params.id); if (!request) return res.status(404).json({ message: 'SMS purchase request not found.' }); request.status = status; request.approvedBy = req.user?._id || req.user?.id; request.approvedAt = status === 'pending' ? undefined : (request.approvedAt || new Date()); request.paidAt = status === 'paid' ? (request.paidAt || new Date()) : request.paidAt; if ((status === 'approved' || status === 'paid') && !request.creditedAt) { const qty = Number(request.quantity || 0); await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.monthlySmsLimit': qty } }); request.creditedAt = new Date(); request.creditedQuantity = qty; } await request.save(); res.json({ message: `SMS purchase request marked as ${status}.`, request }); } catch (error) { res.status(500).json({ message: 'Failed to update SMS purchase status', error }); } });
+
+router.get('/', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
+  try {
+    const { status, parentId, studentId, type, startDate, endDate, institutionId } = req.query;
+    const filter: any = {};
+
+    if (isSystemAdmin(req)) {
+      if (institutionId) {
+        filter.institutionId = institutionId;
+      }
+    } else {
+      const tenantId = getTenantIdFromReq(req);
+      if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
+      filter.institutionId = tenantId;
+    }
+
+    if (status) filter.status = status;
+    if (parentId) filter.parentId = parentId;
+    if (studentId) filter.studentId = studentId;
+    if (type) filter.type = type;
+    if (startDate || endDate) {
+      filter.sentAt = {};
+      if (startDate) filter.sentAt.$gte = new Date(startDate as string);
+      if (endDate) filter.sentAt.$lte = new Date(endDate as string);
+    }
+
+    const smsLogs = await SmsLog.find(filter)
+      .populate('parentId', 'userId')
+      .populate('studentId', 'name')
+      .sort({ sentAt: -1 })
+      .limit(500);
+
+    res.json({ total: smsLogs.length, data: smsLogs.map((log) => log.toObject()) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch SMS logs' });
+  }
+});
+router.get('/parent/:parentId', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => { try { const parent = await Parent.findById(req.params.parentId); if (!parent) return res.status(404).json({ error: 'Parent not found' }); const smsLogs = await SmsLog.find({ institutionId: getTenantIdFromReq(req), parentId: req.params.parentId }).populate('studentId', 'name').sort({ sentAt: -1 }); res.json({ parent: { id: parent._id, children: parent.children || [] }, logs: smsLogs }); } catch (error) { res.status(500).json({ error: 'Failed to fetch parent SMS logs' }); } });
+router.get('/stats', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer'), async (req: Request, res: Response) => {
+  try {
+    const days = Number(req.query.days || 30);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const filter: any = { sentAt: { $gte: startDate } };
+
+    if (isSystemAdmin(req)) {
+      if (req.query.institutionId) {
+        filter.institutionId = req.query.institutionId;
+      }
+    } else {
+      const tenantId = getTenantIdFromReq(req);
+      if (!tenantId) return res.status(400).json({ error: 'Institution not found' });
+      filter.institutionId = tenantId;
+    }
+
+    const totalSent = await SmsLog.countDocuments(filter);
+
+    const statusBreakdown = await SmsLog.aggregate([
+      { $match: filter },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    const typeBreakdown = await SmsLog.aggregate([
+      { $match: filter },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      period: `Last ${days} days`,
+      totalSent,
+      statusBreakdown,
+      typeBreakdown
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch SMS statistics' });
+  }
+});
+
+export default router;

@@ -1,0 +1,81 @@
+name: Deploy to DigitalOcean (Server)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH password client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Deploy Backend via SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -e
+          sshpass -p "$SSH_PASSWORD" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'EOF'
+          set -e
+
+          if [ -d "$HOME/projects/school/school-server" ]; then
+            cd "$HOME/projects/school/school-server"
+          elif [ -d "$HOME/school-server" ]; then
+            cd "$HOME/school-server"
+          elif [ -d "/var/www/school-server" ]; then
+            cd "/var/www/school-server"
+          else
+            echo "School server directory not found!"
+            exit 1
+          fi
+
+          echo "Deploying server to $(pwd)..."
+          git reset --hard
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          echo "Activating Node 20 if nvm exists..."
+          export NVM_DIR="$HOME/.nvm"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            . "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
+          fi
+
+          echo "Node and npm version:"
+          node -v
+          npm -v
+
+          echo "Installing dependencies..."
+          npm install --no-audit --no-fund --prefer-offline
+
+          if [ -f src/routes/attendanceActiveSafe.ts ]; then
+            sed -i "s/const card = await M.IDCard.findOne/const card: any = await M.IDCard.findOne/g" src/routes/attendanceActiveSafe.ts
+          fi
+
+          echo "Building TypeScript server with keep-alive output..."
+          ( while true; do echo "build still running... $(date -u +%H:%M:%S)"; sleep 25; done ) &
+          KEEPALIVE_PID=$!
+          trap 'kill $KEEPALIVE_PID 2>/dev/null || true' EXIT
+          npm run build
+          kill $KEEPALIVE_PID 2>/dev/null || true
+          trap - EXIT
+
+          echo "Restarting PM2 server..."
+          pm2 restart school-server --update-env || pm2 restart all --update-env || pm2 start dist/server.js --name "school-server"
+          pm2 save || true
+          EOF
