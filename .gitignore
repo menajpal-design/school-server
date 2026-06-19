@@ -67,3 +67,6 @@ Thumbs.db
 .mongo-test-data
 # Uploads directory (contains user uploaded files)
 uploads/
+
+# Local diagnostic/debug scripts (may contain credentials)
+scripts/
