@@ -20,6 +20,10 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          BREVO_FROM_NAME: ${{ secrets.BREVO_FROM_NAME }}
+          BREVO_SMTP_USER: ${{ secrets.BREVO_SMTP_USER }}
         run: |
           set -e
           sshpass -p "$SSH_PASSWORD" ssh \
@@ -28,7 +32,12 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
             -o TCPKeepAlive=yes \
-            "$SSH_USER@$SSH_HOST" 'bash -s' <<'EOF'
+            "$SSH_USER@$SSH_HOST" \
+            BREVO_API_KEY="$BREVO_API_KEY" \
+            EMAIL_FROM="$EMAIL_FROM" \
+            BREVO_FROM_NAME="$BREVO_FROM_NAME" \
+            BREVO_SMTP_USER="$BREVO_SMTP_USER" \
+            'bash -s' <<'EOF'
           set -e
 
           if [ -d "$HOME/projects/school/school-server" ]; then
@@ -47,6 +56,28 @@ jobs:
           git fetch origin main
           git checkout main
           git reset --hard origin/main
+
+          # ── Inject Brevo email secrets into .env ───────────────────────────
+          if [ -f ".env" ]; then
+            update_env() {
+              local key="$1"
+              local val="$2"
+              if grep -q "^${key}=" .env 2>/dev/null; then
+                sed -i "s|^${key}=.*|${key}=${val}|" .env
+              else
+                echo "${key}=${val}" >> .env
+              fi
+            }
+            [ -n "$BREVO_API_KEY" ]   && update_env "BREVO_API_KEY"   "$BREVO_API_KEY"
+            [ -n "$EMAIL_FROM" ]      && update_env "EMAIL_FROM"       "$EMAIL_FROM"
+            [ -n "$BREVO_FROM_NAME" ] && update_env "BREVO_FROM_NAME"  "$BREVO_FROM_NAME"
+            [ -n "$BREVO_SMTP_USER" ] && update_env "BREVO_SMTP_USER"  "$BREVO_SMTP_USER"
+            update_env "EMAIL_ENABLED" "true"
+            echo "Email env vars injected into .env"
+          else
+            echo "No .env file found on server - skipping env injection"
+          fi
+          # ──────────────────────────────────────────────────────────────────
 
           echo "Activating Node 20 if nvm exists..."
           export NVM_DIR="$HOME/.nvm"

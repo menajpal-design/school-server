@@ -158,42 +158,79 @@ export const sendEmailDetail = async (
       const result = await sendViaBrevoApi(options);
       if (result.success) {
         console.log(`📧 Email sent via Brevo API to ${recipients}`);
-      } else {
-        console.error('❌ Brevo API email failed:', result.error);
+        return result;
       }
-      return result;
+      // If Brevo fails with 401 (unauthorized/key expired), fall through to SMTP
+      const isAuthError = result.error && (result.error.includes('401') || result.error.includes('unauthorized') || result.error.includes('Key not found'));
+      if (!isAuthError) {
+        console.error('❌ Brevo API email failed:', result.error);
+        return result;
+      }
+      console.warn('⚠️ Brevo API key invalid/expired, falling back to SMTP:', result.error);
     }
 
     // ── Priority 2: Brevo SMTP relay (fallback) ───────────────────────────────
     const transport = getEmailTransport();
-    if (!transport) {
-      const message = getDisabledMessage(Array.isArray(options.to) ? options.to.length : 1);
-      if (process.env.NODE_ENV === 'production') {
-        console.error(message);
-        return { success: false, error: 'Email service not configured (BREVO_API_KEY missing)' };
+    if (transport) {
+      try {
+        const from = options.from || process.env.EMAIL_FROM || transport.from;
+        await transport.transporter.sendMail({
+          from,
+          to:          options.to,
+          subject:     options.subject,
+          html:        options.html,
+          text:        options.text,
+          attachments: options.attachments,
+        });
+        console.log(`📧 Email sent via Brevo SMTP to ${recipients}`);
+        return { success: true };
+      } catch (smtpErr: any) {
+        console.warn('⚠️ Brevo SMTP failed, trying Gmail SMTP:', smtpErr?.message);
       }
-      console.log(message);
-      console.log(`Email would be sent to ${recipients}`);
-      return { success: true };
     }
 
-    const from = options.from || process.env.EMAIL_FROM || transport.from;
-    if (!from) {
-      console.error('EMAIL_FROM is required to send mail');
-      return { success: false, error: 'EMAIL_FROM is required' };
+    // ── Priority 3: Gmail / generic SMTP (last resort) ────────────────────────
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpPort = Number(process.env.SMTP_PORT || 587);
+    if (smtpHost && smtpUser && smtpPass) {
+      try {
+        const gmailTransporter = nodemailer.createTransport({
+          host:   smtpHost,
+          port:   smtpPort,
+          secure: smtpPort === 465,
+          auth:   { user: smtpUser, pass: smtpPass },
+          connectionTimeout: 10000,
+          socketTimeout:     15000,
+        });
+        const from = options.from || process.env.EMAIL_FROM || smtpUser;
+        await gmailTransporter.sendMail({
+          from,
+          to:          options.to,
+          subject:     options.subject,
+          html:        options.html,
+          text:        options.text,
+          attachments: options.attachments,
+        });
+        console.log(`📧 Email sent via Gmail SMTP to ${recipients}`);
+        return { success: true };
+      } catch (gmailErr: any) {
+        console.error('❌ Gmail SMTP also failed:', gmailErr?.message);
+        return { success: false, error: `All email providers failed. Last error: ${gmailErr?.message}` };
+      }
     }
 
-    await transport.transporter.sendMail({
-      from,
-      to:          options.to,
-      subject:     options.subject,
-      html:        options.html,
-      text:        options.text,
-      attachments: options.attachments,
-    });
-
-    console.log(`📧 Email sent via Brevo SMTP to ${recipients}`);
+    // No transport available
+    const message = getDisabledMessage(Array.isArray(options.to) ? options.to.length : 1);
+    if (process.env.NODE_ENV === 'production') {
+      console.error(message);
+      return { success: false, error: 'Email service not configured. Set BREVO_API_KEY or SMTP_HOST+SMTP_USER+SMTP_PASS.' };
+    }
+    console.log(message);
+    console.log(`Email would be sent to ${recipients}`);
     return { success: true };
+
   } catch (error: any) {
     console.error('❌ Error sending email:', error);
     return { success: false, error: error?.message || String(error) };
