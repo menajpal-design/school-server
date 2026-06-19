@@ -227,14 +227,8 @@ router.post('/forgot-password', async (req, res) => {
     });
 
     if (!emailResult.success) {
-      const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false' && isEmailConfigured();
-      if (!emailEnabled) {
-        return res.status(503).json({ 
-          message: `পাসওয়ার্ড পুনরুদ্ধার ইমেল সিস্টেমটি কনফিগার করা নেই বা বন্ধ আছে। (${emailResult.error || 'SMTP configuration missing'})` 
-        });
-      }
       return res.status(500).json({ 
-        message: `Failed to send recovery email. (${emailResult.error || 'SMTP error'}). Please contact support or try again later.` 
+        message: `Failed to send recovery email. (${emailResult.error || 'Email provider error'}). Please contact support or try again later.` 
       });
     }
 
@@ -389,6 +383,9 @@ router.get('/check-users', async (_req, res) => {
 router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'), async (_req, res) => {
   try {
     const brevoApiKey = process.env.BREVO_API_KEY || '';
+    const smtpHost    = process.env.SMTP_HOST || '';
+    const smtpUser    = process.env.SMTP_USER || process.env.BREVO_SMTP_USER || process.env.EMAIL_USER || '';
+    const smtpPass    = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
     const emailFrom   = process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '';
     const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
 
@@ -399,57 +396,41 @@ router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'),
     };
 
     const envInfo = {
-      EMAIL_ENABLED:   emailEnabled,
-      BREVO_API_KEY:   mask(brevoApiKey),
-      BREVO_FROM_NAME: process.env.BREVO_FROM_NAME || 'not_configured',
-      EMAIL_FROM:      emailFrom || 'not_configured',
+      EMAIL_ENABLED:  emailEnabled,
+      BREVO_API_KEY:  mask(brevoApiKey),
+      EMAIL_FROM:     emailFrom || 'not_configured',
+      SMTP_HOST:      smtpHost  || 'not_configured',
+      SMTP_USER:      mask(smtpUser),
+      SMTP_PASS:      smtpPass ? '****' : 'not_configured',
     };
 
-    if (!brevoApiKey || !emailFrom) {
-      return res.json({
-        success: false,
-        message: 'Brevo API is not configured. Set BREVO_API_KEY and EMAIL_FROM in environment.',
-        envInfo,
-      });
-    }
-
-    // Live connectivity test — call Brevo account info endpoint
-    let apiReachable = false;
-    let apiError: string | null = null;
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
+    // Test Brevo API
+    let brevoOk = false;
+    let brevoError: string | null = null;
+    if (brevoApiKey) {
       try {
-        const testRes = await fetch('https://api.brevo.com/v3/account', {
-          headers: { 'api-key': brevoApiKey, 'accept': 'application/json' },
-          signal: controller.signal,
-        });
-        if (testRes.ok) {
-          apiReachable = true;
-        } else {
-          const errText = await testRes.text().catch(() => testRes.statusText);
-          apiError = `Brevo API responded ${testRes.status}: ${errText}`;
-        }
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (e: any) {
-      apiError = e?.message?.includes('abort') ? 'Brevo API request timed out (6s)' : e?.message || String(e);
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6000);
+        try {
+          const r = await fetch('https://api.brevo.com/v3/account', {
+            headers: { 'api-key': brevoApiKey, 'accept': 'application/json' },
+            signal: ctrl.signal,
+          });
+          if (r.ok) { brevoOk = true; }
+          else { brevoError = `HTTP ${r.status}: ${await r.text().catch(() => r.statusText)}`; }
+        } finally { clearTimeout(t); }
+      } catch (e: any) { brevoError = e?.message || String(e); }
     }
 
     return res.json({
-      success: apiReachable,
-      message: apiReachable
-        ? '✅ Brevo API key is valid and reachable.'
-        : `❌ Brevo API check failed: ${apiError}`,
+      success: brevoOk || Boolean(smtpHost && smtpUser && smtpPass),
+      activeProvider: brevoOk ? 'Brevo API' : (smtpHost && smtpUser && smtpPass ? 'SMTP' : 'none'),
+      brevo:  { configured: Boolean(brevoApiKey), reachable: brevoOk, error: brevoError },
+      smtp:   { configured: Boolean(smtpHost && smtpUser && smtpPass), host: smtpHost, port: process.env.SMTP_PORT || '587' },
       envInfo,
-      apiError: apiError || null,
     });
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      message: `Diagnostic failed: ${error?.message || String(error)}`,
-    });
+    return res.status(500).json({ success: false, message: `Diagnostic failed: ${error?.message || String(error)}` });
   }
 });
 
