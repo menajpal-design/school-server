@@ -151,7 +151,6 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/reports', reportLimiter, reportRoutes);
 app.use('/api/backup', backupRoutes);
-app.use('/api/institution', smsMonitoringRoutes);
 app.use('/api/institution', institutionRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/admin', adminRoutes);

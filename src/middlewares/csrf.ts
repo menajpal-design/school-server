@@ -15,7 +15,16 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction) 
 
   const path = req.originalUrl.split('?')[0];
   // Public auth endpoints should remain usable without a CSRF token.
-  if (path.startsWith('/api/auth/register') || path.startsWith('/api/auth/login') || path.startsWith('/api/auth/forgot-password')) {
+  const publicAuthPaths = [
+    '/api/auth/register',
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/auth/refresh',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password-with-code',
+    '/api/admissions/public',
+  ];
+  if (publicAuthPaths.some((p) => path === p || path.startsWith(`${p}/`) || path.startsWith(p))) {
     return next();
   }
 

@@ -9,6 +9,7 @@ const allowedPaths = [
   '/api/auth',
   '/api/config',
   '/api/health',
+  '/api/csrf',
   '/api/institution/profile',
   '/api/institution/billing',
   '/api/institution/plans',
@@ -16,6 +17,9 @@ const allowedPaths = [
   '/api/site-settings/storage-status',
   '/api/site-settings/app-controls',
   '/api/academic/results/me',
+  '/api/sms-monitoring/purchases',
+  '/api/admissions/public',
+  '/api/demo-results',
 ];
 
 const isAllowedPath = (path: string) => allowedPaths.some((allowed) => path === allowed || path.startsWith(`${allowed}/`));
