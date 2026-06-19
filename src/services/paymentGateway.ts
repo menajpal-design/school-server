@@ -59,3 +59,10 @@ export const verifyGatewayPayment = async (input: VerifyPaymentInput) => {
     return { configured: true, verified: false, status: 'failed', message: error?.message || 'Payment verification failed' };
   }
 };
+
+// Strict gate: a payment may only be considered confirmed when the gateway itself confirms it.
+// Client-supplied popup payloads are NOT trusted on their own — the popup widget's onComplete
+// callback fires even when the user cancels, so relying on client status would credit SMS
+// balance for cancelled / unverified payments.
+export const isPaymentConfirmed = (verification: any = {}) =>
+  Boolean(verification?.configured && verification?.verified);

@@ -2,11 +2,11 @@ import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
 import Institution from '../models/Institution';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorize } from '../middleware/auth';
 import { calculatePlanDue, EASY_SCHOOL_STORAGE_MONTHLY_PRICE, SCHOOL_PLANS, SMS_PACKAGES, getSmsPackageByCode } from '../config/plans';
 import { activateBilling, getCurrentSmsBillingSummary } from '../services/billingService';
 import SmsTopup from '../models/SmsTopup';
-import { verifyGatewayPayment } from '../services/paymentGateway';
+import { verifyGatewayPayment, isPaymentConfirmed } from '../services/paymentGateway';
 import { writeAuditLog } from '../services/auditService';
 
 const router = express.Router();
@@ -446,21 +446,13 @@ router.post('/billing/payment', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    const popupVerified = isPopupVerifiedPayment(normalizedBody, Number(billing.dueAmount || 0));
-    const finalVerification = verification.verified
-      ? verification
-      : popupVerified
-        ? {
-          ...verification,
-          verified: true,
-          status: 'verified',
-          data: normalizedBody.popupPaymentResponse || normalizedBody.paymentVerificationResponse || normalizedBody,
-          message: 'Payment verified by popup widget response.',
-        }
-        : verification;
+    // The school may ONLY be activated when the payment gateway itself confirms the payment.
+    // The popup widget's onComplete fires on cancel too, so client status can never activate
+    // the subscription on its own — it is recorded for audit only.
+    const finalVerification = verification;
 
     Object.assign(billing, extractVerificationMeta(finalVerification));
-    if (finalVerification.verified) {
+    if (isPaymentConfirmed(finalVerification)) {
       institution.billing = activateBilling({
         ...billing,
         ...extractVerificationMeta(finalVerification),
@@ -539,28 +531,26 @@ router.post('/billing/request-unsubscribe', authenticate, async (req, res) => {
   }
 });
 
-// Top-up SMS monetary balance for the current institution
-router.post('/sms/topup', authenticate, async (req, res) => {
+// Manual SMS credit adjustment (platform admin override only — NO payment verification).
+// Regular school users MUST use /sms/topup/payment or /sms/package/purchase which verify payment.
+router.post('/sms/topup', authenticate, authorize('admin', 'super_admin'), async (req, res) => {
   try {
-    const amount = Number(req.body?.amount || 0);
+    const amount = Math.floor(Number(req.body?.amount || 0));
     const method = String(req.body?.method || 'manual');
     const meta = req.body?.meta || {};
     if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid top-up amount' });
-
-    // Only privileged roles can top-up: admin, super_admin, finance_officer, head
-    const allowedRoles = ['admin', 'super_admin', 'finance_officer', 'head'];
-    if (!allowedRoles.includes((req.user as any).role)) return res.status(403).json({ message: 'Permission denied' });
+    if (amount > 100000) return res.status(400).json({ message: 'Top-up amount too large' });
 
     const institution = await Institution.findById(req.user.institutionId);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
 
-    // Record the top-up transaction
-    const topup = await SmsTopup.create({ institutionId: institution._id, amount: Number(amount), method, meta, createdBy: req.user._id });
+    // Record the top-up transaction (clearly flagged as a manual admin override)
+    const topup = await SmsTopup.create({ institutionId: institution._id, amount: Number(amount), method: `manual:${method}`, meta: { ...meta, manualAdminOverride: true, grantedBy: req.user._id }, createdBy: req.user._id });
 
-    // Atomically increment smsBalance
-    const updated = await Institution.findByIdAndUpdate(institution._id, { $inc: { 'billing.smsBalance': Number(amount) } }, { new: true });
+    // Atomically increment smsBalance AND extraSmsCredits so it survives subscription renewal
+    const updated = await Institution.findByIdAndUpdate(institution._id, { $inc: { 'billing.smsBalance': Number(amount), 'billing.extraSmsCredits': Number(amount) } }, { new: true });
 
-    res.json({ message: 'SMS balance topped up', topup, billing: (updated as any).billing });
+    res.json({ message: 'SMS balance topped up (manual admin override)', topup, billing: (updated as any).billing });
   } catch (error) {
     res.status(500).json({ message: 'Failed to top-up SMS balance', error });
   }
@@ -613,19 +603,10 @@ router.post('/sms/topup/payment', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
-    const hasVerifiedStatus =
-      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
-      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification));
-
-    const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
-    const details = popupVerification || payload.verification || {};
-    const paymentAmount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
-    const amountMatches = paymentAmount === amount;
-
-    const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
-
-    if (!verification.verified && !popupVerified) {
+    // SMS credits may ONLY be granted when the payment gateway itself confirms the payment.
+    // Client-supplied popup data is untrusted (the widget callback also fires on cancel), so it
+    // is recorded for audit only — it can never credit the balance on its own.
+    if (!isPaymentConfirmed(verification)) {
       return res.status(400).json({ message: verification.message || 'SMS top-up payment verification failed', verification });
     }
 
@@ -643,7 +624,7 @@ router.post('/sms/topup/payment', authenticate, async (req, res) => {
 
     const updated = await Institution.findByIdAndUpdate(
       institution._id,
-      { $inc: { 'billing.smsBalance': amount } },
+      { $inc: { 'billing.smsBalance': amount, 'billing.extraSmsCredits': amount } },
       { new: true }
     );
 
@@ -696,19 +677,9 @@ router.post('/sms/package/purchase', authenticate, async (req, res) => {
       domain: process.env.PAYMENT_GATEWAY_DOMAIN,
     });
 
-    const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
-    const hasVerifiedStatus =
-      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
-      ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification));
-
-    const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
-    const details = popupVerification || payload.verification || {};
-    const paymentAmount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
-    const amountMatches = paymentAmount === smsPackage.price;
-
-    const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
-
-    if (!verification.verified && !popupVerified) {
+    // SMS package credits may ONLY be granted when the payment gateway confirms the payment.
+    // The popup widget's onComplete also fires on cancel, so client status can never credit SMS.
+    if (!isPaymentConfirmed(verification)) {
       return res.status(400).json({ message: verification.message || 'SMS package payment verification failed', verification });
     }
 

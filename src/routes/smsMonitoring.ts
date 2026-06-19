@@ -6,7 +6,7 @@ import Parent from '../models/Parent';
 import Institution from '../models/Institution';
 import getTenantIdFromReq from '../utils/tenant';
 import { sendSMS } from '../utils/sms';
-import { verifyGatewayPayment } from '../services/paymentGateway';
+import { verifyGatewayPayment, isPaymentConfirmed } from '../services/paymentGateway';
 
 const router = Router();
 const smsUnitPrice = () => Number(process.env.SMS_UNIT_PRICE || process.env.DEFAULT_SMS_UNIT_PRICE || 0);
@@ -122,20 +122,9 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
         domain: process.env.PAYMENT_GATEWAY_DOMAIN,
       });
 
-      const getStatus = (obj: any) => String(obj?.status || obj?.data?.status || '').toLowerCase();
-      const hasVerifiedStatus =
-        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupPaymentResponse)) ||
-        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(getStatus(popupVerification)) ||
-        ['verified', 'success', 'paid', 'already_verified', 'manual_accepted'].includes(String(req.body.popupPaymentStatus || '').toLowerCase());
-
-      const payload = popupPaymentResponse?.data || popupPaymentResponse || {};
-      const details = popupVerification || payload.verification || {};
-      const amount = Number(req.body.receivedAmount ?? payload.amount ?? details.amount ?? 0);
-      const amountMatches = amount === totalAmount;
-
-      const popupVerified = Boolean(hasVerifiedStatus && amountMatches);
-
-      paidByPopup = verification.verified || popupVerified;
+      // SMS credits may ONLY be granted when the gateway confirms the payment. Client popup
+      // data is untrusted (the widget callback also fires on cancel) — recorded for audit only.
+      paidByPopup = isPaymentConfirmed(verification);
 
       if (!paidByPopup) {
         return res.status(400).json({ message: verification.message || 'SMS recharge payment verification failed', verification });
@@ -143,11 +132,11 @@ router.post('/purchases', authenticate, async (req: any, res: Response) => {
     }
 
     const request: any = await SmsPurchaseRequest.create({ institutionId, requestedBy: req.user?._id || req.user?.id, quantity, unitPrice: price, totalAmount, contactNumber, paymentMethod: paymentGateway, notes: String(req.body.notes || ''), status: paidByPopup ? 'paid' : 'pending', approvedBy: paidByPopup ? (req.user?._id || req.user?.id) : undefined, approvedAt: paidByPopup ? new Date() : undefined, paidAt: paidByPopup ? new Date() : undefined });
-    if (paidByPopup) { await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': quantity, 'billing.monthlySmsLimit': quantity } }); request.creditedAt = new Date(); request.creditedQuantity = quantity; await request.save(); }
+    if (paidByPopup) { await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': quantity, 'billing.extraSmsCredits': quantity } }); request.creditedAt = new Date(); request.creditedQuantity = quantity; await request.save(); }
     res.status(201).json({ message: paidByPopup ? 'SMS recharge payment successful. Balance updated.' : 'SMS purchase request submitted successfully.', request });
   } catch (error) { res.status(500).json({ message: 'Failed to create SMS purchase request', error }); }
 });
-router.patch('/purchases/:id/status', authenticate, authorize('admin', 'super_admin'), async (req: any, res: Response) => { try { const status = String(req.body.status || '').toLowerCase(); if (!['pending', 'approved', 'rejected', 'paid'].includes(status)) return res.status(400).json({ message: 'Invalid status.' }); const request: any = await SmsPurchaseRequest.findById(req.params.id); if (!request) return res.status(404).json({ message: 'SMS purchase request not found.' }); request.status = status; request.approvedBy = req.user?._id || req.user?.id; request.approvedAt = status === 'pending' ? undefined : (request.approvedAt || new Date()); request.paidAt = status === 'paid' ? (request.paidAt || new Date()) : request.paidAt; if ((status === 'approved' || status === 'paid') && !request.creditedAt) { const qty = Number(request.quantity || 0); await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.monthlySmsLimit': qty } }); request.creditedAt = new Date(); request.creditedQuantity = qty; } await request.save(); res.json({ message: `SMS purchase request marked as ${status}.`, request }); } catch (error) { res.status(500).json({ message: 'Failed to update SMS purchase status', error }); } });
+router.patch('/purchases/:id/status', authenticate, authorize('admin', 'super_admin'), async (req: any, res: Response) => { try { const status = String(req.body.status || '').toLowerCase(); if (!['pending', 'approved', 'rejected', 'paid'].includes(status)) return res.status(400).json({ message: 'Invalid status.' }); const request: any = await SmsPurchaseRequest.findById(req.params.id); if (!request) return res.status(404).json({ message: 'SMS purchase request not found.' }); request.status = status; request.approvedBy = req.user?._id || req.user?.id; request.approvedAt = status === 'pending' ? undefined : (request.approvedAt || new Date()); request.paidAt = status === 'paid' ? (request.paidAt || new Date()) : request.paidAt; if ((status === 'approved' || status === 'paid') && !request.creditedAt) { const qty = Number(request.quantity || 0); await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.extraSmsCredits': qty } }); request.creditedAt = new Date(); request.creditedQuantity = qty; } await request.save(); res.json({ message: `SMS purchase request marked as ${status}.`, request }); } catch (error) { res.status(500).json({ message: 'Failed to update SMS purchase status', error }); } });
 
 router.get('/', authenticate, authorize('admin', 'super_admin', 'head', 'assistant_head', 'finance_officer', 'staff'), async (req: Request, res: Response) => {
   try {

@@ -54,7 +54,9 @@ router.patch('/:id/status', authenticate, authorize('admin', 'super_admin'), asy
     request.paidAt = status === 'paid' ? (request.paidAt || new Date()) : request.paidAt;
     if ((status === 'approved' || status === 'paid') && !request.creditedAt) {
       const qty = Number(request.quantity || 0);
-      await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.monthlySmsLimit': qty } });
+      // Purchased SMS go to smsBalance + extraSmsCredits only (extraSmsCredits survives renewal).
+      // monthlySmsLimit must stay tied to the plan, otherwise activateBilling double-counts it.
+      await Institution.findByIdAndUpdate(request.institutionId, { $inc: { 'billing.smsBalance': qty, 'billing.extraSmsCredits': qty } });
       request.creditedAt = new Date();
       request.creditedQuantity = qty;
     }

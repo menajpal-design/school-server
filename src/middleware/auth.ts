@@ -39,11 +39,20 @@ const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T
 
 const expireInstitutionSnapshotIfNeeded = (institution: any) => {
   if (!institution) return institution;
-  const expiresAt = institution?.billing?.subscriptionExpiresAt || institution?.billing?.expiresAt;
-  if (!expiresAt || institution.billing.billingStatus === 'expired') return institution;
+  const billing = institution?.billing || {};
+  if (billing.billingStatus === 'expired') return institution;
+  // Reject any non-active/non-trial status (e.g. cancelled/pending) at the gate, consistent
+  // with billingService.isSubscriptionExpired.
+  if (billing.billingStatus && billing.billingStatus !== 'active' && billing.billingStatus !== 'trial') {
+    institution.isActive = false;
+    return institution;
+  }
+  // Check all known expiry field aliases used across the billing layer.
+  const expiresAt = billing.subscriptionExpiresAt || billing.planExpiry || billing.validUntil || billing.billingPeriodEnd || billing.expiresAt;
+  if (!expiresAt) return institution;
   if (new Date(expiresAt) <= new Date()) {
     institution.isActive = false;
-    institution.billing = { ...institution.billing, billingStatus: 'expired' };
+    institution.billing = { ...billing, billingStatus: 'expired' };
     Institution.updateOne({ _id: institution._id }, { $set: { isActive: false, 'billing.billingStatus': 'expired' } }).maxTimeMS(authQueryMaxTimeMs).exec().catch((error) => console.warn('Institution expiry update failed:', error?.message || error));
   }
   return institution;

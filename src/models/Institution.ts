@@ -51,6 +51,10 @@ export interface IInstitution extends Document {
     smsChargeBreakdown?: Record<string, any>;
     smsChargePeriodStart?: Date;
     smsChargePeriodEnd?: Date;
+    smsBalance?: number;
+    extraSmsCredits?: number;
+    lastSmsPackageCode?: string;
+    lastSmsPackagePurchasedAt?: Date;
     smsPeriodStart?: Date;
     smsPeriodEnd?: Date;
   };
@@ -129,6 +133,9 @@ const InstitutionSchema: Schema = new Schema({
     smsChargePeriodStart: { type: Date },
     smsChargePeriodEnd: { type: Date },
     smsBalance: { type: Number, default: 0 },
+    extraSmsCredits: { type: Number, default: 0 },
+    lastSmsPackageCode: { type: String },
+    lastSmsPackagePurchasedAt: { type: Date },
     smsPeriodStart: { type: Date },
     smsPeriodEnd: { type: Date },
   },
