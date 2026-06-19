@@ -10,7 +10,7 @@ const APP_CONTROL_KEY = 'app_control_settings';
 const HOLIDAY_SETTINGS_KEY = 'holiday_settings';
 const MONGO_WARNING_MB = 475;
 const allowedRoles = ['admin', 'super_admin', 'head'];
-const secretKeyPattern = /(password|pass|secret|token|api[_-]?key|apikey|key|uri|url|mongodb|mongo|imgbb|sms|email_pass|access[_-]?token|refresh[_-]?token)/i;
+const secretKeyPattern = /(password|pass|secret|token|api[_-]?key|apikey|key|uri|url|mongodb|mongo|imgbb|sms|email_pass|access[_-]?token|refresh[_-]?token|username)/i;
 const nonSecretUrlKeys = new Set(['appBaseUrl', 'apiBaseUrl', 'website', 'frontendUrl']);
 
 const nowIso = () => new Date().toISOString();
@@ -70,6 +70,37 @@ const normalizeMongoItems = (config: any = {}) => {
   return items.map((item: any) => ({ ...item, warning: Number(item.usedMb || 0) >= MONGO_WARNING_MB }));
 };
 
+const mergeGatewaySettings = (incoming: any = {}, current: any = {}): any => {
+  if (!incoming || typeof incoming !== 'object') return current || {};
+  const result = { ...(current || {}), ...incoming };
+
+  const mergeProvider = (providerKey: string, secretKeys: string[]) => {
+    const incomingProv = incoming[providerKey] || {};
+    const currentProv = (current || {})[providerKey] || {};
+    const mergedProv = { ...currentProv, ...incomingProv };
+    
+    for (const key of secretKeys) {
+      const value = incomingProv[key];
+      if (value === undefined || value === null || value === '' || isMasked(value) || (typeof value === 'string' && value.includes('...'))) {
+        mergedProv[key] = currentProv[key] || '';
+      }
+    }
+    result[providerKey] = mergedProv;
+  };
+
+  mergeProvider('recommendedGateway', ['apiKey', 'secretKey']);
+  mergeProvider('bkash', ['appKey', 'appSecret', 'username', 'password']);
+  mergeProvider('nagad', ['publicKey', 'privateKey']);
+  mergeProvider('sslcommerz', ['storePassword']);
+  mergeProvider('custom', ['apiKey', 'secretKey']);
+
+  if (incoming.manualBank || (current || {}).manualBank) {
+    result.manualBank = { ...((current || {}).manualBank || {}), ...(incoming.manualBank || {}) };
+  }
+
+  return result;
+};
+
 const sanitizeConfigForSave = (body: any = {}, current: any = {}) => {
   const safeBody = mergePreservingMaskedSecrets(body, current);
   const currentMongoItems = normalizeMongoItems(current);
@@ -82,7 +113,25 @@ const sanitizeConfigForSave = (body: any = {}, current: any = {}) => {
     nextMongoItems.forEach((item) => { item.isActive = item.id === safeBody.activeMongoId; });
   }
   const activeMongo = nextMongoItems.find((item) => item.isActive) || nextMongoItems[nextMongoItems.length - 1];
-  return { ...current, siteName: safeBody.siteName ?? current.siteName ?? 'Easy School', appBaseUrl: safeBody.appBaseUrl ?? current.appBaseUrl ?? '', apiBaseUrl: safeBody.apiBaseUrl ?? current.apiBaseUrl ?? '', mongodbUris: nextMongoItems, mongodbUrl: activeMongo?.uri || current.mongodbUrl || '', mongodbUsedMb: Number(safeBody.mongodbUsedMb ?? activeMongo?.usedMb ?? current.mongodbUsedMb ?? 0), allowPersonalMongo: safeBody.allowPersonalMongo ?? current.allowPersonalMongo ?? false, allowPersonalStorage: safeBody.allowPersonalStorage ?? current.allowPersonalStorage ?? false, imgbbApiKey: safeBody.imgbbApiKey ?? current.imgbbApiKey, smsApiKey: safeBody.smsApiKey ?? current.smsApiKey, smsPassword: safeBody.smsPassword ?? current.smsPassword, smsToken: safeBody.smsToken ?? current.smsToken };
+
+  const paymentGatewaySettings = mergeGatewaySettings(body.paymentGatewaySettings, current.paymentGatewaySettings);
+
+  return {
+    ...current,
+    siteName: safeBody.siteName ?? current.siteName ?? 'Easy School',
+    appBaseUrl: safeBody.appBaseUrl ?? current.appBaseUrl ?? '',
+    apiBaseUrl: safeBody.apiBaseUrl ?? current.apiBaseUrl ?? '',
+    mongodbUris: nextMongoItems,
+    mongodbUrl: activeMongo?.uri || current.mongodbUrl || '',
+    mongodbUsedMb: Number(safeBody.mongodbUsedMb ?? activeMongo?.usedMb ?? current.mongodbUsedMb ?? 0),
+    allowPersonalMongo: safeBody.allowPersonalMongo ?? current.allowPersonalMongo ?? false,
+    allowPersonalStorage: safeBody.allowPersonalStorage ?? current.allowPersonalStorage ?? false,
+    imgbbApiKey: safeBody.imgbbApiKey ?? current.imgbbApiKey,
+    smsApiKey: safeBody.smsApiKey ?? current.smsApiKey,
+    smsPassword: safeBody.smsPassword ?? current.smsPassword,
+    smsToken: safeBody.smsToken ?? current.smsToken,
+    paymentGatewaySettings
+  };
 };
 
 const maskHistoryConfig = (config: any = {}) => {
