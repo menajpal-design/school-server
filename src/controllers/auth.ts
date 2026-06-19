@@ -104,7 +104,7 @@ export const register = async (req: Request, res: Response) => {
           baseDueAmount: selected.baseAmount + selected.storageAmount,
           storageAmount: selected.storageAmount,
           dueAmount: selected.total,
-          billingStatus: hasPayment ? 'pending' : 'trial',
+          billingStatus: hasPayment ? 'pending' : 'active',
           isPaymentReceived: hasPayment,
           receivedAmount: paymentAmount,
           paymentGateway: req.body.paymentGateway || 'bkash',
@@ -116,7 +116,6 @@ export const register = async (req: Request, res: Response) => {
           activatedAt: hasPayment ? undefined : new Date(),
           subscriptionStartedAt: hasPayment ? undefined : new Date(),
           subscriptionExpiresAt: hasPayment ? undefined : trialExpiresAt,
-          planExpiry: hasPayment ? undefined : trialExpiresAt,
         },
         settings: {
           backupSettings: { frequency: 'weekly', location: 'local', collections: [] }

@@ -28,7 +28,7 @@ export interface IInstitution extends Document {
     storageMonthlyPrice?: number;
     storageAmount?: number;
     dueAmount?: number;
-    billingStatus?: 'pending' | 'active' | 'expired' | 'cancelled';
+    billingStatus?: 'pending' | 'active' | 'trial' | 'expired' | 'cancelled';
     isPaymentReceived?: boolean;
     receivedAmount?: number;
     receivedAt?: Date;
@@ -105,7 +105,7 @@ const InstitutionSchema: Schema = new Schema({
     storageMonthlyPrice: { type: Number, default: 100 },
     storageAmount: { type: Number, default: 100 },
     dueAmount: { type: Number, default: 400 },
-    billingStatus: { type: String, enum: ['pending', 'active', 'expired', 'cancelled'], default: 'pending' },
+    billingStatus: { type: String, enum: ['pending', 'active', 'trial', 'expired', 'cancelled'], default: 'pending' },
     isPaymentReceived: { type: Boolean, default: false },
     receivedAmount: { type: Number, default: 0 },
     receivedAt: { type: Date },
