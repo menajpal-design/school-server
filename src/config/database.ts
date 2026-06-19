@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { getAppConfig } from './config';
 
-const COMPANY_MONGO_URI = 'mongodb://school-multi:G9kgCqwaQvcqb6bD@ac-grnzgam-shard-00-00.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-01.eokx1rc.mongodb.net:27017,ac-grnzgam-shard-00-02.eokx1rc.mongodb.net:27017/?ssl=true&replicaSet=atlas-bcrchy-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0';
 const LOCAL_MONGO_URI = 'mongodb://127.0.0.1:27017/easy_school';
 
 const parseConnectionList = (value?: string | null): string[] => {
@@ -27,7 +26,6 @@ const getMongoUriCandidates = (): string[] => {
     candidates.unshift(LOCAL_MONGO_URI);
   }
 
-  candidates.push(COMPANY_MONGO_URI);
   return candidates;
 };
 
