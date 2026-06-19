@@ -1,9 +1,12 @@
 /**
  * Email Service Utility
- * Sends mail through SendGrid or SMTP when credentials are configured.
+ * Primary: Brevo (Sendinblue) HTTP API  — fastest, no SMTP handshake
+ * Fallback: Brevo SMTP relay            — for attachment-heavy flows
  */
 
 import nodemailer from 'nodemailer';
+
+// ─── Interfaces ────────────────────────────────────────────────────────────────
 
 interface EmailAttachment {
   filename: string;
@@ -26,73 +29,149 @@ interface EmailTransport {
   from: string;
 }
 
+// ─── Brevo HTTP API (primary) ──────────────────────────────────────────────────
+
+const sendViaBrevoApi = async (
+  options: EmailOptions
+): Promise<{ success: boolean; error?: string }> => {
+  const apiKey   = process.env.BREVO_API_KEY || '';
+  const fromEmail = options.from || process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '';
+  const fromName  = process.env.BREVO_FROM_NAME || process.env.APP_NAME || 'EasySchool';
+
+  if (!apiKey)      return { success: false, error: 'BREVO_API_KEY not set' };
+  if (!fromEmail)   return { success: false, error: 'EMAIL_FROM or BREVO_FROM_EMAIL not set' };
+
+  const toList = (Array.isArray(options.to) ? options.to : [options.to])
+    .filter(Boolean)
+    .map((email) => ({ email }));
+
+  const body: Record<string, any> = {
+    sender:      { name: fromName, email: fromEmail },
+    to:          toList,
+    subject:     options.subject,
+    htmlContent: options.html,
+  };
+  if (options.text) body.textContent = options.text;
+
+  // Encode attachments as base64 (Brevo API requires this)
+  if (options.attachments && options.attachments.length > 0) {
+    const encoded = options.attachments
+      .filter((a) => a.content)
+      .map((a) => ({
+        name:    a.filename,
+        content: Buffer.isBuffer(a.content)
+          ? a.content.toString('base64')
+          : Buffer.from(String(a.content)).toString('base64'),
+      }));
+    if (encoded.length > 0) body.attachment = encoded;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let res: Response;
+    try {
+      res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept':       'application/json',
+          'api-key':      apiKey,
+          'content-type': 'application/json',
+        },
+        body:   JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      return { success: false, error: `Brevo API error ${res.status}: ${errText}` };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    return { success: false, error: msg.includes('abort') ? 'Brevo API request timed out' : msg };
+  }
+};
+
+// ─── Brevo SMTP transport (fallback / legacy) ──────────────────────────────────
+
 export const getEmailTransport = (): EmailTransport | null => {
   const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
-  if (!emailEnabled) {
-    return null;
-  }
+  if (!emailEnabled) return null;
 
-  const sendgridUser = process.env.SENDGRID_USERNAME || '';
-  const sendgridPass = process.env.SENDGRID_PASSWORD || '';
-  const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
-  const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
+  const brevoApiKey   = process.env.BREVO_API_KEY   || '';
+  const brevoSmtpUser = process.env.BREVO_SMTP_USER  || process.env.BREVO_FROM_EMAIL || process.env.EMAIL_FROM || '';
 
-  const isPlaceholder = (user: string) => 
-    !user || 
-    user.includes('your_email') || 
-    user.includes('example.com');
-
-  if (sendgridUser && sendgridPass && !isPlaceholder(sendgridUser)) {
+  // Brevo SMTP relay — uses the API key as the SMTP password
+  if (brevoApiKey && brevoSmtpUser) {
     return {
       transporter: nodemailer.createTransport({
-        host: 'smtp.sendgrid.net',
-        port: 587,
+        host:  'smtp-relay.brevo.com',
+        port:  587,
         secure: false,
-        auth: { user: sendgridUser, pass: sendgridPass },
-        connectionTimeout: 5000,
-        socketTimeout: 5000,
-        greetingTimeout: 5000,
+        auth: { user: brevoSmtpUser, pass: brevoApiKey },
+        connectionTimeout: 10000,
+        socketTimeout:     10000,
+        greetingTimeout:   10000,
       }),
-      from: process.env.EMAIL_FROM || sendgridUser,
-    };
-  }
-
-  if (smtpUser && smtpPass && !isPlaceholder(smtpUser)) {
-    const port = Number(process.env.SMTP_PORT || 587);
-    return {
-      transporter: nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port,
-        secure: port === 465,
-        auth: { user: smtpUser, pass: smtpPass },
-        connectionTimeout: 5000,
-        socketTimeout: 5000,
-        greetingTimeout: 5000,
-      }),
-      from: process.env.EMAIL_FROM || smtpUser,
+      from: process.env.EMAIL_FROM || brevoSmtpUser,
     };
   }
 
   return null;
 };
 
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+const isEmailEnabled = () =>
+  String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+
 const getDisabledMessage = (count: number, bulk = false) =>
   bulk
-    ? `Email service is not configured. Configure SENDGRID_USERNAME/SENDGRID_PASSWORD or SMTP_USER/SMTP_PASS before sending bulk email to ${count} recipients.`
-    : `Email service is not configured. Configure SENDGRID_USERNAME/SENDGRID_PASSWORD or SMTP_USER/SMTP_PASS before sending mail to ${count} recipient${count === 1 ? '' : 's'}.`;
+    ? `Email service not configured. Set BREVO_API_KEY + EMAIL_FROM before sending bulk email to ${count} recipients.`
+    : `Email service not configured. Set BREVO_API_KEY + EMAIL_FROM before sending mail to ${count} recipient${count === 1 ? '' : 's'}.`;
 
-export const sendEmailDetail = async (options: EmailOptions): Promise<{ success: boolean; error?: string }> => {
+// ─── Core send function ────────────────────────────────────────────────────────
+
+export const sendEmailDetail = async (
+  options: EmailOptions
+): Promise<{ success: boolean; error?: string }> => {
   try {
-    const transport = getEmailTransport();
     const recipients = Array.isArray(options.to) ? options.to.join(', ') : options.to;
 
+    if (!isEmailEnabled()) {
+      const message = getDisabledMessage(Array.isArray(options.to) ? options.to.length : 1);
+      if (process.env.NODE_ENV === 'production') {
+        console.error(message);
+        return { success: false, error: 'Email service disabled (EMAIL_ENABLED=false)' };
+      }
+      console.log(message);
+      return { success: true };
+    }
+
+    // ── Priority 1: Brevo HTTP API ────────────────────────────────────────────
+    if (process.env.BREVO_API_KEY) {
+      const result = await sendViaBrevoApi(options);
+      if (result.success) {
+        console.log(`📧 Email sent via Brevo API to ${recipients}`);
+      } else {
+        console.error('❌ Brevo API email failed:', result.error);
+      }
+      return result;
+    }
+
+    // ── Priority 2: Brevo SMTP relay (fallback) ───────────────────────────────
+    const transport = getEmailTransport();
     if (!transport) {
       const message = getDisabledMessage(Array.isArray(options.to) ? options.to.length : 1);
       if (process.env.NODE_ENV === 'production') {
         console.error(message);
-        return { success: false, error: 'Email service is not configured (credentials missing or placeholder)' };
+        return { success: false, error: 'Email service not configured (BREVO_API_KEY missing)' };
       }
-
       console.log(message);
       console.log(`Email would be sent to ${recipients}`);
       return { success: true };
@@ -100,23 +179,23 @@ export const sendEmailDetail = async (options: EmailOptions): Promise<{ success:
 
     const from = options.from || process.env.EMAIL_FROM || transport.from;
     if (!from) {
-      console.error('EMAIL_FROM or SMTP/SendGrid user is required to send mail');
-      return { success: false, error: 'EMAIL_FROM or SMTP/SendGrid user is required' };
+      console.error('EMAIL_FROM is required to send mail');
+      return { success: false, error: 'EMAIL_FROM is required' };
     }
 
     await transport.transporter.sendMail({
       from,
-      to: options.to,
-      subject: options.subject,
-      html: options.html,
-      text: options.text,
+      to:          options.to,
+      subject:     options.subject,
+      html:        options.html,
+      text:        options.text,
       attachments: options.attachments,
     });
 
-    console.log(`Email sent to ${recipients}`);
+    console.log(`📧 Email sent via Brevo SMTP to ${recipients}`);
     return { success: true };
   } catch (error: any) {
-    console.error('Error sending email:', error);
+    console.error('❌ Error sending email:', error);
     return { success: false, error: error?.message || String(error) };
   }
 };
@@ -126,17 +205,18 @@ export const sendEmail = async (options: EmailOptions): Promise<boolean> => {
   return result.success;
 };
 
-export const sendBulkEmails = async (recipients: string[], subject: string, html: string): Promise<boolean> => {
+export const sendBulkEmails = async (
+  recipients: string[],
+  subject: string,
+  html: string
+): Promise<boolean> => {
   try {
-    const transport = getEmailTransport();
-
-    if (!transport) {
+    if (!isEmailEnabled()) {
       const message = getDisabledMessage(recipients.length, true);
       if (process.env.NODE_ENV === 'production') {
         console.error(message);
         return false;
       }
-
       console.log(message);
       return true;
     }
@@ -144,21 +224,25 @@ export const sendBulkEmails = async (recipients: string[], subject: string, html
     const batchSize = 10;
     for (let i = 0; i < recipients.length; i += batchSize) {
       const batch = recipients.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map((email) => sendEmail({ to: email, subject, html })));
-      if (results.some((result) => !result)) {
-        return false;
-      }
+      const results = await Promise.all(
+        batch.map((email) => sendEmail({ to: email, subject, html }))
+      );
+      if (results.some((r) => !r)) return false;
     }
 
-    console.log(`Bulk emails sent to ${recipients.length} recipients`);
+    console.log(`📧 Bulk emails sent to ${recipients.length} recipients`);
     return true;
   } catch (error) {
-    console.error('Error sending bulk emails:', error);
+    console.error('❌ Error sending bulk emails:', error);
     return false;
   }
 };
 
-export const sendIdCardEmail = async (email: string, studentName: string, pdfPath: string): Promise<boolean> => {
+export const sendIdCardEmail = async (
+  email: string,
+  studentName: string,
+  pdfPath: string
+): Promise<boolean> => {
   const html = `
     <h2>Your ID Card</h2>
     <p>Dear ${studentName},</p>
@@ -166,30 +250,28 @@ export const sendIdCardEmail = async (email: string, studentName: string, pdfPat
     <p>Please keep it safe and bring it to school every day.</p>
     <p>Best regards,<br>EasySchool Team</p>
   `;
-
   return sendEmail({
-    to: email,
-    subject: `Your School ID Card - ${studentName}`,
+    to:          email,
+    subject:     `Your School ID Card - ${studentName}`,
     html,
     attachments: [{ filename: `${studentName}_id_card.pdf`, path: pdfPath }],
   });
 };
 
-export const sendNotificationEmail = async (email: string, title: string, body: string): Promise<boolean> => {
+export const sendNotificationEmail = async (
+  email: string,
+  title: string,
+  body: string
+): Promise<boolean> => {
   const html = `
     <h2>${title}</h2>
     <p>${body}</p>
     <p>---<br>EasySchool System</p>
   `;
-
-  return sendEmail({
-    to: email,
-    subject: title,
-    html,
-    text: body,
-  });
+  return sendEmail({ to: email, subject: title, html, text: body });
 };
 
 export const isEmailConfigured = (): boolean => {
-  return getEmailTransport() !== null;
+  if (!isEmailEnabled()) return false;
+  return Boolean(process.env.BREVO_API_KEY) || getEmailTransport() !== null;
 };
