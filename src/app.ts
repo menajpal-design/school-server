@@ -75,16 +75,20 @@ import { loginLimiter, dashboardLimiter, reportLimiter, pdfLimiter } from './mid
 
 const app = express();
 app.set('trust proxy', 1);
-const cfg = config();
-const splitOrigins = (value?: string | null): string[] => (value || '').split(',').map((origin) => origin.trim()).filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
-const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true' || process.env.ALLOWED_ORIGINS === '*';
-const envOrigins = new Set<string>([cfg.frontendUrl, cfg.mobileUrl, cfg.androidUrl, cfg.staticServerUrl, ...splitOrigins(process.env.ALLOWED_ORIGINS), ...splitOrigins(process.env.FRONTEND_URL), ...splitOrigins(process.env.MOBILE_URL), ...splitOrigins(process.env.ANDROID_URL)].filter(Boolean));
-const CSRF_HEADER = (process.env.CSRF_HEADER_NAME || 'x-csrf-token');
-const allowedHeaders = new Set<string>(['Content-Type', 'Authorization', CSRF_HEADER, 'x-institution-id', 'X-Institution-Id', 'x-school-id', 'X-School-Id', 'Origin', 'X-Requested-With', 'Accept', 'x-access-token', 'X-Access-Token', ...splitOrigins(process.env.CORS_ALLOWED_HEADERS)].filter(Boolean));
-const isAllowedOrigin = (origin?: string): boolean => { if (!origin || allowAllOrigins) return true; const normalized = origin.replace(/\/$/, ''); if (envOrigins.has(normalized)) return true; if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true; if (/^https?:\/\/([a-z0-9-]+\.)*easyschool\.live$/i.test(normalized)) return true; if (/^https:\/\/.*\.herokuapp\.com$/i.test(normalized)) return true; return false; };
-const setCorsHeaders = (req: Request, res: Response) => { const origin = req.headers.origin as string | undefined; if (origin && isAllowedOrigin(origin)) { res.header('Access-Control-Allow-Origin', origin); res.header('Vary', 'Origin'); res.header('Access-Control-Allow-Credentials', 'true'); } else if (!origin && process.env.NODE_ENV !== 'production') { res.header('Access-Control-Allow-Origin', '*'); } res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS'); res.header('Access-Control-Allow-Headers', Array.from(allowedHeaders).join(', ')); res.header('Access-Control-Max-Age', process.env.CORS_MAX_AGE || '86400'); };
+const splitOrigins = (value?: string | null): string[] =>(value || '').split(',').map((origin) => origin.trim()).filter(Boolean).map((origin) => origin.replace(/\/$/, ''));
+// Resolve CORS config lazily (after dotenv.config() has run in server.ts)
+const getCorsConfig = () => {
+  const cfg = config();
+  const allowAllOrigins = String(process.env.CORS_ALLOW_ALL || '').toLowerCase() === 'true' || process.env.ALLOWED_ORIGINS === '*';
+  const envOrigins = new Set<string>([cfg.frontendUrl, cfg.mobileUrl, cfg.androidUrl, cfg.staticServerUrl, ...splitOrigins(process.env.ALLOWED_ORIGINS), ...splitOrigins(process.env.FRONTEND_URL), ...splitOrigins(process.env.MOBILE_URL), ...splitOrigins(process.env.ANDROID_URL)].filter(Boolean));
+  const CSRF_HEADER = (process.env.CSRF_HEADER_NAME || 'x-csrf-token');
+  const allowedHeaders = new Set<string>(['Content-Type', 'Authorization', CSRF_HEADER, 'x-institution-id', 'X-Institution-Id', 'x-school-id', 'X-School-Id', 'Origin', 'X-Requested-With', 'Accept', 'x-access-token', 'X-Access-Token', ...splitOrigins(process.env.CORS_ALLOWED_HEADERS)].filter(Boolean));
+  return { allowAllOrigins, envOrigins, allowedHeaders, CSRF_HEADER };
+};
+const isAllowedOrigin = (origin?: string): boolean => { const { allowAllOrigins, envOrigins } = getCorsConfig(); if (!origin || allowAllOrigins) return true; const normalized = origin.replace(/\/$/, ''); if (envOrigins.has(normalized)) return true; if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true; if (/^https?:\/\/([a-z0-9-]+\.)*easyschool\.live$/i.test(normalized)) return true; if (/^https:\/\/.*\.herokuapp\.com$/i.test(normalized)) return true; return false; };
+const setCorsHeaders = (req: Request, res: Response) => { const { allowedHeaders } = getCorsConfig(); const origin = req.headers.origin as string | undefined; if (origin && isAllowedOrigin(origin)) { res.header('Access-Control-Allow-Origin', origin); res.header('Vary', 'Origin'); res.header('Access-Control-Allow-Credentials', 'true'); } else if (!origin && process.env.NODE_ENV !== 'production') { res.header('Access-Control-Allow-Origin', '*'); } res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS'); res.header('Access-Control-Allow-Headers', Array.from(allowedHeaders).join(', ')); res.header('Access-Control-Max-Age', process.env.CORS_MAX_AGE || '86400'); };
 app.use((req, res, next) => { setCorsHeaders(req, res); if (req.method === 'OPTIONS') return res.status(204).end(); next(); });
-app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)), credentials: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: Array.from(allowedHeaders), optionsSuccessStatus: 204 }));
+app.use(cors({ origin: (origin, callback) => callback(null, isAllowedOrigin(origin || undefined)), credentials: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: Array.from(getCorsConfig().allowedHeaders), optionsSuccessStatus: 204 }));
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use('/api/institution/billing/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
@@ -160,7 +164,7 @@ app.use('/api/library', libraryRoutes);
 app.use('/api/site-settings', siteSettingsRoutes);
 app.use('/api/dev-test', devTestRoutes);
 app.use('/api/storage-sync', storageSyncRoutes);
-app.get('/health', async (_req, res) => { const mongoose = await import('mongoose'); const dbState = mongoose.default.connection.readyState; res.json({ status: 'OK', message: 'easy school Server is running', dbReadyState: dbState, dbConnected: dbState === 1, corsOrigins: envOrigins.size }); });
+app.get('/health', async (_req, res) => { const mongoose = await import('mongoose'); const dbState = mongoose.default.connection.readyState; res.json({ status: 'OK', message: 'easy school Server is running', dbReadyState: dbState, dbConnected: dbState === 1, corsOrigins: getCorsConfig().envOrigins.size }); });
 SmsLog.deleteMany({ createdAt: { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }).catch((error) => logger.warn('SMS log cleanup failed', { error: error.message }));
 app.use(notFoundHandler);
 app.use(errorHandler as any);

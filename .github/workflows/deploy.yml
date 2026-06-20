@@ -58,25 +58,34 @@ jobs:
           git reset --hard origin/main
 
           # ── Inject Brevo email secrets into .env ───────────────────────────
-          if [ -f ".env" ]; then
-            update_env() {
-              local key="$1"
-              local val="$2"
-              if grep -q "^${key}=" .env 2>/dev/null; then
-                sed -i "s|^${key}=.*|${key}=${val}|" .env
-              else
-                echo "${key}=${val}" >> .env
-              fi
-            }
-            [ -n "$BREVO_API_KEY" ]   && update_env "BREVO_API_KEY"   "$BREVO_API_KEY"
-            [ -n "$EMAIL_FROM" ]      && update_env "EMAIL_FROM"       "$EMAIL_FROM"
-            [ -n "$BREVO_FROM_NAME" ] && update_env "BREVO_FROM_NAME"  "$BREVO_FROM_NAME"
-            [ -n "$BREVO_SMTP_USER" ] && update_env "BREVO_SMTP_USER"  "$BREVO_SMTP_USER"
-            update_env "EMAIL_ENABLED" "true"
-            echo "Email env vars injected into .env"
-          else
-            echo "No .env file found on server - skipping env injection"
-          fi
+          # Create .env if it doesn't exist
+          touch .env
+
+          update_env() {
+            local key="$1"
+            local val="$2"
+            if [ -z "$val" ]; then
+              echo "  [SKIP] $key is empty, not updating"
+              return
+            fi
+            if grep -q "^${key}=" .env 2>/dev/null; then
+              sed -i "s|^${key}=.*|${key}=${val}|" .env
+            else
+              echo "${key}=${val}" >> .env
+            fi
+            echo "  [OK] $key updated"
+          }
+
+          echo "Injecting email env vars..."
+          update_env "BREVO_API_KEY"   "$BREVO_API_KEY"
+          update_env "EMAIL_FROM"      "$EMAIL_FROM"
+          update_env "BREVO_FROM_NAME" "$BREVO_FROM_NAME"
+          update_env "BREVO_SMTP_USER" "$BREVO_SMTP_USER"
+          # Always enable email
+          update_env "EMAIL_ENABLED" "true"
+
+          echo ".env after injection (masked):"
+          grep -E "^(BREVO|EMAIL)" .env | sed 's/=.*/=***/' || true
           # ──────────────────────────────────────────────────────────────────
 
           echo "Activating Node 20 if nvm exists..."

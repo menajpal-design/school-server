@@ -1,10 +1,12 @@
+// ⚠️ MUST be first — load .env before any other imports execute
+// (app.ts calls config() at module load time, so dotenv must run first)
 import dotenv from 'dotenv';
+dotenv.config();
+
 import connectDB from './config/database';
 import app from './app';
 import * as Sentry from '@sentry/node';
 import logger from './utils/logger';
-
-dotenv.config();
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });

@@ -3,6 +3,10 @@
  * Centralized configuration management with validation
  */
 
+// Safety: ensure .env is loaded even if this module is imported before server.ts runs dotenv
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig();
+
 export interface Config {
   // Server
   port: number;
