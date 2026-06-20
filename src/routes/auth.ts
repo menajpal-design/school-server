@@ -227,8 +227,12 @@ router.post('/forgot-password', async (req, res) => {
     });
 
     if (!emailResult.success) {
+      // Log full error on server for diagnostics
+      console.error(`❌ Forgot-password email failed for "${targetEmail}":`, emailResult.error);
       return res.status(500).json({ 
-        message: `Failed to send recovery email. (${emailResult.error || 'Email provider error'}). Please contact support or try again later.` 
+        message: `Failed to send recovery email. Please contact your administrator.`,
+        reason:  emailResult.error || 'Email provider error — check server logs for details',
+        hint:    'Common causes: server IP blocked by Brevo, invalid API key, unverified sender address, or Droplet firewall blocking outbound HTTPS.',
       });
     }
 
@@ -382,12 +386,13 @@ router.get('/check-users', async (_req, res) => {
 
 router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'), async (_req, res) => {
   try {
-    const brevoApiKey = (process.env.BREVO_API_KEY || '').trim();
-    const emailFrom   = (process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim();
+    const brevoApiKey  = (process.env.BREVO_API_KEY || '').trim();
+    const emailFrom    = (process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim();
     const emailEnabled = String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
+    const fromName     = process.env.BREVO_FROM_NAME || 'EasySchool';
 
     const mask = (str: string) => {
-      if (!str) return 'not_configured';
+      if (!str) return '❌ not_configured';
       if (str.length <= 6) return '****';
       return `${str.substring(0, 4)}...${str.substring(str.length - 4)}`;
     };
@@ -395,38 +400,152 @@ router.get('/email-diagnostic', authenticate, authorize('admin', 'super_admin'),
     const envInfo = {
       EMAIL_ENABLED:   emailEnabled,
       BREVO_API_KEY:   mask(brevoApiKey),
-      BREVO_FROM_NAME: process.env.BREVO_FROM_NAME || 'not_configured',
-      EMAIL_FROM:      emailFrom || 'not_configured',
+      BREVO_FROM_NAME: fromName,
+      EMAIL_FROM:      emailFrom || '❌ not_configured',
     };
 
+    const checks: Record<string, any> = {};
+    const issues: string[] = [];
+
+    // ── Check 1: Environment Variables ──────────────────────────────────────
+    checks.env = { ok: true, details: {} };
     if (!brevoApiKey) {
-      return res.json({ success: false, message: 'BREVO_API_KEY not configured.', envInfo });
+      checks.env.ok = false;
+      checks.env.details.BREVO_API_KEY = '❌ Missing — add BREVO_API_KEY to .env and restart server';
+      issues.push('BREVO_API_KEY is not set in environment variables');
+    } else {
+      checks.env.details.BREVO_API_KEY = '✅ Present';
+    }
+    if (!emailFrom) {
+      checks.env.ok = false;
+      checks.env.details.EMAIL_FROM = '❌ Missing — add EMAIL_FROM=verified@yourdomain.com to .env';
+      issues.push('EMAIL_FROM sender address is not configured');
+    } else {
+      checks.env.details.EMAIL_FROM = `✅ ${emailFrom}`;
+    }
+    if (!emailEnabled) {
+      checks.env.details.EMAIL_ENABLED = '⚠️ Set to false — emails will be skipped';
+      issues.push('EMAIL_ENABLED is set to false — email sending is disabled');
+    } else {
+      checks.env.details.EMAIL_ENABLED = '✅ true';
     }
 
-    // Test Brevo API key validity
-    let brevoOk = false;
-    let brevoError: string | null = null;
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 6000);
+    // ── Check 2: Network Connectivity to Brevo ──────────────────────────────
+    checks.network = { ok: false, details: '' };
+    if (brevoApiKey) {
       try {
-        const r = await fetch('https://api.brevo.com/v3/account', {
-          headers: { 'api-key': brevoApiKey, 'accept': 'application/json' },
-          signal: ctrl.signal,
-        });
-        if (r.ok) { brevoOk = true; }
-        else { brevoError = `HTTP ${r.status}: ${await r.text().catch(() => r.statusText)}`; }
-      } finally { clearTimeout(t); }
-    } catch (e: any) { brevoError = e?.message || String(e); }
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        let networkRes: Response | null = null;
+        try {
+          networkRes = await fetch('https://api.brevo.com/v3/account', {
+            method: 'GET',
+            headers: { 'api-key': brevoApiKey, 'accept': 'application/json' },
+            signal: ctrl.signal,
+          });
+        } finally { clearTimeout(t); }
+
+        const status = networkRes!.status;
+        const body   = await networkRes!.text().catch(() => networkRes!.statusText);
+
+        if (networkRes!.ok) {
+          checks.network.ok = true;
+          checks.network.details = '✅ Successfully reached api.brevo.com';
+          // ── Check 3: API Key validity (derived from same request) ─────────
+          checks.apiKey = { ok: true, details: '✅ API key is valid and authenticated' };
+          let accountInfo: any = null;
+          try { accountInfo = JSON.parse(body); } catch {}
+          if (accountInfo) {
+            checks.apiKey.accountEmail  = accountInfo.email || 'unknown';
+            checks.apiKey.companyName   = accountInfo.companyName || 'unknown';
+            checks.apiKey.plan          = accountInfo.plan?.[0]?.type || 'unknown';
+          }
+        } else if (status === 401) {
+          checks.network.ok = true;
+          checks.network.details = '✅ Reached api.brevo.com (HTTP reachable)';
+          checks.apiKey = {
+            ok: false,
+            details: `❌ API key rejected (401 Unauthorized). The key starting with "${brevoApiKey.slice(0, 12)}..." is invalid or revoked. Generate a new key at https://app.brevo.com/settings/keys/api`,
+          };
+          issues.push('Brevo API key is invalid or revoked (401)');
+        } else if (status === 403) {
+          checks.network.ok = true;
+          checks.network.details = '✅ Reached api.brevo.com';
+          checks.apiKey = {
+            ok: false,
+            details: `❌ Forbidden (403). Brevo account may be suspended or the key lacks permission. Details: ${body.slice(0, 200)}`,
+          };
+          issues.push('Brevo account forbidden (403) — may be suspended');
+        } else {
+          checks.network.ok = true;
+          checks.network.details = `⚠️ Reached api.brevo.com but got HTTP ${status}`;
+          checks.apiKey = { ok: false, details: `Unexpected response ${status}: ${body.slice(0, 200)}` };
+          issues.push(`Unexpected Brevo response: HTTP ${status}`);
+        }
+      } catch (netErr: any) {
+        const errMsg = String(netErr?.message || netErr).toLowerCase();
+        let networkDiag = '';
+        if (errMsg.includes('abort') || errMsg.includes('signal')) {
+          networkDiag = '❌ Request to api.brevo.com timed out (8 s). ' +
+            'This strongly suggests the outbound IP of this Droplet/server is BLOCKED by Brevo, ' +
+            'or outbound HTTPS (port 443) is firewalled. ' +
+            'Fix: whitelist the server IP in Brevo, or check Droplet firewall rules.';
+          issues.push('Timeout reaching api.brevo.com — server IP may be blocked by Brevo or Droplet firewall blocks port 443');
+        } else if (errMsg.includes('enotfound') || errMsg.includes('getaddrinfo')) {
+          networkDiag = '❌ DNS resolution failed for api.brevo.com. ' +
+            'The server cannot resolve this hostname. Check DNS on the Droplet (/etc/resolv.conf).';
+          issues.push('DNS failure: cannot resolve api.brevo.com');
+        } else if (errMsg.includes('econnrefused')) {
+          networkDiag = '❌ Connection refused to api.brevo.com:443. ' +
+            'Outbound HTTPS port 443 may be blocked by the Droplet firewall (ufw/iptables).';
+          issues.push('Connection refused to api.brevo.com — check Droplet outbound firewall');
+        } else if (errMsg.includes('econnreset') || errMsg.includes('socket hang up')) {
+          networkDiag = '❌ Connection reset by Brevo. The server IP may be blacklisted by Brevo. ' +
+            'Contact Brevo support to whitelist your Droplet IP.';
+          issues.push('Connection reset — server IP may be blacklisted by Brevo');
+        } else {
+          networkDiag = `❌ Network error: ${errMsg}. Check Droplet connectivity and firewall.`;
+          issues.push(`Network error reaching Brevo: ${errMsg}`);
+        }
+        checks.network.details = networkDiag;
+        checks.apiKey = { ok: false, details: 'Cannot verify — network unreachable' };
+      }
+    } else {
+      checks.network = { ok: false, details: '⏭️ Skipped — BREVO_API_KEY not set' };
+      checks.apiKey  = { ok: false, details: '⏭️ Skipped — BREVO_API_KEY not set' };
+    }
+
+    // ── Check 4: Sender address verification hint ────────────────────────────
+    checks.sender = {
+      ok: Boolean(emailFrom),
+      configured: emailFrom,
+      details: emailFrom
+        ? `✅ Sender set to "${emailFrom}" — ensure this address is a verified sender in Brevo (https://app.brevo.com/senders)`
+        : '❌ No sender email configured (EMAIL_FROM / BREVO_FROM_EMAIL missing)',
+    };
+    if (!emailFrom) issues.push('Sender email (EMAIL_FROM) is not configured');
+
+    // ── Summary ──────────────────────────────────────────────────────────────
+    const allOk = checks.env.ok && checks.network.ok && checks.apiKey?.ok && checks.sender.ok && emailEnabled;
+    const rootCause = issues.length
+      ? issues.map((i, n) => `${n + 1}. ${i}`).join('\n')
+      : null;
 
     return res.json({
-      success: brevoOk,
-      provider: 'Brevo API',
-      brevo: { configured: true, reachable: brevoOk, error: brevoError },
+      success: allOk,
+      summary: allOk
+        ? '✅ Email system is fully configured and operational'
+        : `❌ Email issues detected:\n${rootCause}`,
+      provider: 'Brevo (Sendinblue) HTTP API',
+      checks,
       envInfo,
+      ...(issues.length ? { issues } : {}),
     });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: `Diagnostic failed: ${error?.message || String(error)}` });
+    return res.status(500).json({
+      success: false,
+      message: `Diagnostic failed: ${error?.message || String(error)}`,
+    });
   }
 });
 
