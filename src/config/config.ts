@@ -29,14 +29,10 @@ export interface Config {
   uploadAllowedTypes: string[];
   uploadPath: string;
 
-  // Email
+  // Email (Brevo API only)
   emailEnabled: boolean;
-  emailUser: string;
-  emailPass: string;
-  smtpHost: string;
-  smtpPort: number;
-  smtpUser: string;
-  smtpPass: string;
+  brevoApiKey: string;
+  emailFrom: string;
 
   // SMS
   smsEnabled: boolean;
@@ -87,14 +83,10 @@ export const getConfig = (): Config => {
     uploadAllowedTypes: (process.env.UPLOAD_ALLOWED_TYPES || 'image/jpeg,image/png,application/pdf').split(','),
     uploadPath: process.env.UPLOAD_PATH || './uploads',
 
-    // Email
+    // Email (Brevo API only)
     emailEnabled: process.env.EMAIL_ENABLED === 'true',
-    emailUser: process.env.EMAIL_USER || '',
-    emailPass: process.env.EMAIL_PASS || '',
-    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
-    smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
-    smtpUser: process.env.SMTP_USER || '',
-    smtpPass: process.env.SMTP_PASS || '',
+    brevoApiKey: (process.env.BREVO_API_KEY || '').trim(),
+    emailFrom: (process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim(),
 
     // SMS
     smsEnabled: process.env.SMS_ENABLED === 'true',
@@ -140,11 +132,11 @@ export const validateConfig = (config: Config): void => {
 
   // If emails are enabled, validate email config
   if (config.emailEnabled) {
-    if (!config.smtpHost || !config.smtpPort) {
-      warnings.push('SMTP_HOST and SMTP_PORT are required when EMAIL_ENABLED is true');
+    if (!config.brevoApiKey) {
+      warnings.push('BREVO_API_KEY is required when EMAIL_ENABLED is true');
     }
-    if (!(config.smtpUser || config.emailUser) || !(config.smtpPass || config.emailPass)) {
-      warnings.push('SMTP_USER/SMTP_PASS are required when EMAIL_ENABLED is true');
+    if (!config.emailFrom) {
+      warnings.push('EMAIL_FROM is required when EMAIL_ENABLED is true');
     }
   }
 
