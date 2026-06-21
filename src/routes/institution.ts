@@ -405,13 +405,14 @@ router.get('/subdomain/check', async (req, res) => {
   }
 });
 
-// Validate subdomain (check if registered and active)
+// Validate subdomain (check if registered)
 // Public endpoint used by frontend middleware to check if subdomain should load or redirect
+// Note: we only check that the subdomain exists — active status is managed inside the app
 router.get('/subdomain/validate', async (req, res) => {
   try {
     const subdomain = String(req.query.subdomain || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 40);
     if (!subdomain) return res.status(400).json({ valid: false, message: 'subdomain is required' });
-    const inst = await Institution.findOne({ subdomain, isActive: true });
+    const inst = await Institution.findOne({ subdomain }).select('_id subdomain').lean().maxTimeMS(3000);
     return res.json({ valid: Boolean(inst) });
   } catch (err) {
     return res.status(500).json({ valid: false, message: 'Failed to validate subdomain' });
