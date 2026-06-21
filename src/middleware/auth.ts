@@ -40,14 +40,34 @@ const withAuthTimeout = async <T>(promise: Promise<T>, label: string): Promise<T
 const expireInstitutionSnapshotIfNeeded = (institution: any) => {
   if (!institution) return institution;
   const billing = institution?.billing || {};
+
+  // If explicitly expired/cancelled and NOT manually kept active by admin → block
   if (billing.billingStatus === 'expired') return institution;
-  // Reject any non-active/non-trial status (e.g. cancelled/pending) at the gate, consistent
-  // with billingService.isSubscriptionExpired.
-  if (billing.billingStatus && billing.billingStatus !== 'active' && billing.billingStatus !== 'trial') {
+  if (billing.billingStatus === 'cancelled') {
     institution.isActive = false;
     return institution;
   }
-  // Check all known expiry field aliases used across the billing layer.
+
+  // If the institution is admin-activated (isActive=true) we honour that decision
+  // regardless of billingStatus (pending/trial/etc.) — the admin made a conscious override.
+  // We only enforce expiry if the subscription date has actually passed.
+  if (institution.isActive) {
+    // Check all known expiry field aliases used across the billing layer.
+    const expiresAt = billing.subscriptionExpiresAt || billing.planExpiry || billing.validUntil || billing.billingPeriodEnd || billing.expiresAt;
+    if (expiresAt && new Date(expiresAt) <= new Date()) {
+      institution.isActive = false;
+      institution.billing = { ...billing, billingStatus: 'expired' };
+      Institution.updateOne({ _id: institution._id }, { $set: { isActive: false, 'billing.billingStatus': 'expired' } }).maxTimeMS(authQueryMaxTimeMs).exec().catch((error) => console.warn('Institution expiry update failed:', error?.message || error));
+    }
+    return institution;
+  }
+
+  // Institution is not active — also block if billingStatus is non-active/non-trial
+  if (billing.billingStatus && billing.billingStatus !== 'active' && billing.billingStatus !== 'trial') {
+    return institution; // isActive is already false
+  }
+
+  // Check expiry for active/trial statuses
   const expiresAt = billing.subscriptionExpiresAt || billing.planExpiry || billing.validUntil || billing.billingPeriodEnd || billing.expiresAt;
   if (!expiresAt) return institution;
   if (new Date(expiresAt) <= new Date()) {

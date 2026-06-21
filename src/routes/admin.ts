@@ -231,7 +231,19 @@ router.patch('/schools/:id', async (req, res) => {
     if (req.body.statusAction === 'suspend') school.isActive = false;
     if (req.body.statusAction === 'activate') school.isActive = true;
     if ((school as any).billing?.billingStatus === 'active' || req.body.statusAction === 'activate') {
-      school.billing = activateBilling((school as any).billing?.toObject?.() || (school as any).billing || {}) as any;
+      const currentBilling = (school as any).billing?.toObject?.() || (school as any).billing || {};
+      // Preserve existing subscriptionExpiresAt if it is still in the future (avoid resetting a paid subscription)
+      const existingExpiry = currentBilling.subscriptionExpiresAt || currentBilling.planExpiry || currentBilling.validUntil;
+      const activatedBilling = activateBilling(currentBilling) as any;
+      if (existingExpiry && new Date(existingExpiry) > new Date()) {
+        activatedBilling.subscriptionExpiresAt = new Date(existingExpiry);
+        activatedBilling.planExpiry = new Date(existingExpiry);
+        activatedBilling.validUntil = new Date(existingExpiry);
+        activatedBilling.billingPeriodEnd = new Date(existingExpiry);
+        const msLeft = new Date(existingExpiry).getTime() - Date.now();
+        activatedBilling.remainingDays = Math.max(0, Math.ceil(msLeft / 86400000));
+      }
+      school.billing = activatedBilling;
       school.isActive = true;
     }
 
