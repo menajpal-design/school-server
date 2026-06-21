@@ -7,7 +7,7 @@
     "start": "node --enable-source-maps dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "heroku-postbuild": "npm run build",
+    "build:prod": "npm run build",
     "test": "jest --passWithNoTests",
     "seed": "npm run build && node dist/scripts/seed.js",
     "seed:quick": "npm run build && node dist/scripts/quickSeed.js",

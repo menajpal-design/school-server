@@ -1,63 +1,130 @@
-# DNS and SSL Setup for Wildcard Subdomain Tenancy
+# DNS & SSL Setup — Digital Ocean Droplet
 
-This project supports multi-tenancy by resolving institution data from the request host subdomain. To use it in production, configure DNS and SSL so that `*.example.com` points to the running Heroku app.
+এই প্রজেক্ট **Digital Ocean Droplet** এ deploy হয়। Nginx reverse proxy + Let's Encrypt SSL ব্যবহার করা হয়।
 
-## Recommended architecture
+## Wildcard Subdomain Architecture
 
-- Use Cloudflare as the DNS/proxy layer in front of Heroku.
-- Add your root domain and wildcard subdomain on Heroku and Cloudflare.
-- Use `MAIN_DOMAIN=example.com` and `COOKIE_DOMAIN=.example.com` in production.
+```
+*.easyschool.live  →  Droplet IP  →  Nginx  →  Next.js (port 3000)
+easyschool.live    →  Droplet IP  →  Nginx  →  Next.js (port 3000)
+API calls          →  Droplet IP  →  Nginx  →  Node.js (port 5000)
+```
 
-## Heroku setup
+---
 
-1. In your Heroku app dashboard, go to `Settings > Domains`.
-2. Add the root domain: `example.com`.
-3. Add a wildcard domain: `*.example.com`.
-4. Wait for Heroku to generate the DNS target name for each domain.
+## Step 1 — Cloudflare DNS Setup
 
-## Cloudflare setup
+Cloudflare এ নিচের রেকর্ডগুলো যোগ করুন:
 
-1. Add your domain to Cloudflare and set it up with Cloudflare DNS.
-2. Create the following DNS records:
-   - `CNAME` record for `example.com` pointing to your Heroku DNS target.
-   - `CNAME` record for `*.example.com` pointing to the same Heroku DNS target.
+| Type | Name | Content | Proxy |
+|------|------|---------|-------|
+| A | `@` | Droplet IP | ✅ Proxied |
+| A | `www` | Droplet IP | ✅ Proxied |
+| A | `*` | Droplet IP | ✅ Proxied |
 
-> If Cloudflare does not allow a root CNAME, use Cloudflare's CNAME flattening feature on the root domain.
+> **Note:** Wildcard `*` record টি সব সাবডোমেইন (যেমন `school-a.easyschool.live`) Droplet এ নিয়ে যাবে।
 
-3. Set the Cloudflare proxy status to `Proxied` for both records.
-4. In Cloudflare SSL/TLS, choose `Full (strict)` if your Heroku app has a valid certificate.
+---
 
-## Heroku SSL
+## Step 2 — Nginx Configuration
 
-- Heroku automatically provisions SSL for custom domains on paid dynos.
-- After adding both domains, verify that Heroku shows them as `DNS Verified` and `SSL Enabled`.
+`/etc/nginx/sites-available/easyschool` ফাইল:
 
-## Environment configuration
+```nginx
+# Main domain + www
+server {
+    listen 80;
+    server_name easyschool.live www.easyschool.live;
+    return 301 https://$host$request_uri;
+}
 
-In your production environment, set:
+# Wildcard subdomains
+server {
+    listen 443 ssl;
+    server_name easyschool.live www.easyschool.live *.easyschool.live;
 
-- `MAIN_DOMAIN=example.com`
-- `COOKIE_DOMAIN=.example.com`
-- `NEXT_PUBLIC_API_URL=https://example.com` or `https://api.example.com` depending on your deployment pattern
-- `NODE_ENV=production`
-- `AUTH_COOKIE_NAME` and `REFRESH_COOKIE_NAME` if you want custom cookie keys
+    ssl_certificate /etc/letsencrypt/live/easyschool.live/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/easyschool.live/privkey.pem;
 
-## How requests are routed
+    # Next.js client
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
 
-- Tenant resolution is based on the `Host` or `X-Forwarded-Host` header.
-- A request to `school1.example.com` resolves `school1` as the institution subdomain.
-- Cookies are set with the domain `.example.com` so they are shared across subdomains.
+    # Node.js API
+    location /api {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
 
-## Important notes
+Enable করুন:
+```bash
+sudo ln -s /etc/nginx/sites-available/easyschool /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
-- If the frontend and API are hosted under different domains, the server needs the institution identifier via headers or explicit tenant selection. This implementation expects the same host-based subdomain to reach the backend.
-- Keep `MAIN_DOMAIN` and `COOKIE_DOMAIN` aligned with your production domain.
-- If you use `api.example.com` for API calls, the institution subdomain must still be part of the host header or you must provide `x-institution-id`.
+---
 
-## Quick checklist
+## Step 3 — Let's Encrypt Wildcard SSL
 
-- [ ] Add `example.com` and `*.example.com` to Heroku domains.
-- [ ] Create Cloudflare DNS records for the root and wildcard.
-- [ ] Enable Cloudflare `Full (strict)` SSL.
-- [ ] Set `MAIN_DOMAIN` and `COOKIE_DOMAIN` in Heroku config.
-- [ ] Deploy and verify a request to `school1.example.com` resolves the correct tenant.
+```bash
+# Certbot দিয়ে wildcard certificate নিন
+sudo certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials ~/.secrets/cloudflare.ini \
+  -d easyschool.live \
+  -d '*.easyschool.live'
+```
+
+`~/.secrets/cloudflare.ini`:
+```ini
+dns_cloudflare_api_token = YOUR_CLOUDFLARE_API_TOKEN
+```
+
+Auto-renew:
+```bash
+sudo systemctl enable certbot.timer
+sudo systemctl start certbot.timer
+```
+
+---
+
+## Step 4 — PM2 Setup
+
+```bash
+# First time setup
+npm ci --omit=dev
+npm run build
+pm2 start dist/server.js --name school-server
+pm2 startup  # Enable auto-start on reboot
+pm2 save
+
+# Deploy করতে (পরবর্তীতে)
+bash deploy-digitalocean.sh
+```
+
+---
+
+## Checklist
+
+- [ ] Cloudflare: `A @`, `A www`, `A *` রেকর্ড সেট করা
+- [ ] Nginx wildcard config লাগানো ও test করা (`nginx -t`)
+- [ ] Let's Encrypt wildcard SSL নেওয়া
+- [ ] PM2 দিয়ে server চালু, `pm2 startup` করা
+- [ ] `.env` তে `MAIN_DOMAIN=easyschool.live` ও `COOKIE_DOMAIN=.easyschool.live` সেট করা
+- [ ] `ALLOWED_ORIGINS` এ `https://easyschool.live,https://www.easyschool.live` সেট করা
