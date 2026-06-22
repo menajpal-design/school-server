@@ -42,7 +42,6 @@ import com.schooln.ui.theme.SchoolManagementTheme
 class MainActivity : ComponentActivity() {
     private var webView: WebView? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
-    private var activityPermissionsRequest: PermissionRequest? = null
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
@@ -55,20 +54,6 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         // Requested permissions at startup
-    }
-
-    private val cameraPermissionRequestLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            activityPermissionsRequest?.let { request ->
-                request.grant(request.resources)
-            }
-        } else {
-            activityPermissionsRequest?.deny()
-            Toast.makeText(this, "Camera permission is required to capture photos or scan codes", Toast.LENGTH_LONG).show()
-        }
-        activityPermissionsRequest = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -124,22 +109,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleWebViewPermissionRequest(request: PermissionRequest) {
-        val resources = request.resources
-        var hasCameraPermission = true
-        
-        if (resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
-            hasCameraPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.CAMERA
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-        
-        if (hasCameraPermission) {
-            request.grant(resources)
-        } else {
-            activityPermissionsRequest = request
-            cameraPermissionRequestLauncher.launch(android.Manifest.permission.CAMERA)
-        }
+        request.grant(request.resources)
     }
 
     override fun onDestroy() {
