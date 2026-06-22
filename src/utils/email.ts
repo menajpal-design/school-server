@@ -1,9 +1,7 @@
 /**
- * Email Service — Brevo HTTP API only (no SMTP)
- * Required env vars: BREVO_API_KEY, EMAIL_FROM
+ * Email Service - Brevo HTTP API only.
+ * Required production env vars: BREVO_API_KEY, EMAIL_FROM.
  */
-
-// ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface EmailAttachment {
   filename: string;
@@ -21,179 +19,264 @@ interface EmailOptions {
   from?: string;
 }
 
-// ─── Brevo HTTP API ──────────────────────────────────────────────────────────
+interface EmailResult {
+  success: boolean;
+  error?: string;
+  code?: string;
+  hint?: string;
+}
 
-/**
- * Classifies a network-level fetch error into a human-readable message.
- * Covers: IP block, Droplet/VPS firewall, DNS failure, general connectivity.
- */
-const classifyNetworkError = (err: any): string => {
-  const msg = String(err?.message || err || '').toLowerCase();
-
-  if (msg.includes('abort') || msg.includes('signal')) {
-    return '⏱️ Brevo API request timed out (15 s). Possible causes: ' +
-      'server IP is blocked by Brevo, Droplet outbound port 443 is firewalled, ' +
-      'or api.brevo.com is unreachable from this host.';
-  }
-  if (msg.includes('econnrefused')) {
-    return '🔌 Connection refused to Brevo API. Check if outbound HTTPS (port 443) ' +
-      'is allowed on this Droplet / server.';
-  }
-  if (msg.includes('enotfound') || msg.includes('getaddrinfo')) {
-    return '🌐 DNS lookup failed for api.brevo.com. The server cannot resolve the ' +
-      'hostname — check DNS settings on the Droplet.';
-  }
-  if (msg.includes('econnreset') || msg.includes('socket hang up')) {
-    return '📡 Connection to Brevo was reset mid-request. This often means the ' +
-      'outbound IP is blocked by Brevo or by the Droplet firewall.';
-  }
-  if (msg.includes('etimedout') || msg.includes('timeout')) {
-    return '⏳ Network timeout connecting to Brevo. Verify outbound port 443 is ' +
-      'open on the Droplet and the IP is not blacklisted.';
-  }
-  return `🚫 Network error reaching Brevo: ${msg}. ` +
-    'Check Droplet firewall rules and whether the server IP is whitelisted in Brevo.';
-};
-
-/**
- * Maps Brevo HTTP status codes to clear, actionable messages.
- */
-const classifyBrevoHttpError = (status: number, body: string): string => {
-  const preview = body.length > 300 ? body.slice(0, 300) + '...' : body;
-  switch (status) {
-    case 400:
-      return `❌ Brevo rejected the request (400 Bad Request). Check: sender email "${String(process.env.EMAIL_FROM || '').trim()}" is a verified sender in Brevo, recipient address format is valid. Details: ${preview}`;
-    case 401:
-      return `🔑 Brevo API key is invalid or expired (401 Unauthorized). ` +
-        'Update BREVO_API_KEY in .env and restart the server. ' +
-        `Key in use starts with: ${(process.env.BREVO_API_KEY || '').slice(0, 10)}...`;
-    case 403:
-      return `🚫 Brevo forbids sending (403 Forbidden). Possible causes: ` +
-        'sender domain is not verified, account is suspended, or daily/monthly limit reached. ' +
-        `Details: ${preview}`;
-    case 429:
-      return `🚦 Brevo rate limit exceeded (429 Too Many Requests). Wait a few minutes and retry, ` +
-        'or upgrade the Brevo plan for higher sending limits.';
-    case 500:
-    case 502:
-    case 503:
-    case 504:
-      return `🔴 Brevo server error (${status}). This is on Brevo's side — retry in a few minutes. ` +
-        `Details: ${preview}`;
-    default:
-      return `Brevo API error ${status}: ${preview}`;
-  }
-};
-
-const sendViaBrevoApi = async (
-  options: EmailOptions
-): Promise<{ success: boolean; error?: string }> => {
-  const apiKey    = (process.env.BREVO_API_KEY || '').trim();
-  const fromEmail = (options.from || process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim();
-  const fromName  = process.env.BREVO_FROM_NAME || 'EasySchool';
-
-  // ── Pre-flight env checks ────────────────────────────────────────────────
-  if (!apiKey) {
-    return {
-      success: false,
-      error: '🔑 BREVO_API_KEY is not set in environment variables. ' +
-        'Add BREVO_API_KEY=<your-key> to .env and restart the server.',
-    };
-  }
-  if (!fromEmail) {
-    return {
-      success: false,
-      error: '📧 EMAIL_FROM (sender address) is not configured. ' +
-        'Add EMAIL_FROM=your@email.com to .env. ' +
-        'The email must be a verified sender in your Brevo account.',
-    };
-  }
-
-  const toList = (Array.isArray(options.to) ? options.to : [options.to])
-    .filter(Boolean).map((email) => ({ email }));
-
-  if (!toList.length) {
-    return { success: false, error: '📭 No valid recipient email addresses provided.' };
-  }
-
-  const body: Record<string, any> = {
-    sender:      { name: fromName, email: fromEmail },
-    to:          toList,
-    subject:     options.subject,
-    htmlContent: options.html,
-  };
-  if (options.text) body.textContent = options.text;
-
-  if (options.attachments?.length) {
-    const encoded = options.attachments
-      .filter((a) => a.content)
-      .map((a) => ({
-        name:    a.filename,
-        content: Buffer.isBuffer(a.content)
-          ? a.content.toString('base64')
-          : Buffer.from(String(a.content)).toString('base64'),
-      }));
-    if (encoded.length) body.attachment = encoded;
-  }
-
-  // ── Send request ─────────────────────────────────────────────────────────
-  try {
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    let res: Response;
-    try {
-      res = await fetch('https://api.brevo.com/v3/smtp/email', {
-        method:  'POST',
-        headers: {
-          'accept':       'application/json',
-          'api-key':      apiKey,
-          'content-type': 'application/json',
-        },
-        body:   JSON.stringify(body),
-        signal: ctrl.signal,
-      });
-    } finally { clearTimeout(timer); }
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => res.statusText);
-      const friendly = classifyBrevoHttpError(res.status, errText);
-      return { success: false, error: friendly };
-    }
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: classifyNetworkError(err) };
-  }
-};
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const configuredSender = () =>
+  (process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim();
 
 const isEmailEnabled = () =>
   String(process.env.EMAIL_ENABLED || '').toLowerCase() !== 'false';
 
-// ─── Public API ──────────────────────────────────────────────────────────────
+const brevoBodyMentionsUnauthorizedIp = (body: string) => {
+  const normalized = body.toLowerCase();
+  return normalized.includes('ip') && (
+    normalized.includes('unauthor') ||
+    normalized.includes('not authorized') ||
+    normalized.includes('not allowed') ||
+    normalized.includes('whitelist') ||
+    normalized.includes('allowlist')
+  );
+};
 
-export const sendEmailDetail = async (
-  options: EmailOptions
-): Promise<{ success: boolean; error?: string }> => {
+const classifyNetworkError = (err: any): EmailResult => {
+  const msg = String(err?.message || err || '').toLowerCase();
+
+  if (msg.includes('abort') || msg.includes('signal') || msg.includes('timeout') || msg.includes('etimedout')) {
+    return {
+      success: false,
+      code: 'BREVO_NETWORK_TIMEOUT',
+      error: 'Brevo API request timed out from the server.',
+      hint: 'Check that outbound HTTPS port 443 is open and the production server public IP is authorized in Brevo SMTP & API settings.',
+    };
+  }
+
+  if (msg.includes('econnrefused')) {
+    return {
+      success: false,
+      code: 'BREVO_CONNECTION_REFUSED',
+      error: 'Connection refused while connecting to Brevo API.',
+      hint: 'Allow outbound HTTPS port 443 from the production server firewall.',
+    };
+  }
+
+  if (msg.includes('enotfound') || msg.includes('getaddrinfo')) {
+    return {
+      success: false,
+      code: 'BREVO_DNS_FAILED',
+      error: 'DNS lookup failed for api.brevo.com.',
+      hint: 'Check DNS settings on the production server.',
+    };
+  }
+
+  if (msg.includes('econnreset') || msg.includes('socket hang up')) {
+    return {
+      success: false,
+      code: 'BREVO_CONNECTION_RESET',
+      error: 'Connection to Brevo was reset.',
+      hint: 'The server IP may be blocked by Brevo or by a firewall. Add the server public IP to Brevo authorized IP addresses.',
+    };
+  }
+
+  return {
+    success: false,
+    code: 'BREVO_NETWORK_ERROR',
+    error: `Network error reaching Brevo: ${msg}.`,
+    hint: 'Check server firewall rules, DNS, and Brevo authorized IP settings.',
+  };
+};
+
+const classifyBrevoHttpError = (status: number, body: string): EmailResult => {
+  const preview = body.length > 300 ? `${body.slice(0, 300)}...` : body;
+
+  if (brevoBodyMentionsUnauthorizedIp(body)) {
+    return {
+      success: false,
+      code: 'BREVO_IP_NOT_AUTHORIZED',
+      error: 'Brevo rejected this production server IP address.',
+      hint: 'Add the production server public IP in Brevo SMTP & API authorized IP addresses, then restart the backend with pm2 restart school-server --update-env.',
+    };
+  }
+
+  switch (status) {
+    case 400:
+      return {
+        success: false,
+        code: 'BREVO_BAD_REQUEST',
+        error: `Brevo rejected the email request. Details: ${preview}`,
+        hint: `Check that sender "${configuredSender()}" is verified in Brevo and the recipient email is valid.`,
+      };
+    case 401:
+      return {
+        success: false,
+        code: 'BREVO_API_KEY_INVALID',
+        error: `Brevo API key is invalid, expired, or not allowed from this server. Details: ${preview}`,
+        hint: 'Check BREVO_API_KEY in production .env, check Brevo authorized IP addresses, then restart backend with --update-env.',
+      };
+    case 403:
+      return {
+        success: false,
+        code: 'BREVO_FORBIDDEN',
+        error: `Brevo forbids sending. Details: ${preview}`,
+        hint: 'Possible causes: sender email/domain is not verified, account is suspended, limit reached, or server IP is not authorized.',
+      };
+    case 429:
+      return {
+        success: false,
+        code: 'BREVO_RATE_LIMIT',
+        error: 'Brevo rate limit exceeded.',
+        hint: 'Wait a few minutes and retry, or upgrade the Brevo plan.',
+      };
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return {
+        success: false,
+        code: 'BREVO_SERVER_ERROR',
+        error: `Brevo server error (${status}). Details: ${preview}`,
+        hint: 'This is likely temporary on Brevo side. Retry in a few minutes.',
+      };
+    default:
+      return {
+        success: false,
+        code: `BREVO_HTTP_${status}`,
+        error: `Brevo API error ${status}: ${preview}`,
+        hint: 'Check Brevo API key, authorized IPs, sender verification, and account status.',
+      };
+  }
+};
+
+const sendViaBrevoApi = async (options: EmailOptions): Promise<EmailResult> => {
+  const apiKey = (process.env.BREVO_API_KEY || '').trim();
+  const fromEmail = (options.from || configuredSender()).trim();
+  const fromName = process.env.BREVO_FROM_NAME || process.env.FROM_NAME || 'EasySchool';
+
+  if (!apiKey) {
+    return {
+      success: false,
+      code: 'EMAIL_API_KEY_MISSING',
+      error: 'BREVO_API_KEY is not set in environment variables.',
+      hint: 'Add BREVO_API_KEY to the production .env and restart the backend with pm2 restart school-server --update-env.',
+    };
+  }
+
+  if (!fromEmail) {
+    return {
+      success: false,
+      code: 'EMAIL_FROM_MISSING',
+      error: 'EMAIL_FROM sender address is not configured.',
+      hint: 'Add EMAIL_FROM=verified-sender@example.com to production .env. The address must be verified in Brevo.',
+    };
+  }
+
+  const toList = (Array.isArray(options.to) ? options.to : [options.to])
+    .map((email) => String(email || '').trim())
+    .filter(Boolean)
+    .map((email) => ({ email }));
+
+  if (!toList.length) {
+    return {
+      success: false,
+      code: 'EMAIL_RECIPIENT_MISSING',
+      error: 'No valid recipient email addresses provided.',
+      hint: 'Make sure this user account has a real linked email address.',
+    };
+  }
+
+  const body: Record<string, any> = {
+    sender: { name: fromName, email: fromEmail },
+    to: toList,
+    subject: options.subject,
+    htmlContent: options.html,
+  };
+
+  if (options.text) body.textContent = options.text;
+
+  if (options.attachments?.length) {
+    const encoded = options.attachments
+      .filter((attachment) => attachment.content)
+      .map((attachment) => ({
+        name: attachment.filename,
+        content: Buffer.isBuffer(attachment.content)
+          ? attachment.content.toString('base64')
+          : Buffer.from(String(attachment.content)).toString('base64'),
+      }));
+    if (encoded.length) body.attachment = encoded;
+  }
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    let res: Response;
+    try {
+      res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'api-key': apiKey,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      return classifyBrevoHttpError(res.status, errText);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return classifyNetworkError(err);
+  }
+};
+
+export const sendEmailDetail = async (options: EmailOptions): Promise<EmailResult> => {
   try {
     const to = Array.isArray(options.to) ? options.to.join(', ') : options.to;
 
     if (!isEmailEnabled()) {
-      if (process.env.NODE_ENV === 'production')
-        return { success: false, error: 'Email service is disabled (EMAIL_ENABLED=false)' };
+      if (process.env.NODE_ENV === 'production') {
+        return {
+          success: false,
+          code: 'EMAIL_DISABLED',
+          error: 'Email service is disabled (EMAIL_ENABLED=false).',
+          hint: 'Set EMAIL_ENABLED=true in production .env and restart the backend.',
+        };
+      }
       console.log(`[DEV] Email skipped (disabled). Would send to ${to}`);
       return { success: true };
     }
 
     const result = await sendViaBrevoApi(options);
 
-    if (result.success) console.log(`📧 Email sent via Brevo API → ${to}`);
-    else                console.error(`❌ Brevo API failed → ${to}:`, result.error);
+    if (result.success) {
+      console.log(`Email sent via Brevo API -> ${to}`);
+    } else {
+      console.error(`Brevo API failed -> ${to}:`, {
+        code: result.code,
+        error: result.error,
+        hint: result.hint,
+      });
+    }
 
     return result;
   } catch (error: any) {
-    console.error('❌ sendEmailDetail error:', error);
-    return { success: false, error: error?.message || String(error) };
+    console.error('sendEmailDetail error:', error);
+    return {
+      success: false,
+      code: 'EMAIL_INTERNAL_ERROR',
+      error: error?.message || String(error),
+      hint: 'Check backend logs for the full stack trace.',
+    };
   }
 };
 
@@ -212,11 +295,13 @@ export const sendBulkEmails = async (
       const results = await Promise.all(
         recipients.slice(i, i + batchSize).map((to) => sendEmail({ to, subject, html }))
       );
-      if (results.some((r) => !r)) return false;
+      if (results.some((result) => !result)) return false;
     }
-    console.log(`📧 Bulk email sent to ${recipients.length} recipients`);
+    console.log(`Bulk email sent to ${recipients.length} recipients`);
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 };
 
 export const sendIdCardEmail = async (
@@ -225,9 +310,9 @@ export const sendIdCardEmail = async (
   pdfPath: string
 ): Promise<boolean> =>
   sendEmail({
-    to:          email,
-    subject:     `Your School ID Card - ${studentName}`,
-    html:        `<h2>Your ID Card</h2><p>Dear ${studentName},</p><p>Your school ID card is attached.</p><p>EasySchool Team</p>`,
+    to: email,
+    subject: `Your School ID Card - ${studentName}`,
+    html: `<h2>Your ID Card</h2><p>Dear ${studentName},</p><p>Your school ID card is attached.</p><p>EasySchool Team</p>`,
     attachments: [{ filename: `${studentName}_id_card.pdf`, path: pdfPath }],
   });
 
@@ -241,7 +326,7 @@ export const sendNotificationEmail = async (
 export const isEmailConfigured = (): boolean =>
   isEmailEnabled() &&
   Boolean((process.env.BREVO_API_KEY || '').trim()) &&
-  Boolean((process.env.EMAIL_FROM || process.env.BREVO_FROM_EMAIL || '').trim());
+  Boolean(configuredSender());
 
-// Legacy compat — no SMTP
+// Legacy compatibility - SMTP transport is no longer used.
 export const getEmailTransport = () => null;

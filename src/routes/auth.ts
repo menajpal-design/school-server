@@ -228,11 +228,16 @@ router.post('/forgot-password', async (req, res) => {
 
     if (!emailResult.success) {
       // Log full error on server for diagnostics
-      console.error(`❌ Forgot-password email failed for "${targetEmail}":`, emailResult.error);
+      console.error(`Forgot-password email failed for "${targetEmail}":`, {
+        code: emailResult.code,
+        error: emailResult.error,
+        hint: emailResult.hint,
+      });
       return res.status(500).json({ 
         message: `Failed to send recovery email. Please contact your administrator.`,
-        reason:  emailResult.error || 'Email provider error — check server logs for details',
-        hint:    'Common causes: server IP blocked by Brevo, invalid API key, unverified sender address, or Droplet firewall blocking outbound HTTPS.',
+        errorCode: emailResult.code || 'EMAIL_SEND_FAILED',
+        reason:  emailResult.error || 'Email provider error - check server logs for details',
+        hint:    emailResult.hint || 'Common causes: missing Brevo API key, unauthorized server IP, invalid API key, unverified sender address, or Droplet firewall blocking outbound HTTPS.',
       });
     }
 
