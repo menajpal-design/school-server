@@ -22,6 +22,9 @@ export interface IInstitution extends Document {
     yearlyPrice?: number;
     baseDueAmount?: number;
     monthlySmsLimit?: number;
+    attendanceSmsMode?: 'none' | 'daily' | 'weekly';
+    attendanceSmsMonthlyRatePerStudent?: number;
+    attendanceSmsMonthlyAmount?: number;
     yearlyDiscountPercent?: number;
     billingCycle?: 'monthly' | 'yearly';
     useEasySchoolStorage?: boolean;
@@ -103,6 +106,9 @@ const InstitutionSchema: Schema = new Schema({
     yearlyPrice: { type: Number, default: 3000 },
     baseDueAmount: { type: Number, default: 400 },
     monthlySmsLimit: { type: Number, default: 100 },
+    attendanceSmsMode: { type: String, enum: ['none', 'daily', 'weekly'], default: 'none' },
+    attendanceSmsMonthlyRatePerStudent: { type: Number, default: 0 },
+    attendanceSmsMonthlyAmount: { type: Number, default: 0 },
     yearlyDiscountPercent: { type: Number, default: 17 },
     billingCycle: { type: String, enum: ['monthly', 'yearly'], default: 'monthly' },
     useEasySchoolStorage: { type: Boolean, default: true },

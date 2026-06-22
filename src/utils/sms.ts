@@ -1,5 +1,5 @@
 import Institution from '../models/Institution';
-import { canUseSms, getSmsChargeAmount, getSmsChargeRate, recordSmsCharge } from '../services/billingService';
+import { canUseSms, getSmsChargeAmount, getSmsChargeRate, isFreeSmsCategory, recordSmsCharge } from '../services/billingService';
 import SmsLog from '../models/SmsLog';
 
 interface SMSOptions {
@@ -86,7 +86,7 @@ const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOp
     return forceOneCreditOptions({ ...options, message });
   } catch (error) { console.error('Failed to apply institution SMS branding:', error); return forceOneCreditOptions(options); }
 };
-const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units); return Boolean(quota.allowed); };
+const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId || isFreeSmsCategory(options.type, options.purpose)) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units); return Boolean(quota.allowed); };
 const buildChargeMeta = (options: SMSOptions, count = 1) => { const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose); const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose); return { smsChargeRate, smsChargeAmount }; };
 const badKey = (value: string) => !value || value.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(value);
 const badUrl = (value: string) => !value || /your_|REPLACE|demo|placeholder|example|localhost|127\.0\.0\.1/i.test(value);
@@ -130,7 +130,8 @@ const sendViaSmsLayer = async (rawOptions: SMSOptions): Promise<boolean> => {
 };
 export const sendSMS = async (rawOptions: SMSOptions): Promise<boolean> => sendViaSmsLayer(rawOptions);
 export const sendResultSMS = async (phone: string, studentName: string, summary: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} Result: ${summary}`, institutionId, recipientType: 'guardian', type: 'notification', purpose: 'result_published' });
-export const sendAttendanceDailySMS = async (phone: string, studentName: string, status: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} attendance: ${status}`, institutionId, recipientType: 'guardian', type: 'attendance', purpose: 'daily_attendance' });
+export const sendAttendanceDailySMS = async (phone: string, studentName: string, status: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} attendance: ${status}`, institutionId, recipientType: 'guardian', type: 'attendance', purpose: 'attendance_present_daily' });
+export const sendAttendanceWeeklySMS = async (phone: string, studentName: string, status: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} attendance: ${status}`, institutionId, recipientType: 'guardian', type: 'attendance', purpose: 'attendance_present_weekly' });
 export const sendAttendanceReminderSMS = async (phone: string, studentName: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} attendance not marked today.`, institutionId, recipientType: 'guardian', type: 'attendance', purpose: 'attendance_reminder' });
 export const sendMonthlyParentSummarySMS = async (phone: string, studentName: string, summary: string, institutionId?: any) => sendSMS({ to: phone, message: `${studentName} monthly summary: ${summary}`, institutionId, recipientType: 'guardian', type: 'monthly_parent', purpose: 'monthly_parent_summary' });
 export default sendSMS;

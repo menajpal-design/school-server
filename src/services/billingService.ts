@@ -3,12 +3,13 @@ import SmsLog from '../models/SmsLog';
 
 export const SMS_CHARGE_RATES = {
   attendance_absent: 0.6,
-  attendance_daily: 0.45,
+  attendance_daily: 0,
+  attendance_weekly: 0,
   result: 0.45,
   monthly_parent: 0.45,
-  credentials: 0.45,
+  credentials: 0,
   notification: 0.45,
-  admission: 0.45,
+  admission: 0,
   fee: 0.45,
   notice: 0.45,
   other: 0.45,
@@ -30,6 +31,7 @@ export const getSmsChargeCategory = (type?: string, purpose?: string) => {
   const normalizedType = String(type || '').toLowerCase();
   const normalizedPurpose = String(purpose || '').toLowerCase();
   if (normalizedPurpose.includes('attendance_absent') || normalizedPurpose.includes('absent')) return 'attendance_absent';
+  if (normalizedPurpose.includes('attendance_weekly') || normalizedPurpose.includes('weekly_present')) return 'attendance_weekly';
   if (normalizedPurpose.includes('attendance_daily') || normalizedPurpose.includes('daily_attendance') || normalizedPurpose.includes('attendance_present') || normalizedPurpose.includes('present')) return 'attendance_daily';
   if (normalizedPurpose.includes('result')) return 'result';
   if (normalizedPurpose.includes('monthly_parent') || normalizedPurpose.includes('monthly') || normalizedPurpose.includes('summary')) return 'monthly_parent';
@@ -45,8 +47,12 @@ export const getSmsChargeCategory = (type?: string, purpose?: string) => {
   if (normalizedType === 'notice' || normalizedType === 'notification') return 'notice';
   return 'other';
 };
-export const getSmsChargeRate = (type?: string, purpose?: string) => SMS_CHARGE_RATES[getSmsChargeCategory(type, purpose) as keyof typeof SMS_CHARGE_RATES] || SMS_CHARGE_RATES.other;
+export const getSmsChargeRate = (type?: string, purpose?: string) => {
+  const category = getSmsChargeCategory(type, purpose) as keyof typeof SMS_CHARGE_RATES;
+  return SMS_CHARGE_RATES[category] ?? SMS_CHARGE_RATES.other;
+};
 export const getSmsChargeAmount = (count = 1, type?: string, purpose?: string) => Number((getSmsChargeRate(type, purpose) * Number(count || 0)).toFixed(2));
+export const isFreeSmsCategory = (type?: string, purpose?: string) => getSmsChargeRate(type, purpose) <= 0;
 
 export const activateBilling = (billing: any, at = new Date()) => {
   const planSmsCredits = Number(billing.monthlySmsLimit || billing.studentLimit || 0);
@@ -106,6 +112,17 @@ export const canUseSms = async (institutionId: any, units = 1) => {
   return { allowed: true, used: Number(billing.smsUsed || 0), unlimited: true };
 };
 
+export const getAttendanceSmsMode = async (institutionId: any): Promise<'none' | 'daily' | 'weekly'> => {
+  const institution: any = await Institution.findById(institutionId).select('billing.planCode billing.attendanceSmsMode').lean();
+  const billing = institution?.billing || {};
+  const explicit = String(billing.attendanceSmsMode || '').toLowerCase();
+  if (explicit === 'daily' || explicit === 'weekly') return explicit;
+  const code = String(billing.planCode || '').toLowerCase();
+  if (code.includes('attendance_daily')) return 'daily';
+  if (code.includes('attendance_weekly')) return 'weekly';
+  return 'none';
+};
+
 export const incrementSmsUsage = async (institutionId: any, units = 1) => {
   const usage = await canUseSms(institutionId, units);
   if (!usage.allowed) return usage;
@@ -119,6 +136,7 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   const category = getSmsChargeCategory(type, purpose);
   const rate = getSmsChargeRate(type, purpose);
   const amount = Number((rate * Number(count || 0)).toFixed(2));
+  if (rate <= 0) return { count, amount: 0, rate, category, free: true, insufficient: false };
   const { start, end } = currentSmsPeriod();
   const institution = await Institution.findById(institutionId).select('billing');
   if (!institution) return { count, amount, rate, category, start, end };

@@ -11,8 +11,10 @@ import IDCard from '../models/IDCard';
 import Class from '../models/Class';
 import Section from '../models/Section';
 import User from '../models/User';
-import { sendAttendanceDailySMS, sendAttendanceReminderSMS } from '../utils/sms';
+import SmsLog from '../models/SmsLog';
+import { sendAttendanceDailySMS, sendAttendanceReminderSMS, sendAttendanceWeeklySMS } from '../utils/sms';
 import { resolveActorScope } from '../services/permissionPolicy';
+import { getAttendanceSmsMode } from '../services/billingService';
 
 const router = express.Router();
 
@@ -168,12 +170,30 @@ const canMarkAttendanceRecords = async (req: any, records: any[]) => {
   return true;
 };
 
-const notifyStudentAttendance = async (studentId: any, status: 'present' | 'absent' | 'late' | 'leave', institutionId: any) => {
+const weekRange = (value?: string) => {
+  const date = parseDateOnly(value);
+  const day = date.getDay() || 7;
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day + 1);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  return { start, end };
+};
+
+const notifyStudentAttendance = async (studentId: any, status: 'present' | 'absent' | 'late' | 'leave', institutionId: any, date?: string) => {
   const student = await Student.findById(studentId).populate('userId', 'name').lean();
   if (!student || !student.guardianPhone) return;
   const studentName = (student as any).userId?.name || student.guardianName || 'Student';
   if (status === 'absent') {
     await sendAttendanceReminderSMS(student.guardianPhone, studentName, institutionId);
+    return;
+  }
+  if (status !== 'present') return;
+  const mode = await getAttendanceSmsMode(institutionId);
+  if (mode === 'none') return;
+  if (mode === 'weekly') {
+    const { start, end } = weekRange(date);
+    const alreadySent = await SmsLog.exists({ institutionId, studentId, purpose: 'attendance_present_weekly', status: 'sent', sentAt: { $gte: start, $lt: end } });
+    if (alreadySent) return;
+    await sendAttendanceWeeklySMS(student.guardianPhone, studentName, status, institutionId);
     return;
   }
   await sendAttendanceDailySMS(student.guardianPhone, studentName, status, institutionId);
@@ -232,7 +252,7 @@ router.get('/', authenticate, canManageAcademic(), async (req: any, res) => {
     }
 
     if (req.query.sectionId) {
-      if (!scope.assignedSectionIds.includes(String(req.query.sectionId))) {
+      if (scope.assignedSectionIds.length > 0 && !scope.assignedSectionIds.includes(String(req.query.sectionId))) {
         return res.status(403).json({ message: 'Access denied. You can only view attendance for your assigned sections.' });
       }
       query.sectionId = toObjectId(req.query.sectionId);
@@ -297,7 +317,7 @@ router.post('/mark', authenticate, canManageAcademic(), async (req, res) => {
       );
       saved.push(attendance);
       if (userType === 'student' && record.studentId) {
-        await notifyStudentAttendance(record.studentId, finalStatus, req.user.institutionId);
+        await notifyStudentAttendance(record.studentId, finalStatus, req.user.institutionId, record.date || req.body.date);
       }
     }
 
@@ -348,7 +368,7 @@ router.post('/scan-present', authenticate, canScanIDCard(), async (req, res) => 
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    await notifyStudentAttendance(record.studentId, 'present', req.user.institutionId);
+    await notifyStudentAttendance(record.studentId, 'present', req.user.institutionId, req.body.date);
 
     res.status(201).json({
       attendance,
@@ -392,6 +412,77 @@ router.post('/scan-id-card', authenticate, canScanIDCard(), async (req, res) => 
   }
 });
 
+router.post('/present-sms', authenticate, canManageAcademic(), async (req: any, res) => {
+  try {
+    const mode = await getAttendanceSmsMode(req.user.institutionId);
+    if (mode === 'none') return res.status(403).json({ message: 'Present SMS plan is not active for this school.' });
+
+    const dateValue = toDateValue(req.body.date);
+    const { start, end } = dayRange(req.body.date);
+    const studentQuery = await attendanceStudentQuery(req);
+
+    const allClasses = req.body.allClasses === true || req.body.allClasses === 'true';
+    if (!allClasses && req.body.classId) studentQuery.classId = toObjectId(req.body.classId);
+    if (!allClasses && req.body.sectionId) studentQuery.sectionId = toObjectId(req.body.sectionId);
+
+    const rollFrom = Number(String(req.body.rollFrom || '').replace(/[^0-9]/g, ''));
+    const rollTo = Number(String(req.body.rollTo || '').replace(/[^0-9]/g, ''));
+    const students = await Student.find(studentQuery).populate('userId', 'name').populate('classId', 'name').populate('sectionId', 'name').sort({ rollNumber: 1 }).lean();
+    const filteredStudents = students.filter((student: any) => {
+      const roll = Number(String(student.rollNumber || '').replace(/[^0-9]/g, ''));
+      if (rollFrom && (!roll || roll < rollFrom)) return false;
+      if (rollTo && (!roll || roll > rollTo)) return false;
+      return true;
+    });
+    const studentIds = filteredStudents.map((student: any) => student._id);
+
+    const presentRecords = await Attendance.find({
+      institutionId: req.user.institutionId,
+      userType: 'student',
+      status: 'present',
+      studentId: { $in: studentIds },
+      date: { $gte: start, $lt: end },
+    }).select('studentId').lean();
+
+    const presentIds = new Set(presentRecords.map((record: any) => String(record.studentId)));
+    const targets = filteredStudents.filter((student: any) => presentIds.has(String(student._id)) && student.guardianPhone);
+
+    let sent = 0;
+    let skipped = filteredStudents.length - targets.length;
+    let failed = 0;
+    const results: any[] = [];
+
+    for (const student of targets) {
+      const studentName = (student as any).userId?.name || student.guardianName || 'Student';
+      try {
+        if (mode === 'weekly') {
+          const { start: weekStart, end: weekEnd } = weekRange(req.body.date);
+          const alreadySent = await SmsLog.exists({ institutionId: req.user.institutionId, studentId: student._id, purpose: 'attendance_present_weekly', status: 'sent', sentAt: { $gte: weekStart, $lt: weekEnd } });
+          if (alreadySent) {
+            skipped += 1;
+            results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: 'skipped', reason: 'Weekly present SMS already sent' });
+            continue;
+          }
+          const ok = await sendAttendanceWeeklySMS(student.guardianPhone, studentName, 'present', req.user.institutionId);
+          ok ? sent += 1 : failed += 1;
+          results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed' });
+          continue;
+        }
+        const ok = await sendAttendanceDailySMS(student.guardianPhone, studentName, 'present', req.user.institutionId);
+        ok ? sent += 1 : failed += 1;
+        results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed' });
+      } catch (error: any) {
+        failed += 1;
+        results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: 'failed', reason: error?.message || 'SMS failed' });
+      }
+    }
+
+    res.json({ message: `Present SMS completed for ${dateValue.toISOString().slice(0, 10)}.`, mode, totalMatchedStudents: filteredStudents.length, presentStudents: presentRecords.length, sent, failed, skipped, results });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to send present SMS', error });
+  }
+});
+
 router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) => {
   const startDate = req.query.startDate ? parseDateOnly(req.query.startDate as string) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const endSource = req.query.endDate ? parseDateOnly(req.query.endDate as string) : new Date();
@@ -416,7 +507,7 @@ router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) 
 
     if (req.query.sectionId) {
       const targetSection = String(req.query.sectionId);
-      if (!assignedSections.includes(targetSection)) {
+      if (assignedSections.length > 0 && !assignedSections.includes(targetSection)) {
         return res.status(403).json({ message: 'Access denied. You can only view reports for your assigned sections.' });
       }
       query.sectionId = toObjectId(targetSection);
@@ -428,7 +519,6 @@ router.get('/reports', authenticate, canManageAcademic(), async (req: any, res) 
     if (req.query.sectionId) query.sectionId = toObjectId(req.query.sectionId);
   }
   
-  if (req.query.sectionId) query.sectionId = toObjectId(req.query.sectionId);
   if (req.query.personId) query.studentId = toObjectId(req.query.personId);
   if (['teacher', 'staff'].includes(req.query.personType as string) && req.query.personId) {
     delete query.studentId;
@@ -666,7 +756,7 @@ router.get('/people', authenticate, canManageAcademic(), async (req, res) => {
       if (req.user.role === 'class_teacher') {
         const teacher: any = await Teacher.findOne({ institutionId: req.user.institutionId, userId: req.user._id }).lean();
         const assignedSections = (teacher?.assignedSections || teacher?.sectionIds || []).map(String);
-        if (!assignedSections.includes(String(req.query.sectionId))) {
+        if (assignedSections.length > 0 && !assignedSections.includes(String(req.query.sectionId))) {
           return res.status(403).json({ message: 'Access denied. You can only view people from your assigned sections.' });
         }
       }
