@@ -4,8 +4,7 @@
  */
 
 // Safety: ensure .env is loaded even if this module is imported before server.ts runs dotenv
-import { config as dotenvConfig } from 'dotenv';
-dotenvConfig();
+import './loadEnv';
 
 export interface Config {
   // Server

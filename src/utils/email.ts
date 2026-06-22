@@ -3,6 +3,8 @@
  * Required production env vars: BREVO_API_KEY, EMAIL_FROM.
  */
 
+import '../config/loadEnv';
+
 interface EmailAttachment {
   filename: string;
   path?: string;
