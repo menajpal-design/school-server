@@ -6,7 +6,7 @@ const loadedPaths = new Set<string>();
 const loadEnvFile = (envPath: string) => {
   if (loadedPaths.has(envPath)) return;
   loadedPaths.add(envPath);
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, override: true });
 };
 
 export const loadEnv = () => {
