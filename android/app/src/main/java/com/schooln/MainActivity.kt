@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -41,12 +42,33 @@ import com.schooln.ui.theme.SchoolManagementTheme
 class MainActivity : ComponentActivity() {
     private var webView: WebView? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var activityPermissionsRequest: PermissionRequest? = null
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         filePathCallback?.onReceiveValue(uris.toTypedArray())
         filePathCallback = null
+    }
+
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        // Requested permissions at startup
+    }
+
+    private val cameraPermissionRequestLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            activityPermissionsRequest?.let { request ->
+                request.grant(request.resources)
+            }
+        } else {
+            activityPermissionsRequest?.deny()
+            Toast.makeText(this, "Camera permission is required to capture photos or scan codes", Toast.LENGTH_LONG).show()
+        }
+        activityPermissionsRequest = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,6 +82,13 @@ class MainActivity : ComponentActivity() {
         val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = false
         controller.isAppearanceLightNavigationBars = false
+
+        // Request camera and notification permissions at startup for a smooth user experience
+        val permissionsToRequest = mutableListOf(android.Manifest.permission.CAMERA)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -80,6 +109,9 @@ class MainActivity : ComponentActivity() {
                 ) {
                     SchoolWebsiteApp(
                         onWebViewReady = { webView = it },
+                        onPermissionRequest = { request ->
+                            handleWebViewPermissionRequest(request)
+                        },
                         onChooseFile = { callback ->
                             filePathCallback?.onReceiveValue(null)
                             filePathCallback = callback
@@ -88,6 +120,25 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    private fun handleWebViewPermissionRequest(request: PermissionRequest) {
+        val resources = request.resources
+        var hasCameraPermission = true
+        
+        if (resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+            hasCameraPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.CAMERA
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (hasCameraPermission) {
+            request.grant(resources)
+        } else {
+            activityPermissionsRequest = request
+            cameraPermissionRequestLauncher.launch(android.Manifest.permission.CAMERA)
         }
     }
 
@@ -103,6 +154,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SchoolWebsiteApp(
     onWebViewReady: (WebView) -> Unit,
+    onPermissionRequest: (PermissionRequest) -> Unit,
     onChooseFile: (ValueCallback<Array<Uri>>) -> Unit
 ) {
     var loadingProgress by remember { mutableStateOf(0) }
@@ -130,6 +182,7 @@ private fun SchoolWebsiteApp(
                         onErrorReceived = { offline ->
                             isOffline = offline
                         },
+                        onPermissionRequest = onPermissionRequest,
                         onChooseFile = onChooseFile
                     ).also {
                         webViewInstance = it
@@ -245,6 +298,7 @@ private fun createSchoolWebView(
     context: Context,
     onProgressChanged: (Int) -> Unit,
     onErrorReceived: (Boolean) -> Unit,
+    onPermissionRequest: (PermissionRequest) -> Unit,
     onChooseFile: (ValueCallback<Array<Uri>>) -> Unit
 ): WebView {
     val startUrl = Config.WEB_APP_URL
@@ -300,6 +354,10 @@ private fun createSchoolWebView(
         }
 
         webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                onPermissionRequest(request)
+            }
+
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 onProgressChanged(newProgress)
             }
