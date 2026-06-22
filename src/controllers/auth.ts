@@ -80,8 +80,6 @@ export const register = async (req: Request, res: Response) => {
       const selected = calculatePlanDue(req.body.planCode, billingCycle, true, 0);
       const paymentAmount = Number(req.body.receivedAmount || 0);
       const hasPayment = paymentAmount > 0 || Boolean(req.body.paymentTrxId);
-      const trialDurationMs = 30 * 24 * 60 * 60 * 1000; // 30 days
-      const trialExpiresAt = new Date(Date.now() + trialDurationMs);
 
       institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
@@ -107,7 +105,7 @@ export const register = async (req: Request, res: Response) => {
           baseDueAmount: selected.baseAmount + selected.storageAmount,
           storageAmount: selected.storageAmount,
           dueAmount: selected.total,
-          billingStatus: hasPayment ? 'pending' : 'active',
+          billingStatus: 'pending',
           isPaymentReceived: hasPayment,
           receivedAmount: paymentAmount,
           paymentGateway: req.body.paymentGateway || 'bkash',
@@ -115,10 +113,7 @@ export const register = async (req: Request, res: Response) => {
           paymentSenderNumber: req.body.paymentSenderNumber,
           smsChargeAmount: 0,
           smsChargeBreakdown: {},
-          smsBalance: selected.plan.monthlySmsLimit || 100,
-          activatedAt: hasPayment ? undefined : new Date(),
-          subscriptionStartedAt: hasPayment ? undefined : new Date(),
-          subscriptionExpiresAt: hasPayment ? undefined : trialExpiresAt,
+          smsBalance: 0,
         },
         settings: {
           backupSettings: { frequency: 'weekly', location: 'local', collections: [] }
