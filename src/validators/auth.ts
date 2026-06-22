@@ -1,4 +1,7 @@
 import Joi from 'joi';
+import { SCHOOL_PLANS } from '../config/plans';
+
+const planCodes = SCHOOL_PLANS.map((plan) => plan.code);
 
 export const registerSchema = Joi.object({
   name: Joi.string().min(2),
@@ -10,7 +13,7 @@ export const registerSchema = Joi.object({
   phone: Joi.string().allow('', null),
   institutionId: Joi.string().hex().length(24).allow('', null),
   institutionName: Joi.string().min(2).allow('', null),
-  planCode: Joi.string().valid('students_100', 'students_200', 'students_300', 'students_500', 'students_1000').allow('', null),
+  planCode: Joi.string().valid(...planCodes).allow('', null),
   billingCycle: Joi.string().valid('monthly', 'yearly').default('monthly'),
   paymentGateway: Joi.string().allow('', null),
   paymentTrxId: Joi.string().allow('', null),
