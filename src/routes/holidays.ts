@@ -22,9 +22,9 @@ const findByKeys = (obj: any, keys: string[]): any => {
   for (const value of Object.values(obj)) { const found = findByKeys(value, keys); if (found !== undefined) return found; }
   return undefined;
 };
-const weeklyDayKeys = ['weeklyClosedDays', 'weeklyDays', 'weeklyOffDays', 'weeklyOff', 'weeklyHoliday', 'weeklyHolidays', 'weekendDays', 'weekend', 'weekends', 'offDays', 'holidayDays', 'closedDays', 'schoolClosedDays', 'schoolWeeklyOffDays', 'schoolWeekendDays'];
+const weeklyDayKeys = ['weeklyClosedDays', 'weeklyDays', 'weeklyOffDays', 'schoolWeeklyOffDays', 'schoolWeekendDays'];
 const weeklyColorKeys = ['weeklyColor', 'weeklyOffColor', 'weeklyHolidayColor', 'weeklyHolidaysColor', 'weekendColor', 'weekendDayColor', 'holidayColor', 'closedDayColor', 'schoolClosedDayColor', 'schoolWeeklyOffColor', 'attendanceHolidayColor'];
-const settingsData = async (institutionId: any) => SiteSetting.find({ institutionId, key: { $in: ['app_control_settings', 'site_config', 'holiday_settings', 'attendance_settings', 'settings'] } }).lean();
+const settingsData = async (institutionId: any) => SiteSetting.find({ institutionId, key: { $in: ['holiday_settings', 'attendance_settings'] } }).lean();
 const settingsWeeklyDays = async (institutionId: any) => { const settings = await settingsData(institutionId); for (const setting of settings) { const found = findByKeys(setting.value, weeklyDayKeys); if (found !== undefined) return normalizeWeeklyDays(found); } return [5, 6]; };
 const settingsWeeklyColor = async (institutionId: any) => { const settings = await settingsData(institutionId); for (const setting of settings) { const found = findByKeys(setting.value, weeklyColorKeys); if (isHex(found)) return String(found).trim(); } return '#64748b'; };
 const parseDateOnly = (value?: string) => { if (!value) return new Date(); const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/); if (!match) return new Date(value); return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])); };
