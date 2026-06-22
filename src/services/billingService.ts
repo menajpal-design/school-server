@@ -15,6 +15,14 @@ export const SMS_CHARGE_RATES = {
   other: 0.45,
 } as const;
 
+// Monthly auto SMS (guardian monthly summary) → uses purchased SMS package (smsBalance)
+// Regular SMS (attendance, notification, etc.) → uses plan's monthlySmsLimit
+const isMonthlyParentSms = (type?: string, purpose?: string): boolean => {
+  const t = String(type || '').toLowerCase();
+  const p = String(purpose || '').toLowerCase();
+  return t === 'monthly_parent' || p.includes('monthly_parent') || p.includes('monthly_guardian') || p.includes('monthly_summary');
+};
+
 export const nextSubscriptionEnd = (cycle: 'monthly' | 'yearly' = 'monthly', from = new Date()) => {
   const date = new Date(from);
   date.setMonth(date.getMonth() + (cycle === 'yearly' ? 12 : 1));
@@ -99,17 +107,25 @@ export const expireInstitutionIfNeeded = async (institution: any) => {
   return institution;
 };
 
-export const canUseSms = async (institutionId: any, units = 1) => {
+export const canUseSms = async (institutionId: any, units = 1, type?: string, purpose?: string) => {
   const institution = await Institution.findById(institutionId).select('billing');
   if (!institution) return { allowed: false, message: 'Institution not found' };
   const billing: any = (institution as any).billing || {};
-  const smsBalance = Number(billing.smsBalance ?? 0);
-  const hasPackage = smsBalance > 0;
-  if (hasPackage) {
-    if (smsBalance < units) return { allowed: false, message: 'SMS balance exhausted. Please buy an SMS package.' };
+
+  // Monthly auto SMS → requires purchased SMS package (smsBalance)
+  if (isMonthlyParentSms(type, purpose)) {
+    const smsBalance = Number(billing.smsBalance ?? 0);
+    if (smsBalance < units) return { allowed: false, balance: smsBalance, message: 'SMS balance exhausted. Please buy an SMS package for monthly auto SMS.' };
     return { allowed: true, balance: smsBalance, packageBased: true };
   }
-  return { allowed: true, used: Number(billing.smsUsed || 0), unlimited: true };
+
+  // Regular SMS → uses plan monthlySmsLimit quota
+  const monthlyLimit = Number(billing.monthlySmsLimit ?? 0);
+  const smsUsed = Number(billing.smsUsed ?? 0);
+  if (monthlyLimit > 0 && smsUsed >= monthlyLimit) {
+    return { allowed: false, used: smsUsed, monthlyLimit, message: 'Monthly SMS limit reached. Contact admin to increase your plan.' };
+  }
+  return { allowed: true, used: smsUsed, monthlyLimit, unlimited: monthlyLimit === 0 };
 };
 
 export const getAttendanceSmsMode = async (institutionId: any): Promise<'none' | 'daily' | 'weekly'> => {
@@ -142,12 +158,15 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   if (!institution) return { count, amount, rate, category, start, end };
   const billing: any = (institution as any).billing || {};
   const smsBalance = Number(billing.smsBalance ?? 0);
-  const isPackageBased = smsBalance > 0;
-  if (isPackageBased) {
+
+  // Monthly parent SMS → deduct from purchased package (smsBalance) only
+  if (isMonthlyParentSms(type, purpose)) {
     if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
     await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count }, $set: { 'billing.smsPeriodStart': start, 'billing.smsPeriodEnd': end } });
     return { count, amount, rate, category, start, end, insufficient: false, packageBased: true };
   }
+
+  // Regular SMS → track against monthlySmsLimit (do NOT deduct from smsBalance)
   const periodStart = billing.smsChargePeriodStart ? new Date(billing.smsChargePeriodStart) : null;
   const samePeriod = periodStart && periodStart.getTime() === start.getTime();
   const currentBreakdown = samePeriod ? { ...(billing.smsChargeBreakdown || {}) } : {};

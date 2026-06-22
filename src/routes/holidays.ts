@@ -34,11 +34,11 @@ const isoLocal = (date: Date) => `${date.getFullYear()}-${String(date.getMonth()
 const rangeHoliday = (title: string, titleBn: string, startDate: string, endDate: string, type: HolidaySeed['type'], color: string, description?: string): HolidaySeed => ({ title, titleBn, startDate, endDate, type, color, description });
 const defaultBangladeshHolidays = (year: number): HolidaySeed[] => [
   rangeHoliday('Shaheed Day and International Mother Language Day', 'শহীদ দিবস ও আন্তর্জাতিক মাতৃভাষা দিবস', `${year}-02-21`, `${year}-02-21`, 'government', '#ef4444'),
-  rangeHoliday('Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', `${year}-03-26`, `${year}-03-26`, 'government', '#16a34a'),
+  rangeHoliday('Independence and National Day', 'স্বাধীনতা ও জাতীয় দিবস', `${year}-03-26`, `${year}-03-26`, 'government', '#16a34a'),
   rangeHoliday('Bengali New Year', 'পহেলা বৈশাখ', `${year}-04-14`, `${year}-04-14`, 'government', '#f97316'),
   rangeHoliday('May Day', 'মে দিবস', `${year}-05-01`, `${year}-05-01`, 'government', '#64748b'),
-  rangeHoliday('Victory Day', 'বিজয় দিবস', `${year}-12-16`, `${year}-12-16`, 'government', '#16a34a'),
-  rangeHoliday('Christmas Day', 'বড়দিন', `${year}-12-25`, `${year}-12-25`, 'religious', '#dc2626'),
+  rangeHoliday('Victory Day', 'বিজয় দিবস', `${year}-12-16`, `${year}-12-16`, 'government', '#16a34a'),
+  rangeHoliday('Christmas Day', 'বড়দিন', `${year}-12-25`, `${year}-12-25`, 'religious', '#dc2626'),
 ];
 const weekendHolidays = (year: number, weeklyDays: number[] = [], weeklyColor = '#64748b'): HolidaySeed[] => {
   const items: HolidaySeed[] = [];
@@ -68,6 +68,7 @@ const ensureBangladeshHolidays = async (institutionId: any, year: number, create
   return { created: upserted, skipped: false, weeklyDays: finalWeeklyDays, weeklyColor };
 };
 
+// GET / - List holidays for a year, auto-seed if needed
 router.get('/', authenticate, async (req: any, res) => {
   try {
     const year = Number(req.query.year || new Date().getFullYear());
@@ -86,13 +87,15 @@ router.get('/', authenticate, async (req: any, res) => {
   }
 });
 
+// GET /check - Check if a date is a holiday (does NOT reseed)
+// FIX: Removed ensureBangladeshHolidays call. Previously this re-seeded using
+// SiteSetting weeklyDays (could be 3 days) on every attendance check, causing
+// Sunday holidays to appear even when only Fri+Sat were desired.
 router.get('/check', authenticate, async (req: any, res) => {
   try {
     const targetDate = req.query.date as string | undefined;
-    const year = targetDate ? parseDateOnly(targetDate).getFullYear() : new Date().getFullYear();
     const weeklyDays = await settingsWeeklyDays(req.user.institutionId);
     const weeklyColor = await settingsWeeklyColor(req.user.institutionId);
-    await ensureBangladeshHolidays(req.user.institutionId, year, req.user._id, true, weeklyDays, weeklyColor);
     const date = dateOnly(targetDate);
     const holiday = await Holiday.findOne({ institutionId: req.user.institutionId, isEnabled: { $ne: false }, isSchoolClosed: true, startDate: { $lte: endOfDate(targetDate) }, endDate: { $gte: date } }).lean();
     res.json({ isHoliday: !!holiday, holiday, weeklyDays, weeklyColor });
@@ -101,6 +104,7 @@ router.get('/check', authenticate, async (req: any, res) => {
   }
 });
 
+// POST /seed/bangladesh - Explicitly seed Bangladesh holidays (user action only)
 router.post('/seed/bangladesh', authenticate, async (req: any, res) => {
   try {
     if (!canManageHolidays(req.user.role)) return res.status(403).json({ message: 'Only Head/Assistant/Admin can seed holidays.' });

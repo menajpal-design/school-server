@@ -86,7 +86,7 @@ const applyInstitutionBrandingToSms = async (options: SMSOptions): Promise<SMSOp
     return forceOneCreditOptions({ ...options, message });
   } catch (error) { console.error('Failed to apply institution SMS branding:', error); return forceOneCreditOptions(options); }
 };
-const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId || isFreeSmsCategory(options.type, options.purpose)) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units); return Boolean(quota.allowed); };
+const ensureSmsQuota = async (options: SMSOptions) => { if (!options.institutionId || isFreeSmsCategory(options.type, options.purpose)) return true; const recipients = recipientsFor(options.to).filter(Boolean); const units = recipients.length; const quota = await canUseSms(options.institutionId, units, options.type, options.purpose); return Boolean(quota.allowed); };
 const buildChargeMeta = (options: SMSOptions, count = 1) => { const smsChargeRate = options.smsChargeRate ?? getSmsChargeRate(options.type, options.purpose); const smsChargeAmount = options.smsChargeAmount ?? getSmsChargeAmount(count, options.type, options.purpose); return { smsChargeRate, smsChargeAmount }; };
 const badKey = (value: string) => !value || value.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(value);
 const badUrl = (value: string) => !value || /your_|REPLACE|demo|placeholder|example|localhost|127\.0\.0\.1/i.test(value);
