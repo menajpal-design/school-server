@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
 import Institution from '../models/Institution';
@@ -8,8 +9,10 @@ import { activateBilling, getCurrentSmsBillingSummary } from '../services/billin
 import SmsTopup from '../models/SmsTopup';
 import { verifyGatewayPayment, isPaymentConfirmed } from '../services/paymentGateway';
 import { writeAuditLog } from '../services/auditService';
+import { deleteImageById, extractImageId, storeImage } from '../services/gridFsImageService';
 
 const router = express.Router();
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
 const stripeCurrency = process.env.STRIPE_CURRENCY || 'usd';
@@ -367,6 +370,55 @@ router.put('/profile', authenticate, async (req, res) => {
     res.json({ institution, message: 'Institution profile updated' });
   } catch (error) {
     res.status(500).json({ message: 'Failed to update institution profile', error });
+  }
+});
+
+router.post('/upload-image', authenticate, imageUpload.single('image'), async (req: any, res) => {
+  try {
+    const imageType = String(req.body?.imageType || '').trim();
+    const allowedTypes = new Set(['logo', 'seal', 'headSignature']);
+    if (!allowedTypes.has(imageType)) {
+      return res.status(400).json({ message: 'Invalid imageType. Use logo, seal or headSignature.' });
+    }
+
+    const image = await storeImage(req.file, {
+      category: 'institution',
+      imageType,
+      institutionId: String(req.user?.institutionId || ''),
+      uploadedBy: String(req.user?._id || req.user?.id || ''),
+    });
+
+    const institution = await Institution.findByIdAndUpdate(
+      req.user.institutionId,
+      { $set: { [imageType]: image.url } },
+      { new: true }
+    );
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+
+    return res.status(201).json({ ...image, institution, imageType });
+  } catch (error: any) {
+    return res.status(error?.statusCode || 500).json({ message: error?.message || 'Failed to upload institution image', error });
+  }
+});
+
+router.delete('/delete-image', authenticate, async (req: any, res) => {
+  try {
+    const imageType = String(req.query?.imageType || '').trim();
+    const allowedTypes = new Set(['logo', 'seal', 'headSignature']);
+    if (!allowedTypes.has(imageType)) {
+      return res.status(400).json({ message: 'Invalid imageType. Use logo, seal or headSignature.' });
+    }
+
+    const institution: any = await Institution.findById(req.user.institutionId);
+    if (!institution) return res.status(404).json({ message: 'Institution not found' });
+    const previousId = extractImageId(institution[imageType]);
+    institution[imageType] = undefined;
+    await institution.save();
+    if (previousId) await deleteImageById(previousId).catch(() => false);
+
+    return res.json({ deleted: Boolean(previousId), institution, imageType });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to delete institution image', error });
   }
 });
 
