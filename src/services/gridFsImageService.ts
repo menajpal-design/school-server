@@ -1,7 +1,8 @@
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MIN_IMAGE_SIZE = 50 * 1024;
+const MAX_IMAGE_SIZE = 500 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
 export type StoredImage = {
@@ -39,7 +40,12 @@ export async function storeImage(
     throw err;
   }
   if (file.size > MAX_IMAGE_SIZE) {
-    const err: any = new Error('Image must be 5MB or smaller.');
+    const err: any = new Error('Image must be 500KB or smaller.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (file.size < MIN_IMAGE_SIZE) {
+    const err: any = new Error('Image must be at least 50KB.');
     err.statusCode = 400;
     throw err;
   }
