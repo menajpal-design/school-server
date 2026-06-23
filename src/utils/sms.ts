@@ -31,7 +31,19 @@ const DEFAULT_MAIN_DOMAIN = process.env.MAIN_DOMAIN || process.env.NEXT_PUBLIC_M
 const recipientsFor = (to: string | string[]) => Array.isArray(to) ? to : [to];
 const normalizePhone = (value: any) => { const digits = String(value || '').replace(/\D/g, '').replace(/^88/, ''); return digits && !digits.startsWith('0') ? `0${digits}` : digits; };
 const asciiOnly = (value: any) => String(value || '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
-const compactUrl = (value: string) => String(value || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+const compactUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withProtocol);
+    const host = url.hostname.replace(/^www\./i, '');
+    const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+    return `${url.protocol}//${host}${path}`;
+  } catch (_) {
+    return withProtocol.replace(/\/$/, '');
+  }
+};
 
 const parseGatewayResponse = (text: string) => {
   const raw = String(text || '').trim();
@@ -41,7 +53,22 @@ const parseGatewayResponse = (text: string) => {
 };
 const cleanOrigin = (value?: string) => { const raw = String(value || '').trim(); if (!raw || /localhost|127\.0\.0\.1/i.test(raw)) return ''; const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`; try { const url = new URL(withProtocol); return `${url.protocol}//${url.host}`.replace(/\/$/, ''); } catch (_) { return ''; } };
 const frontendOriginFromEnv = () => cleanOrigin(process.env.FRONTEND_URL || process.env.CLIENT_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || '');
-const rootDomainFromEnv = () => { const origin = frontendOriginFromEnv(); if (origin) { try { return new URL(origin).hostname.replace(/^www\./i, ''); } catch (_) { return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, ''); } } return DEFAULT_MAIN_DOMAIN.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, ''); };
+const normalizeRootDomain = (value: string) => {
+  const host = String(value || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/.*$/, '').toLowerCase();
+  if (host.endsWith('.easyschool.live') || host === 'easyschool.live') return 'easyschool.live';
+  const parts = host.split('.').filter(Boolean);
+  return parts.length > 2 ? parts.slice(-2).join('.') : host;
+};
+const rootDomainFromEnv = () => {
+  const explicitRoot = process.env.MAIN_DOMAIN || process.env.NEXT_PUBLIC_MAIN_DOMAIN || process.env.PUBLIC_ROOT_DOMAIN;
+  if (explicitRoot) return normalizeRootDomain(explicitRoot);
+  const origin = frontendOriginFromEnv();
+  if (origin) {
+    try { return normalizeRootDomain(new URL(origin).hostname); }
+    catch (_) { return normalizeRootDomain(DEFAULT_MAIN_DOMAIN); }
+  }
+  return normalizeRootDomain(DEFAULT_MAIN_DOMAIN);
+};
 const buildInstitutionLoginUrl = (institution: any) => {
   const subdomain = String(institution?.subdomain || '').trim().toLowerCase();
   if (subdomain) return `https://${subdomain}.${rootDomainFromEnv()}/login`;
