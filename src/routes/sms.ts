@@ -185,4 +185,33 @@ router.post('/logs', authorize('head', 'assistant_head', 'admin', 'super_admin')
   }
 });
 
+router.post('/send-custom', authorize('head', 'assistant_head', 'admin', 'super_admin'), async (req, res) => {
+  try {
+    const institutionId = req.user.institutionId || req.body.institutionId;
+    if (!institutionId) return res.status(400).json({ message: 'Institution ID is required.' });
+    const phone = String(req.body.phone || '').trim();
+    const message = String(req.body.message || '').trim();
+    if (!phone || !message) {
+      return res.status(400).json({ message: 'Phone number and message are required.' });
+    }
+    const result = await sendSMS({
+      to: phone,
+      message,
+      institutionId,
+      recipientName: req.body.recipientName || 'Custom Recipient',
+      recipientPhone: phone,
+      recipientType: req.body.recipientType || 'other',
+      type: 'notification',
+      purpose: 'custom_sms'
+    });
+    if (result) {
+      res.json({ success: true, message: 'Custom SMS sent successfully.' });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to send Custom SMS. Check SMS gateway/balance.' });
+    }
+  } catch (error: any) {
+    res.status(500).json({ message: 'Failed to send custom SMS', error: error?.message || error });
+  }
+});
+
 export default router;
