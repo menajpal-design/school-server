@@ -22,6 +22,10 @@ const isMonthlyParentSms = (type?: string, purpose?: string): boolean => {
   const p = String(purpose || '').toLowerCase();
   return t === 'monthly_parent' || p.includes('monthly_parent') || p.includes('monthly_guardian') || p.includes('monthly_summary');
 };
+const isSmsBalanceSms = (purpose?: string): boolean => {
+  const p = String(purpose || '').toLowerCase();
+  return p.includes('sms_balance') || p.includes('balance_sms');
+};
 
 export const nextSubscriptionEnd = (cycle: 'monthly' | 'yearly' = 'monthly', from = new Date()) => {
   const date = new Date(from);
@@ -113,9 +117,9 @@ export const canUseSms = async (institutionId: any, units = 1, type?: string, pu
   const billing: any = (institution as any).billing || {};
 
   // Monthly auto SMS → requires purchased SMS package (smsBalance)
-  if (isMonthlyParentSms(type, purpose)) {
+  if (isMonthlyParentSms(type, purpose) || isSmsBalanceSms(purpose)) {
     const smsBalance = Number(billing.smsBalance ?? 0);
-    if (smsBalance < units) return { allowed: false, balance: smsBalance, message: 'SMS balance exhausted. Please buy an SMS package for monthly auto SMS.' };
+    if (smsBalance < units) return { allowed: false, balance: smsBalance, message: 'SMS balance exhausted. Please buy an SMS package.' };
     return { allowed: true, balance: smsBalance, packageBased: true };
   }
 
@@ -160,7 +164,7 @@ export const recordSmsCharge = async (institutionId: any, count = 1, type?: stri
   const smsBalance = Number(billing.smsBalance ?? 0);
 
   // Monthly parent SMS → deduct from purchased package (smsBalance) only
-  if (isMonthlyParentSms(type, purpose)) {
+  if (isMonthlyParentSms(type, purpose) || isSmsBalanceSms(purpose)) {
     if (smsBalance < count) return { count, amount, rate, category, start, end, insufficient: true };
     await Institution.findByIdAndUpdate(institutionId, { $inc: { 'billing.smsBalance': -count, 'billing.smsUsed': count }, $set: { 'billing.smsPeriodStart': start, 'billing.smsPeriodEnd': end } });
     return { count, amount, rate, category, start, end, insufficient: false, packageBased: true };

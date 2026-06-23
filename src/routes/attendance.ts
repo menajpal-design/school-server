@@ -12,7 +12,7 @@ import Class from '../models/Class';
 import Section from '../models/Section';
 import User from '../models/User';
 import SmsLog from '../models/SmsLog';
-import { sendAttendanceDailySMS, sendAttendanceReminderSMS, sendAttendanceWeeklySMS } from '../utils/sms';
+import { sendAttendanceDailySMS, sendAttendanceReminderSMS, sendAttendanceWeeklySMS, sendSMS } from '../utils/sms';
 import { resolveActorScope } from '../services/permissionPolicy';
 import { getAttendanceSmsMode } from '../services/billingService';
 
@@ -414,8 +414,8 @@ router.post('/scan-id-card', authenticate, canScanIDCard(), async (req, res) => 
 
 router.post('/present-sms', authenticate, canManageAcademic(), async (req: any, res) => {
   try {
-    const mode = await getAttendanceSmsMode(req.user.institutionId);
-    if (mode === 'none') return res.status(403).json({ message: 'Present SMS plan is not active for this school.' });
+    const attendanceMode = await getAttendanceSmsMode(req.user.institutionId);
+    const mode: 'daily' | 'weekly' | 'balance' = attendanceMode === 'none' ? 'balance' : attendanceMode;
 
     const dateValue = toDateValue(req.body.date);
     const { start, end } = dayRange(req.body.date);
@@ -468,7 +468,20 @@ router.post('/present-sms', authenticate, canManageAcademic(), async (req: any, 
           results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed' });
           continue;
         }
-        const ok = await sendAttendanceDailySMS(student.guardianPhone, studentName, 'present', req.user.institutionId);
+        const ok = mode === 'balance'
+          ? await sendSMS({
+              to: student.guardianPhone,
+              message: `${studentName} attendance: present`,
+              institutionId: req.user.institutionId,
+              recipientName: studentName,
+              recipientPhone: student.guardianPhone,
+              recipientId: student._id,
+              recipientType: 'guardian',
+              type: 'notification',
+              purpose: 'sms_balance_guardian',
+              studentId: student._id,
+            })
+          : await sendAttendanceDailySMS(student.guardianPhone, studentName, 'present', req.user.institutionId);
         ok ? sent += 1 : failed += 1;
         results.push({ studentId: student._id, studentName, guardianPhone: student.guardianPhone, status: ok ? 'sent' : 'failed' });
       } catch (error: any) {
