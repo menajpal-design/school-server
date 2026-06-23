@@ -162,6 +162,7 @@ app.use('/api/sms', smsRoutes);
 app.use('/api/sms-monitoring', smsMonitoringRoutes);
 app.use('/api/library', libraryRoutes);
 app.use('/api/site-settings', siteSettingsRoutes);
+app.use('/api/settings', siteSettingsRoutes);
 app.use('/api/dev-test', devTestRoutes);
 app.use('/api/storage-sync', storageSyncRoutes);
 app.get('/health', async (_req, res) => { const mongoose = await import('mongoose'); const dbState = mongoose.default.connection.readyState; res.json({ status: 'OK', message: 'easy school Server is running', dbReadyState: dbState, dbConnected: dbState === 1, corsOrigins: getCorsConfig().envOrigins.size }); });
