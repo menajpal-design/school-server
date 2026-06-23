@@ -157,7 +157,6 @@ export const login = async (req: Request, res: Response) => {
     const loginResult = tenantResult || await loginLookup();
     const { user, isMatch } = (loginResult || {}) as any;
     if (!user || !isMatch) return res.status(400).json({ message: 'Invalid credentials', errors: [user ? 'Incorrect password' : 'User not found'] });
-    if (!getRequestSubdomain(req)) { const allowedRoles = ['head', 'super_admin', 'superadmin', 'admin', 'platform_admin']; if (!allowedRoles.includes(user.role)) return res.status(403).json({ message: 'লগইন করতে আপনার স্কুলের সাবডোমেনে ভিজিট করুন।' }); }
     void runWithTenantStorage(tenantContext, async () => User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } }).maxTimeMS(3000).exec()).catch(() => undefined);
     if (tenantContext) await syncUserToTenantStorage(tenantContext, user);
     const token = (jwt as any).sign({ id: user._id, institutionId: (user.institutionId as any)?._id || user.institutionId || institutionId } as any, jwtSecret() as any, { expiresIn: accessTokenExpiry });
