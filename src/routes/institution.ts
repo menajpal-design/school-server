@@ -25,7 +25,7 @@ const getStripeClient = () => {
 type StripeCheckoutSession = any;
 
 const buildBilling = (input: any = {}, current: any = {}) => {
-  const planCode = input.planCode || current.planCode || 'students_100';
+  const planCode = input.planCode || current.planCode || 'students_100_free';
   const billingCycle = input.billingCycle || current.billingCycle || 'monthly';
   const useEasySchoolStorage = input.useEasySchoolStorage ?? current.useEasySchoolStorage ?? true;
   const smsChargeAmount = Number(input.smsChargeAmount ?? current.smsChargeAmount ?? 0);
@@ -126,7 +126,7 @@ const isPopupVerifiedPayment = (input: any = {}, dueAmount = 0) => {
 };
 
 const buildStripeCheckoutBilling = (institution: any, session: StripeCheckoutSession, metadata: Record<string, any> = {}) => {
-  const planCode = metadata.planCode || institution?.billing?.planCode || 'students_100';
+  const planCode = metadata.planCode || institution?.billing?.planCode || 'students_100_free';
   const billingCycle = metadata.billingCycle || institution?.billing?.billingCycle || 'monthly';
   const useEasySchoolStorage = metadata.useEasySchoolStorage === undefined
     ? institution?.billing?.useEasySchoolStorage !== false
@@ -161,7 +161,7 @@ router.post('/billing/stripe/checkout', authenticate, async (req, res) => {
       return res.status(503).json({ message: 'Stripe is not configured. Add STRIPE_SECRET_KEY to enable Stripe checkout.' });
     }
 
-    const planCode = String(req.body?.planCode || institution.billing?.planCode || 'students_100');
+    const planCode = String(req.body?.planCode || institution.billing?.planCode || 'students_100_free');
     const billingCycle = req.body?.billingCycle === 'yearly' ? 'yearly' : 'monthly';
     const useEasySchoolStorage = req.body?.useEasySchoolStorage !== undefined
       ? Boolean(req.body.useEasySchoolStorage)

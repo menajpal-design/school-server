@@ -99,8 +99,8 @@ const InstitutionSchema: Schema = new Schema({
   headSignature: { type: String },
   headId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   billing: {
-    planCode: { type: String, default: 'students_100' },
-    planName: { type: String, default: '100 Students' },
+    planCode: { type: String, default: 'students_100_free' },
+    planName: { type: String, default: '100 Students (Free Lifetime)' },
     studentLimit: { type: Number, default: 100 },
     monthlyPrice: { type: Number, default: 0 },
     yearlyPrice: { type: Number, default: 0 },

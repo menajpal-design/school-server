@@ -1,14 +1,13 @@
 // School subscription plans and SMS package configuration
 // SMS minimum price: 0.50 BDT per SMS (no bulk discount below this floor)
-// School subscription plans and SMS package configuration
-// SMS minimum price: 0.50 BDT per SMS (no bulk discount below this floor)
 // Student plan includes free SMS equal to student count each billing cycle
 
 export type BillingCycle = 'monthly' | 'yearly';
 export type AttendanceSmsMode = 'none' | 'daily' | 'weekly';
 
 const BASE_STUDENT_PLANS = [
-  { code: 'students_100', name: '100 Students', studentLimit: 100, monthlyPrice: 0, yearlyPrice: 0, monthlySmsLimit: 100 },
+  { code: 'students_100_free', name: '100 Students (Free Lifetime)', studentLimit: 100, monthlyPrice: 0, yearlyPrice: 0, monthlySmsLimit: 100 },
+  { code: 'students_100', name: '100 Students', studentLimit: 100, monthlyPrice: 300, yearlyPrice: 3000, monthlySmsLimit: 100 },
   { code: 'students_200', name: '200 Students', studentLimit: 200, monthlyPrice: 500, yearlyPrice: 5000, monthlySmsLimit: 200 },
   { code: 'students_300', name: '300 Students', studentLimit: 300, monthlyPrice: 600, yearlyPrice: 6000, monthlySmsLimit: 300 },
   { code: 'students_500', name: '500 Students', studentLimit: 500, monthlyPrice: 1000, yearlyPrice: 9000, monthlySmsLimit: 500 },
@@ -22,7 +21,7 @@ const ATTENDANCE_SMS_ADDONS = [
 ];
 
 export const SCHOOL_PLANS = BASE_STUDENT_PLANS.flatMap((base) => ATTENDANCE_SMS_ADDONS.map((addon) => {
-  const monthlyAddon = base.code === 'students_100' ? 0 : base.studentLimit * addon.attendanceSmsMonthlyRatePerStudent;
+  const monthlyAddon = base.code === 'students_100_free' ? 0 : base.studentLimit * addon.attendanceSmsMonthlyRatePerStudent;
   return {
     ...base,
     code: `${base.code}${addon.suffix}`,

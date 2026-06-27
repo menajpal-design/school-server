@@ -41,7 +41,7 @@ const expireInstitutionSnapshotIfNeeded = (institution: any) => {
   if (!institution) return institution;
   const billing = institution?.billing || {};
 
-  const isFree = Number(billing.dueAmount || 0) === 0 && Number(billing.monthlyPrice || 0) === 0 && Number(billing.yearlyPrice || 0) === 0;
+  const isFree = billing.planCode === 'students_100_free' || (Number(billing.dueAmount || 0) === 0 && Number(billing.monthlyPrice || 0) === 0 && Number(billing.yearlyPrice || 0) === 0);
   if (isFree) return institution;
 
   // If explicitly expired/cancelled and NOT manually kept active by admin → block
@@ -93,6 +93,48 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     req.user = { ...user, id: String((user as any)._id), institutionId: institution?._id || (user as any).institutionId, institution };
     const tenantContext = resolveTenantStorageContext(institution);
     await syncUserToTenantStorage(tenantContext, req.user);
+
+    // Plan-based feature restrictions for Free Lifetime plan
+    const billing = institution?.billing || {};
+    const isFreePlan = billing.planCode === 'students_100_free';
+    if (isFreePlan) {
+      const userRole = String(req.user?.role || '').toLowerCase();
+      const isPlatformAdmin = userRole === 'admin' || userRole === 'super_admin';
+      if (!isPlatformAdmin) {
+        const blockedPrefixes = [
+          '/api/finance',
+          '/api/payroll',
+          '/api/syllabus',
+          '/api/class-routines',
+          '/api/homework',
+          '/api/question-bank',
+          '/api/online-classes',
+          '/api/library',
+          '/api/leaves',
+          '/api/holidays',
+          '/api/admissions',
+          '/api/documents',
+          '/api/notices',
+          '/api/committee',
+          '/api/promotions',
+          '/api/id-cards',
+          '/api/backup',
+          '/api/reports',
+          '/api/sms',
+          '/api/sms-monitoring',
+          '/api/messages'
+        ];
+        const path = req.originalUrl.split('?')[0];
+        const isBlocked = blockedPrefixes.some(prefix => path.startsWith(prefix));
+        if (isBlocked) {
+          return res.status(403).json({
+            message: 'This feature is not available on the Free Lifetime plan. Please upgrade to a paid plan to access this feature.',
+            code: 'plan_restricted'
+          });
+        }
+      }
+    }
+
     next();
   } catch (error: any) { return res.status(401).json({ message: 'Invalid token.' }); }
 };
