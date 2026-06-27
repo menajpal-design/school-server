@@ -118,7 +118,7 @@ const buildChargeMeta = (options: SMSOptions, count = 1) => { const smsChargeRat
 const badKey = (value: string) => !value || value.length < 8 || /your_|REPLACE|demo|test_key|placeholder|example/i.test(value);
 const badUrl = (value: string) => !value || /your_|REPLACE|demo|placeholder|example|localhost|127\.0\.0\.1/i.test(value);
 const resolveSmsConfig = async (options: SMSOptions) => {
-  const institution = options.institutionId ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit').lean() : null;
+  const institution = options.institutionId ? await Institution.findById(options.institutionId).select('settings.smsEnabled settings.smsProvider settings.smsApiUrl settings.smsApiKey billing.smsBalance billing.smsUsed billing.monthlySmsLimit billing.planCode').lean() : null;
   const institutionSettings: any = (institution as any)?.settings || {};
   const globalEnabled = process.env.SMS_ENABLED !== 'false';
   const envProvider = String(process.env.SMS_PROVIDER || SMS_PROVIDER || 'smslayer').toLowerCase();
@@ -147,6 +147,11 @@ const logSmsAttempt = async (options: SMSOptions, status: 'sent' | 'failed' | 'p
 const buildSmsLayerUrl = (smsConfig: Awaited<ReturnType<typeof resolveSmsConfig>>, phoneNumber: string, message: string) => { const url = new URL(smsConfig.apiUrl || DEFAULT_SMS_API_URL); url.searchParams.set('key', smsConfig.apiKey); url.searchParams.set('number', phoneNumber); url.searchParams.set('msg', oneCreditMessage(message)); return url; };
 const sendViaSmsLayer = async (rawOptions: SMSOptions): Promise<boolean> => {
   const options = await applyInstitutionBrandingToSms(rawOptions); const smsConfig = await resolveSmsConfig(options);
+  const billing = smsConfig.institution?.billing || {};
+  if (billing.planCode === 'students_100_free') {
+    await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS sending is not allowed on the Free Lifetime plan', undefined, 1);
+    return false;
+  }
   if (!smsConfig.enabled) { await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS disabled for this institution', undefined, 1); return false; }
   if (smsConfig.provider !== 'anoncify' && smsConfig.provider !== 'smslayer') { await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', `Unsupported SMS provider: ${smsConfig.provider}`); return false; }
   if (!smsConfig.apiKey) { await logSmsAttempt({ ...options, smsProvider: smsConfig.provider }, 'failed', 'SMS API key not configured or placeholder key used', undefined, 1); return false; }
