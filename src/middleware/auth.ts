@@ -102,27 +102,14 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       const isPlatformAdmin = userRole === 'admin' || userRole === 'super_admin';
       if (!isPlatformAdmin) {
         const blockedPrefixes = [
-          '/api/finance',
-          '/api/payroll',
-          '/api/syllabus',
-          '/api/class-routines',
-          '/api/homework',
-          '/api/question-bank',
-          '/api/online-classes',
-          '/api/library',
-          '/api/leaves',
-          '/api/holidays',
-          '/api/admissions',
-          '/api/documents',
-          '/api/notices',
-          '/api/committee',
-          '/api/promotions',
           '/api/id-cards',
-          '/api/backup',
-          '/api/reports',
+          '/api/documents/admit-cards',
           '/api/sms',
           '/api/sms-monitoring',
-          '/api/messages'
+          '/api/messages',
+          '/api/question-bank/ai-manage',
+          '/api/question-generate',
+          '/api/ai-manage'
         ];
         const path = req.originalUrl.split('?')[0];
         const isBlocked = blockedPrefixes.some(prefix => path.startsWith(prefix));
