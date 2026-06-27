@@ -39,9 +39,10 @@ const buildBilling = (input: any = {}, current: any = {}) => {
   const smsChargeAmount = Number(input.smsChargeAmount ?? current.smsChargeAmount ?? 0);
   const { plan, baseAmount, storageAmount } = calculatePlanDue(input.planCode || current.planCode, billingCycle, useEasySchoolStorage);
   const total = baseAmount + storageAmount + smsChargeAmount;
-  const receivedAmount = Number(input.receivedAmount ?? current.receivedAmount ?? 0);
-  const isPaymentReceived = input.isPaymentReceived ?? current.isPaymentReceived ?? receivedAmount > 0;
-  const billingStatus = input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : current.billingStatus || 'pending');
+  const isFree = total === 0;
+  const receivedAmount = isFree ? 0 : Number(input.receivedAmount ?? current.receivedAmount ?? 0);
+  const isPaymentReceived = isFree ? true : (input.isPaymentReceived ?? current.isPaymentReceived ?? receivedAmount > 0);
+  const billingStatus = isFree ? 'active' : (input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : current.billingStatus || 'pending'));
 
   const next = {
     ...current,

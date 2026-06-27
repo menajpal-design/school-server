@@ -92,6 +92,8 @@ export const activateBilling = (billing: any, at = new Date()) => {
 
 export const isSubscriptionExpired = (institution: any) => {
   const billing = institution?.billing || {};
+  const isFree = Number(billing.dueAmount || 0) === 0 && Number(billing.monthlyPrice || 0) === 0 && Number(billing.yearlyPrice || 0) === 0;
+  if (isFree) return false;
   const expiresAt = billing?.subscriptionExpiresAt || billing?.planExpiry || billing?.validUntil || billing?.billingPeriodEnd || billing?.expiresAt;
   if (billing?.billingStatus && billing.billingStatus !== 'active' && billing.billingStatus !== 'trial') return true;
   const dueAmount = Number(billing?.dueAmount || 0);

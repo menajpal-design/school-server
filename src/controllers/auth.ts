@@ -10,6 +10,7 @@ import Staff from '../models/Staff';
 import Parent from '../models/Parent';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
 import { calculatePlanDue } from '../config/plans';
+import { nextSubscriptionEnd } from '../services/billingService';
 import { generateUsername } from '../utils/credentials';
 import { randomBytes, createHash } from 'crypto';
 
@@ -80,6 +81,7 @@ export const register = async (req: Request, res: Response) => {
       const selected = calculatePlanDue(req.body.planCode, billingCycle, true, 0);
       const paymentAmount = Number(req.body.receivedAmount || 0);
       const hasPayment = paymentAmount > 0 || Boolean(req.body.paymentTrxId);
+      const isFreePlan = selected.total === 0;
 
       institution = await Institution.create({
         name: req.body.institutionName || `${name}'s Institution`,
@@ -88,6 +90,7 @@ export const register = async (req: Request, res: Response) => {
         phone: phone || 'Not provided',
         email,
         headId: userId,
+        isActive: isFreePlan ? true : false,
         billing: {
           planCode: selected.plan.code,
           planName: selected.plan.name,
@@ -105,15 +108,21 @@ export const register = async (req: Request, res: Response) => {
           baseDueAmount: selected.baseAmount + selected.storageAmount,
           storageAmount: selected.storageAmount,
           dueAmount: selected.total,
-          billingStatus: 'pending',
-          isPaymentReceived: hasPayment,
-          receivedAmount: paymentAmount,
+          billingStatus: isFreePlan ? 'active' : 'pending',
+          isPaymentReceived: isFreePlan ? true : hasPayment,
+          receivedAmount: isFreePlan ? 0 : paymentAmount,
           paymentGateway: req.body.paymentGateway || 'bkash',
           paymentTrxId: req.body.paymentTrxId,
           paymentSenderNumber: req.body.paymentSenderNumber,
           smsChargeAmount: 0,
           smsChargeBreakdown: {},
-          smsBalance: 0,
+          smsBalance: selected.plan.monthlySmsLimit || selected.plan.studentLimit || 100,
+          activatedAt: isFreePlan ? new Date() : undefined,
+          subscriptionStartedAt: isFreePlan ? new Date() : undefined,
+          subscriptionExpiresAt: isFreePlan ? nextSubscriptionEnd(billingCycle, new Date()) : undefined,
+          planExpiry: isFreePlan ? nextSubscriptionEnd(billingCycle, new Date()) : undefined,
+          validUntil: isFreePlan ? nextSubscriptionEnd(billingCycle, new Date()) : undefined,
+          billingPeriodEnd: isFreePlan ? nextSubscriptionEnd(billingCycle, new Date()) : undefined,
         },
         settings: {
           backupSettings: { frequency: 'weekly', location: 'local', collections: [] }

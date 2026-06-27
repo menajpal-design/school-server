@@ -41,6 +41,9 @@ const expireInstitutionSnapshotIfNeeded = (institution: any) => {
   if (!institution) return institution;
   const billing = institution?.billing || {};
 
+  const isFree = Number(billing.dueAmount || 0) === 0 && Number(billing.monthlyPrice || 0) === 0 && Number(billing.yearlyPrice || 0) === 0;
+  if (isFree) return institution;
+
   // If explicitly expired/cancelled and NOT manually kept active by admin → block
   if (billing.billingStatus === 'expired') return institution;
   if (billing.billingStatus === 'cancelled') {

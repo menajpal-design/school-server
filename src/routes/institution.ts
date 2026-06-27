@@ -30,9 +30,10 @@ const buildBilling = (input: any = {}, current: any = {}) => {
   const useEasySchoolStorage = input.useEasySchoolStorage ?? current.useEasySchoolStorage ?? true;
   const smsChargeAmount = Number(input.smsChargeAmount ?? current.smsChargeAmount ?? 0);
   const { plan, baseAmount, storageAmount, total } = calculatePlanDue(planCode, billingCycle, useEasySchoolStorage, smsChargeAmount);
-  const isPaymentReceived = input.isPaymentReceived ?? current.isPaymentReceived ?? false;
-  const receivedAmount = Number(input.receivedAmount ?? current.receivedAmount ?? 0);
-  const billingStatus = input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : 'pending');
+  const isFree = total === 0;
+  const isPaymentReceived = isFree ? true : (input.isPaymentReceived ?? current.isPaymentReceived ?? false);
+  const receivedAmount = isFree ? 0 : Number(input.receivedAmount ?? current.receivedAmount ?? 0);
+  const billingStatus = isFree ? 'active' : (input.billingStatus || (isPaymentReceived && receivedAmount >= total ? 'active' : 'pending'));
 
   return {
     ...current,
@@ -536,15 +537,23 @@ router.get('/billing/subscription', authenticate, async (req, res) => {
   }
 });
 
-// Change plan (updates billing to new plan and marks pending)
+// Change plan (updates billing to new plan and marks pending or activates free plan immediately)
 router.post('/billing/change-plan', authenticate, async (req, res) => {
   try {
     const institution = await Institution.findById(req.user.institutionId);
     if (!institution) return res.status(404).json({ message: 'Institution not found' });
     const currentBilling = (institution as any).billing?.toObject?.() || (institution as any).billing || {};
     const newBilling = buildBilling({ planCode: req.body.planCode, billingCycle: req.body.billingCycle, useEasySchoolStorage: req.body.useEasySchoolStorage }, currentBilling);
-    newBilling.billingStatus = 'pending';
-    institution.billing = newBilling as any;
+    
+    if (newBilling.dueAmount === 0) {
+      newBilling.billingStatus = 'active';
+      institution.billing = activateBilling(newBilling, new Date()) as any;
+      institution.isActive = true;
+    } else {
+      newBilling.billingStatus = 'pending';
+      institution.billing = newBilling as any;
+    }
+    
     await institution.save();
     await writeAuditLog(req, 'update', 'billing', institution._id, newBilling, currentBilling).catch(() => undefined);
     res.json({ message: 'Plan change requested', billing: institution.billing });

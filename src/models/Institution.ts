@@ -102,21 +102,21 @@ const InstitutionSchema: Schema = new Schema({
     planCode: { type: String, default: 'students_100' },
     planName: { type: String, default: '100 Students' },
     studentLimit: { type: Number, default: 100 },
-    monthlyPrice: { type: Number, default: 300 },
-    yearlyPrice: { type: Number, default: 3000 },
-    baseDueAmount: { type: Number, default: 400 },
+    monthlyPrice: { type: Number, default: 0 },
+    yearlyPrice: { type: Number, default: 0 },
+    baseDueAmount: { type: Number, default: 0 },
     monthlySmsLimit: { type: Number, default: 100 },
     attendanceSmsMode: { type: String, enum: ['none', 'daily', 'weekly'], default: 'none' },
     attendanceSmsMonthlyRatePerStudent: { type: Number, default: 0 },
     attendanceSmsMonthlyAmount: { type: Number, default: 0 },
-    yearlyDiscountPercent: { type: Number, default: 17 },
+    yearlyDiscountPercent: { type: Number, default: 0 },
     billingCycle: { type: String, enum: ['monthly', 'yearly'], default: 'monthly' },
     useEasySchoolStorage: { type: Boolean, default: true },
     storageMonthlyPrice: { type: Number, default: 100 },
-    storageAmount: { type: Number, default: 100 },
-    dueAmount: { type: Number, default: 400 },
-    billingStatus: { type: String, enum: ['pending', 'active', 'trial', 'expired', 'cancelled'], default: 'pending' },
-    isPaymentReceived: { type: Boolean, default: false },
+    storageAmount: { type: Number, default: 0 },
+    dueAmount: { type: Number, default: 0 },
+    billingStatus: { type: String, enum: ['pending', 'active', 'trial', 'expired', 'cancelled'], default: 'active' },
+    isPaymentReceived: { type: Boolean, default: true },
     receivedAmount: { type: Number, default: 0 },
     receivedAt: { type: Date },
     receivedBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -163,7 +163,7 @@ const InstitutionSchema: Schema = new Schema({
       collections: [{ type: String }]
     }
   },
-  isActive: { type: Boolean, default: false }
+  isActive: { type: Boolean, default: true }
 }, {
   timestamps: true
 });
