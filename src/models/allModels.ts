@@ -19,6 +19,7 @@ import './Message';
 import './Notice';
 import './Notification';
 import './Parent';
+import './PageView';
 import './Payment';
 import './PromotionRecord';
 import './Result';
