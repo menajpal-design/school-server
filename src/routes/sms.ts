@@ -70,7 +70,7 @@ const buildResultSms = (group: any) => {
   return `${name} ${examName}: ${group.obtained}/${group.totalMarks}, ${percent}%, Grade ${grade}, ${status}.`;
 };
 
-router.get('/head/monthly', authorize('head', 'assistant_head'), async (req, res) => {
+router.get('/head/monthly', authorize('head', 'assistant_head', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { start, end, label } = getMonthRange(String(req.query.month || ''));
     const institutionId = req.user.institutionId;
