@@ -8,6 +8,7 @@ import Student from '../models/Student';
 import Teacher from '../models/Teacher';
 import Staff from '../models/Staff';
 import Parent from '../models/Parent';
+import LoginLog from '../models/LoginLog';
 import { runWithTenantStorage, resolveTenantStorageContext } from '../config/tenantStorage';
 import { calculatePlanDue } from '../config/plans';
 import { nextSubscriptionEnd } from '../services/billingService';
@@ -174,6 +175,21 @@ export const login = async (req: Request, res: Response) => {
     const refreshExpiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
     await User.updateOne({ _id: user._id }, { $push: { refreshTokens: { tokenHash: refreshHash, expiresAt: refreshExpiresAt } } }).maxTimeMS(3000).exec().catch(() => undefined);
     const responseUser = { id: user._id, name: user.name, username: user.username, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar, isActive: user.isActive, permissions: user.permissions || [], institutionId: (user.institutionId as any)?._id || user.institutionId, institution: serializeInstitution(user.institutionId) };
+    // Save login log (fire-and-forget)
+    const resolvedInstitutionId = (user.institutionId as any)?._id || user.institutionId || institutionId;
+    if (resolvedInstitutionId) {
+      LoginLog.create({
+        userId: user._id,
+        institutionId: resolvedInstitutionId,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        ip: req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+        loginAt: new Date(),
+      }).catch(() => undefined);
+    }
     res.cookie(authCookieName, token, cookieOptions(0)); res.cookie(refreshCookieName, newRefreshToken, cookieOptions(refreshTokenDays));
     res.json(buildAuthPayload('Login successful', token, responseUser));
   } catch (error) { console.error('Login error:', error); res.status(500).json({ message: 'Server error', error: String(error) }); }
