@@ -173,6 +173,52 @@ router.get('/admin/usage', authorize('admin', 'super_admin'), async (req, res) =
   }
 });
 
+router.post('/admin/send-previous-month', authorize('admin', 'super_admin'), async (req, res) => {
+  try {
+    const now = new Date();
+    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonth = prevDate.getMonth() + 1;
+    const prevYear = prevDate.getFullYear();
+
+    const institutions = await Institution.find({
+      isActive: true,
+      'billing.planCode': { $ne: 'students_100_free' },
+      'settings.smsEnabled': { $ne: false },
+    });
+
+    let processedCount = 0;
+    let totalSent = 0;
+    let totalFailed = 0;
+    let totalSkipped = 0;
+
+    for (const inst of institutions) {
+      try {
+        const summary = await sendMonthlyGuardianSummarySMS({
+          institutionId: String(inst._id),
+          month: prevMonth,
+          year: prevYear,
+        });
+        processedCount += 1;
+        totalSent += summary.sent;
+        totalFailed += summary.failed;
+        totalSkipped += summary.skipped;
+      } catch (err) {
+        console.error(`Admin triggered monthly SMS failed for school ${inst.name}:`, err);
+      }
+    }
+
+    res.json({
+      message: `Successfully processed ${processedCount} schools. Total Sent: ${totalSent}, Failed: ${totalFailed}, Skipped: ${totalSkipped}.`,
+      processedCount,
+      totalSent,
+      totalFailed,
+      totalSkipped,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to trigger previous month SMS', error: String(error) });
+  }
+});
+
 router.post('/logs', authorize('head', 'assistant_head', 'admin', 'super_admin'), async (req, res) => {
   try {
     const institutionId = req.user.institutionId || req.body.institutionId;
