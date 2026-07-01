@@ -6,6 +6,7 @@ import connectDB from './config/database';
 import app from './app';
 import * as Sentry from '@sentry/node';
 import logger from './utils/logger';
+import { startScheduler } from './services/scheduler';
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -35,6 +36,9 @@ const server = app.listen(PORT, () => {
   logger.info(`🚀 easy school Server running on port ${PORT}`);
   logger.info(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
   logger.info(`📲 Mobile URL: ${process.env.MOBILE_URL || 'http://localhost:8081'}`);
+  
+  // Start the automated SMS scheduler
+  startScheduler();
 });
 
 // Handle server errors

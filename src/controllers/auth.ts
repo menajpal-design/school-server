@@ -13,6 +13,7 @@ import { runWithTenantStorage, resolveTenantStorageContext } from '../config/ten
 import { calculatePlanDue } from '../config/plans';
 import { nextSubscriptionEnd } from '../services/billingService';
 import { generateUsername } from '../utils/credentials';
+import { sendSMS } from '../utils/sms';
 import { randomBytes, createHash } from 'crypto';
 
 const authCookieName = process.env.AUTH_COOKIE_NAME || 'easy_school_token';
@@ -130,6 +131,16 @@ export const register = async (req: Request, res: Response) => {
         }
       });
       institutionId = institution._id;
+      
+      // Auto SMS notification to admin on new school registration
+      try {
+        await sendSMS({
+          to: '01790071328',
+          message: `Easy School: New school registered! Name: ${institution.name}, Phone: ${phone || 'N/A'}, Plan: ${institution.billing?.planName || 'Free'}.`,
+        });
+      } catch (smsError) {
+        console.error('Failed to send admin registration SMS:', smsError);
+      }
     }
     const tenantContext = institution ? resolveTenantStorageContext(institution) : null;
     const user = new User({ _id: userId, name, username: await generateUsername(name, 'head'), email, password: hashedPassword, role, phone, institutionId });

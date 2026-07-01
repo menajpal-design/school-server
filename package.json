@@ -13,6 +13,7 @@
     "seed:quick": "npm run build && node dist/scripts/quickSeed.js",
     "seed:complete": "npm run build && node dist/scripts/seedComplete.js",
     "monthly-sms": "npm run build && node dist/scripts/sendMonthlyGuardianSms.js",
+    "send-previous-sms-now": "npm run build && node dist/scripts/sendPreviousMonthSmsNow.js",
     "migrate:subdomains": "npx ts-node src/scripts/migrateAddSubdomains.ts",
     "smoke": "npm run build && node dist/scripts/smokeTest.js",
     "smoke:dev": "npx ts-node src/scripts/smokeTest.ts"

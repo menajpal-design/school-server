@@ -33,8 +33,8 @@ export interface MonthlySummaryReport {
 }
 
 function getMonthRange(year: number, month: number) {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
   return { start, end };
 }
 
@@ -86,15 +86,22 @@ function getExamStats(results: any[]) {
   };
 }
 
-function buildMessage(studentName: string, rollNumber: string, monthLabel: string, attendanceDays: number, presentDays: number, resultSummary: string) {
-  // Bengali message for monthly parent summary
-  const baseMessage = `${studentName} (${rollNumber}) — ${monthLabel} এর সারসংক্ষেপ: উপস্থিতি ${presentDays}/${attendanceDays} দিন। ${resultSummary}`;
+function buildMessage(studentName: string, rollNumber: string, label: string, attendanceDays: number, presentDays: number, resultSummary: string) {
+  // Bengali message for period parent summary
+  const baseMessage = `${studentName} (${rollNumber}) — ${label} এর সারসংক্ষেপ: উপস্থিতি ${presentDays}/${attendanceDays} দিন। ${resultSummary}`;
   return baseMessage.substring(0, 160);
 }
 
-export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptions): Promise<MonthlySummaryReport> {
-  const { start, end } = getMonthRange(options.year, options.month);
-  const monthLabel = getMonthLabel(options.year, options.month);
+export async function sendPeriodSummarySMS(options: {
+  institutionId: string;
+  startDate: Date;
+  endDate: Date;
+  label: string;
+  studentId?: string;
+  classId?: string;
+  sectionId?: string;
+}): Promise<MonthlySummaryReport> {
+  const { startDate, endDate, label } = options;
 
   const query: any = {
     institutionId: options.institutionId,
@@ -122,19 +129,19 @@ export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptio
     const attendanceDays = await Attendance.countDocuments({
       institutionId: options.institutionId,
       studentId: student._id,
-      date: { $gte: start, $lt: end },
+      date: { $gte: startDate, $lt: endDate },
     });
     const presentDays = await Attendance.countDocuments({
       institutionId: options.institutionId,
       studentId: student._id,
-      date: { $gte: start, $lt: end },
-      status: 'present',
+      date: { $gte: startDate, $lt: endDate },
+      status: { $in: ['present', 'late'] },
     });
 
     const results = await Result.find({
       institutionId: options.institutionId,
       studentId: student._id,
-      publishedAt: { $gte: start, $lt: end },
+      publishedAt: { $gte: startDate, $lt: endDate },
       workflowStatus: { $in: ['approved', 'published'] },
     })
       .populate('examId', 'name totalMarks subjectMarks')
@@ -146,7 +153,7 @@ export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptio
     const resultSummary = examStats
       ? `${examStats.examName}: ${examStats.percentage}% (${examStats.grade})`
       : 'Result pending';
-    const message = buildMessage(studentName, student.rollNumber, monthLabel, attendanceDays, presentDays, resultSummary);
+    const message = buildMessage(studentName, student.rollNumber, label, attendanceDays, presentDays, resultSummary);
 
     if (!student.guardianPhone) {
       skipped += 1;
@@ -191,4 +198,18 @@ export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptio
     skipped,
     items,
   };
+}
+
+export async function sendMonthlyGuardianSummarySMS(options: MonthlySummaryOptions): Promise<MonthlySummaryReport> {
+  const { start, end } = getMonthRange(options.year, options.month);
+  const monthLabel = getMonthLabel(options.year, options.month);
+  return sendPeriodSummarySMS({
+    institutionId: options.institutionId,
+    startDate: start,
+    endDate: end,
+    label: monthLabel,
+    studentId: options.studentId,
+    classId: options.classId,
+    sectionId: options.sectionId,
+  });
 }
