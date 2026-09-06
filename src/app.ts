@@ -1,5 +1,6 @@
 import 'express-async-errors';
 import express, { NextFunction, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -172,8 +173,10 @@ app.use('/api/settings', siteSettingsRoutes);
 app.use('/api/dev-test', devTestRoutes);
 app.use('/api/storage-sync', storageSyncRoutes);
 app.get(['/health', '/api/health'], async (_req, res) => { const mongoose = await import('mongoose'); const dbState = mongoose.default.connection.readyState; res.json({ status: 'OK', message: 'easy school Server is running', dbReadyState: dbState, dbConnected: dbState === 1, corsOrigins: getCorsConfig().envOrigins.size }); });
-app.get(['/api', '/api/'], (_req, res) => { res.json({ success: true, message: 'easy school API is running' }); });
-SmsLog.deleteMany({ createdAt: { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }).catch((error) => logger.warn('SMS log cleanup failed', { error: error.message }));
+app.get(['/', '/api', '/api/'], (_req, res) => { res.json({ success: true, message: 'easy school API is running', status: 'online' }); });
+if (mongoose.connection.readyState === 1) {
+  SmsLog.deleteMany({ createdAt: { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }).catch((error) => logger.warn('SMS log cleanup failed', { error: error.message }));
+}
 app.use(notFoundHandler);
 app.use(errorHandler as any);
 export default app;

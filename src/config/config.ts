@@ -135,10 +135,10 @@ export const validateConfig = (config: Config): void => {
 
   // If emails are enabled, validate email config
   if (config.emailEnabled) {
-    if (!config.brevoApiKey) {
-      warnings.push('BREVO_API_KEY is required when EMAIL_ENABLED is true');
+    if (!config.brevoApiKey && !process.env.SMTP_USER) {
+      warnings.push('BREVO_API_KEY or SMTP_USER is required when EMAIL_ENABLED is true');
     }
-    if (!config.emailFrom) {
+    if (!config.emailFrom && !process.env.SMTP_USER) {
       warnings.push('EMAIL_FROM is required when EMAIL_ENABLED is true');
     }
   }
