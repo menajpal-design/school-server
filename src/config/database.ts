@@ -1,6 +1,16 @@
 import mongoose from 'mongoose';
 import { getAppConfig } from './config';
 
+import dns from 'dns';
+
+// Ensure SRV DNS lookup works reliably on all environments
+try {
+  const currentServers = dns.getServers();
+  if (!currentServers || !currentServers.length || currentServers.includes('127.0.0.1')) {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+  }
+} catch {}
+
 const LOCAL_MONGO_URI = 'mongodb://127.0.0.1:27017/easy_school';
 
 const parseConnectionList = (value?: string | null): string[] => {
@@ -22,8 +32,8 @@ const getMongoUriCandidates = (): string[] => {
     appCfg.mongoUri,
   ].flatMap((value) => parseConnectionList(value));
 
-  if ((process.env.NODE_ENV || 'development') !== 'production') {
-    candidates.unshift(LOCAL_MONGO_URI);
+  if (!candidates.length && (process.env.NODE_ENV || 'development') !== 'production') {
+    candidates.push(LOCAL_MONGO_URI);
   }
 
   return candidates;
