@@ -29,7 +29,17 @@ export default async function resolveTenant(req: Request & any, res: Response, n
     const hostParts = headerHost.split('.').filter(Boolean);
     let subdomain = '';
 
-    if (!headerHost) return next();
+    if (!headerHost || process.env.ENABLE_SUBDOMAINS === 'false') return next();
+
+    const normalizedHeaderHost = normalizeHost(headerHost);
+    if (
+      normalizedHeaderHost.includes('vercel.app') ||
+      normalizedHeaderHost.includes('onrender.com') ||
+      normalizedHeaderHost.includes('herokuapp.com') ||
+      normalizedHeaderHost.includes('railway.app')
+    ) {
+      return next();
+    }
 
     if (mainDomain && headerHost.endsWith(mainDomain)) {
       const suffix = mainDomain.split('.').length;
