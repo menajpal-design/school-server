@@ -4,6 +4,31 @@
  */
 
 import '../config/loadEnv';
+import nodemailer from 'nodemailer';
+
+let smtpTransporter: any = null;
+
+export const getSmtpTransporter = () => {
+  const host = (process.env.SMTP_HOST || '').trim();
+  const user = (process.env.SMTP_USER || '').trim();
+  const pass = (process.env.SMTP_PASS || '').trim();
+  const port = Number(process.env.SMTP_PORT || 587);
+
+  if (!host || !user || !pass) return null;
+
+  if (!smtpTransporter) {
+    smtpTransporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
+  }
+  return smtpTransporter;
+};
 
 interface EmailAttachment {
   filename: string;
@@ -241,6 +266,50 @@ const sendViaBrevoApi = async (options: EmailOptions): Promise<EmailResult> => {
   }
 };
 
+const sendViaSmtp = async (options: EmailOptions): Promise<EmailResult> => {
+  const transporter = getSmtpTransporter();
+  if (!transporter) {
+    return {
+      success: false,
+      code: 'SMTP_CONFIG_MISSING',
+      error: 'SMTP credentials missing or incomplete.',
+    };
+  }
+
+  const from = (options.from || process.env.EMAIL_FROM || process.env.SMTP_USER || '').trim();
+  const to = Array.isArray(options.to) ? options.to.join(', ') : options.to;
+
+  const mailOptions: any = {
+    from,
+    to,
+    subject: options.subject,
+    html: options.html,
+    text: options.text,
+  };
+
+  if (options.attachments?.length) {
+    mailOptions.attachments = options.attachments.map((attachment) => ({
+      filename: attachment.filename,
+      content: attachment.content,
+      path: attachment.path,
+      contentType: attachment.contentType,
+    }));
+  }
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Email sent via SMTP -> ${to} (MessageId: ${info.messageId})`);
+    return { success: true };
+  } catch (err: any) {
+    console.error(`SMTP send failed -> ${to}:`, err.message || err);
+    return {
+      success: false,
+      code: 'SMTP_SEND_FAILED',
+      error: err.message || String(err),
+    };
+  }
+};
+
 export const sendEmailDetail = async (options: EmailOptions): Promise<EmailResult> => {
   try {
     const to = Array.isArray(options.to) ? options.to.join(', ') : options.to;
@@ -258,12 +327,15 @@ export const sendEmailDetail = async (options: EmailOptions): Promise<EmailResul
       return { success: true };
     }
 
-    const result = await sendViaBrevoApi(options);
+    // Prioritize SMTP if configured, else fallback to Brevo API
+    const result = getSmtpTransporter()
+      ? await sendViaSmtp(options)
+      : await sendViaBrevoApi(options);
 
     if (result.success) {
-      console.log(`Email sent via Brevo API -> ${to}`);
+      if (!getSmtpTransporter()) console.log(`Email sent via Brevo API -> ${to}`);
     } else {
-      console.error(`Brevo API failed -> ${to}:`, {
+      console.error(`Email delivery failed -> ${to}:`, {
         code: result.code,
         error: result.error,
         hint: result.hint,
@@ -327,8 +399,6 @@ export const sendNotificationEmail = async (
 
 export const isEmailConfigured = (): boolean =>
   isEmailEnabled() &&
-  Boolean((process.env.BREVO_API_KEY || '').trim()) &&
-  Boolean(configuredSender());
+  (Boolean(getSmtpTransporter()) || (Boolean((process.env.BREVO_API_KEY || '').trim()) && Boolean(configuredSender())));
 
-// Legacy compatibility - SMTP transport is no longer used.
-export const getEmailTransport = () => null;
+export const getEmailTransport = () => getSmtpTransporter();
