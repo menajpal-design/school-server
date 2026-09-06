@@ -70,3 +70,5 @@ uploads/
 
 # Local diagnostic/debug scripts (may contain credentials)
 /scripts/
+.vercel
+.env*
