@@ -40,17 +40,35 @@ const geminiQuestions = async (body: any) => {
   const prompt = isQuestion
     ? `Return JSON only. JSON shape: {"questions":[{"type":"cq","question":"Creative question stem and sub questions ক খ গ ঘ","options":[],"answer":"Teacher verification required","marks":10}]}. Make ${Number(body.count || 8)} Bengali CQ/Creative Questions. Every question must include ক) জ্ঞানমূলক, খ) অনুধাবনমূলক, গ) প্রয়োগমূলক, ঘ) উচ্চতর দক্ষতামূলক sub-questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`
     : `Return JSON only. JSON shape: {"questions":[{"type":"mcq","question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","marks":1}]}. Make ${Number(body.count || 10)} MCQ questions. Class: ${body.className || ''}. Subject: ${body.subjectName || body.subject || ''}. Syllabus: ${body.syllabus || ''}. Language: ${body.language || 'Bangla'}.`;
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.6, responseMimeType: 'application/json' } }),
-  });
-  const data: any = await response.json();
-  if (!response.ok) return { source: 'server-fallback', providerError: data?.error?.message, questions: sampleQuestions(body) };
-  const text = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text).join('\n') || '';
-  const parsed = extractJson(text);
-  const questions = Array.isArray(parsed?.questions) && parsed.questions.length ? parsed.questions : sampleQuestions(body);
-  return { source: 'gemini-2.5-flash', questions };
+
+  const modelsToTry = [
+    process.env.GEMINI_MODEL,
+    'gemini-3.6-flash',
+    'gemini-flash-latest',
+    'gemini-3.7-flash',
+    'gemini-2.5-flash',
+  ].filter(Boolean) as string[];
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.6, responseMimeType: 'application/json' } }),
+      });
+      const data: any = await response.json();
+      if (!response.ok) continue;
+
+      const text = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text).join('\n') || '';
+      const parsed = extractJson(text);
+      const questions = Array.isArray(parsed?.questions) && parsed.questions.length ? parsed.questions : sampleQuestions(body);
+      return { source: model, questions };
+    } catch {
+      continue;
+    }
+  }
+
+  return { source: 'server-fallback', questions: sampleQuestions(body) };
 };
 
 router.post('/generate', authenticate, async (req: any, res) => {
