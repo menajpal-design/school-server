@@ -61,7 +61,8 @@ export const uploadFileLocally = async (filePath: string): Promise<UploadRespons
  */
 export const uploadLocally = async (filePath: string, filename: string): Promise<UploadResponse> => {
   try {
-    const uploadDir = process.env.UPLOAD_PATH || './uploads';
+    const defaultDir = process.env.VERCEL ? '/tmp/uploads' : './uploads';
+    const uploadDir = process.env.VERCEL ? defaultDir : (process.env.UPLOAD_PATH || defaultDir);
 
     // Create upload directory if it doesn't exist
     if (!fs.existsSync(uploadDir)) {

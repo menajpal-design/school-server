@@ -5,7 +5,8 @@ import { Request } from 'express';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadPath = process.env.UPLOAD_PATH || 'uploads/';
+    const defaultUpload = process.env.VERCEL ? '/tmp/uploads' : 'uploads/';
+    const uploadPath = (process.env.VERCEL ? defaultUpload : (process.env.UPLOAD_PATH || defaultUpload));
     if (!fs.existsSync(uploadPath)) {
       fs.mkdirSync(uploadPath, { recursive: true });
     }
