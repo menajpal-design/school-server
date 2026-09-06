@@ -25,6 +25,39 @@ export const extractImageId = (value?: string | null) => {
   return match?.[1] || (ObjectId.isValid(String(value)) ? String(value) : '');
 };
 
+export async function uploadToImgBB(
+  file: Express.Multer.File,
+  apiKey?: string
+): Promise<{ url: string; deleteUrl?: string } | null> {
+  const key = (apiKey || process.env.IMGBB_API_KEY || '').trim();
+  if (!key) return null;
+
+  try {
+    const formData = new FormData();
+    formData.append('image', file.buffer.toString('base64'));
+
+    const response = await fetch(`https://api.imgbb.com/1/upload?key=${key}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data: any = await response.json();
+    if (data && data.success && data.data?.url) {
+      console.log(`[ImgBB] Successfully uploaded image: ${data.data.url}`);
+      return {
+        url: data.data.url,
+        deleteUrl: data.data.delete_url,
+      };
+    } else {
+      console.warn('[ImgBB] Upload response:', data?.error || data);
+      return null;
+    }
+  } catch (error: any) {
+    console.error('[ImgBB] Network error during upload:', error.message || error);
+    return null;
+  }
+}
+
 export async function storeImage(
   file: Express.Multer.File,
   metadata: Record<string, any> = {}
@@ -57,6 +90,22 @@ export async function storeImage(
     .replace(/^-+|-+$/g, '')
     .slice(0, 60) || 'image';
   const filename = `${safeBase}-${Date.now()}.${extension}`;
+
+  // 1. Try ImgBB if API key is provided in metadata or environment
+  const imgbbKey = (metadata?.imgbbApiKey || process.env.IMGBB_API_KEY || '').trim();
+  if (imgbbKey) {
+    const imgbbResult = await uploadToImgBB(file, imgbbKey);
+    if (imgbbResult?.url) {
+      return {
+        fileId: `imgbb-${Date.now()}`,
+        filename,
+        url: imgbbResult.url,
+        size: file.size,
+        contentType: file.mimetype,
+      };
+    }
+    console.warn('[ImageService] Falling back to MongoDB GridFS because ImgBB upload was unsuccessful.');
+  }
   const uploadStream = bucket().openUploadStream(filename, {
     contentType: file.mimetype,
     metadata: {
@@ -94,6 +143,7 @@ export function openImageDownloadStream(fileId: string) {
 }
 
 export async function deleteImageById(fileId: string) {
+  if (!fileId || fileId.startsWith('imgbb-')) return true;
   if (!ObjectId.isValid(fileId)) return false;
   try {
     await bucket().delete(new ObjectId(fileId));

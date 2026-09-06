@@ -382,11 +382,15 @@ router.post('/upload-image', authenticate, imageUpload.single('image'), async (r
       return res.status(400).json({ message: 'Invalid imageType. Use logo, seal or headSignature.' });
     }
 
+    const currentInst: any = await Institution.findById(req.user.institutionId).select('settings').lean();
+    const customImgbbApiKey = currentInst?.settings?.imgbbApiKey;
+
     const image = await storeImage(req.file, {
       category: 'institution',
       imageType,
       institutionId: String(req.user?.institutionId || ''),
       uploadedBy: String(req.user?._id || req.user?.id || ''),
+      imgbbApiKey: customImgbbApiKey,
     });
 
     const institution = await Institution.findByIdAndUpdate(
