@@ -3,13 +3,15 @@ import { getAppConfig } from './config';
 
 import dns from 'dns';
 
-// Ensure SRV DNS lookup works reliably on all environments
-try {
-  const currentServers = dns.getServers();
-  if (!currentServers || !currentServers.length || currentServers.includes('127.0.0.1')) {
-    dns.setServers(['8.8.8.8', '1.1.1.1']);
-  }
-} catch {}
+// Only set custom DNS fallback on local Windows machines, never on Vercel / AWS Lambda
+if (!process.env.VERCEL && !process.env.AWS_REGION && process.platform === 'win32') {
+  try {
+    const currentServers = dns.getServers();
+    if (!currentServers || !currentServers.length || currentServers.includes('127.0.0.1')) {
+      dns.setServers(['8.8.8.8', '1.1.1.1']);
+    }
+  } catch {}
+}
 
 const LOCAL_MONGO_URI = 'mongodb://127.0.0.1:27017/easy_school';
 

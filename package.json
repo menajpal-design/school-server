@@ -69,6 +69,6 @@
   "author": "EasySholl",
   "license": "ISC",
   "engines": {
-    "node": "20.x"
+    "node": ">=20.x"
   }
 }
