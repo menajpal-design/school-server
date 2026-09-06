@@ -166,7 +166,7 @@ export const login = async (req: Request, res: Response) => {
     if (tenantInstitution) institutionId = String(tenantInstitution._id || tenantInstitution.id);
     const tenantContext = tenantInstitution ? resolveTenantStorageContext(tenantInstitution) : null;
     const loginLookup = async () => {
-      let user = await User.findOne({ $or: [{ email: emailQuery }, { username: emailQuery }, { phone: identifier }] }).populate('institutionId').maxTimeMS(5000);
+      let user = await User.findOne({ $or: [{ email: emailQuery }, { username: emailQuery }, { phone: identifier }] }).sort({ _id: -1 }).populate('institutionId').maxTimeMS(5000);
       let isMatch = user ? await bcrypt.compare(password, user.password) : false;
       if (!user) {
         const student = await Student.findOne({ $or: [{ rollNumber: identifier }, { guardianPhone: identifier }, { guardianEmail: emailQuery }] }).select('userId').maxTimeMS(5000);

@@ -84,7 +84,8 @@ const expireInstitutionSnapshotIfNeeded = (institution: any) => {
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    const cookieToken = (req as any).cookies?.[process.env.AUTH_COOKIE_NAME || 'easy_school_token'] || (req as any).cookies?.token;
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : (cookieToken || undefined);
     if (!token) return res.status(401).json({ message: 'Authentication required.' });
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
     const user = await runWithTenantStorage(null, () => withAuthTimeout(User.findById(decoded.id).populate('institutionId').lean().exec(), 'Auth user lookup'));
